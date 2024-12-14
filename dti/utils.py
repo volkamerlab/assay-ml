@@ -13,12 +13,12 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def init_logging(run_name: Union[str, None] = str(time.time())):
-    OUTPUT.mkdir(exist_ok=True)
-    log_file = OUTPUT / (run_name + ".log")
+    (OUTPUT / run_name).mkdir(exist_ok=True, parents=True)
+    log_file = OUTPUT / run_name / "output.log"
     logging.basicConfig(
         filename=log_file,
         filemode="w",
-        format="%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s",
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
         level=logging.DEBUG,
     )

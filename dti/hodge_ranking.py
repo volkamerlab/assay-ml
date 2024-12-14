@@ -53,7 +53,7 @@ def parallel_hodge_rank(kinodata):
     groups = list(kinodata.groupby("UniprotID"))
 
     temp_dir = DATA / "hodge_temp_data" / uuid.uuid4().hex
-    temp_dir.mkdir(exist_ok=True, prents=True)
+    temp_dir.mkdir(exist_ok=True, parents=True)
 
     group_files = []
     for i, (target, tgt_data) in enumerate(groups):
