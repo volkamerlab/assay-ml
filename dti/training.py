@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import torch
 from torch import nn
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, kendalltau
 
 from .utils import DEVICE
 
@@ -34,12 +34,12 @@ def val_model(model, loader, criterion=nn.L1Loss(), prediction_file=None):
             all_info.append(info.cpu().numpy())
 
     content = {
-            "prediction": all_preds,
-            "target": all_labels,
-        }
+        "prediction": all_preds,
+        "target": all_labels,
+    }
     all_info = np.concat(all_info)
     for i, col in enumerate(loader.dataset.info_cols):
-        content[col] = list(all_info[:,i].flatten())
+        content[col] = list(all_info[:, i].flatten())
     val_data = pd.DataFrame(content)
     if prediction_file is not None:
         val_data.to_csv(prediction_file)
@@ -48,7 +48,10 @@ def val_model(model, loader, criterion=nn.L1Loss(), prediction_file=None):
         for assay_id, group in val_data.groupby("assay_id"):
             if group["target"].nunique() == 1 or group["prediction"].nunique() == 1:
                 continue
-            rank_corr, _ = spearmanr(group["prediction"], group["target"])
+            result = kendalltau(
+                group["prediction"], group["target"], nan_policy="raise", variant="c"
+            )
+            rank_corr = result.statistic
             if np.isnan(rank_corr):
                 continue
             mean_rank_corr += len(group) * rank_corr / len(val_data)

@@ -191,8 +191,7 @@ class ActivityDataset(Dataset):
         )
 
 
-def split_kinodata(target_dir: Union[Path, str] = DATA / "processed",
-                   k: int = 10):
+def split_kinodata(target_dir: Union[Path, str] = DATA / "processed", k: int = 10):
     target_dir = target_dir / "splits"
     target_dir.mkdir(exist_ok=True, parents=True)
     kinodata = load_kinodata()
@@ -202,7 +201,9 @@ def split_kinodata(target_dir: Union[Path, str] = DATA / "processed",
     partition = split_kfold_by(kinodata, column=col, k=k)
 
     for index in range(k):
-        kinodata[kinodata["assay_id"].isin(partition[index])].to_csv(target_dir / f"{index}.csv")
+        kinodata[kinodata["assay_id"].isin(partition[index])].to_csv(
+            target_dir / f"{index}.csv"
+        )
 
     return target_dir
 
