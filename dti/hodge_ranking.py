@@ -21,6 +21,7 @@ HodgeRank = namedtuple("HodgeRank", "UniprotID smiles hodge_score".split())
 def process_target_group_from_file(input_file):
     group_data = pd.read_csv(input_file)
     target = group_data["UniprotID"].iloc[0]
+    group_data[group_data.groupby('assay_id')['assay_id'].transform('count') > 1]
     cmpds = list(group_data[SMILES].unique())
     dim = len(cmpds)
     y_bar = np.zeros((dim, dim))
