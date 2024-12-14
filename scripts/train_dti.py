@@ -1,5 +1,6 @@
 import logging
 import time
+import uuid
 
 import pandas as pd
 import torch
@@ -8,13 +9,18 @@ from torch.utils.data import Dataset, DataLoader
 from dti import utils
 from pathlib import Path
 from dti.data import ActivityDataset, process_kinodata_default_dti, FingerprintFactory
-from dti.utils import ACT, DEVICE, DATA, init_logging
+from dti.utils import ACT, DEVICE, DATA, OUTPUT, init_logging
 from dti.model import CombinedModel
 from dti.training import train_model, val_model
 from dti.hodge_ranking import parallel_hodge_rank
 
+def write_info(run_name: str, fields: list):
+    with open(OUTPUT / (run_name + ".csv"), "w") as f:
+        f.write(",".join(map(str, fields)) + "\n")
+
 if __name__ == "__main__":
-    init_logging()
+    run_name = uuid.uuid4().hex[:8]
+    init_logging(run_name)
     logger = logging.getLogger("main")
 
     fp_gen = FingerprintFactory()
@@ -55,6 +61,7 @@ if __name__ == "__main__":
             logger.info(
                 f"Epoch {epoch + 1}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}, Mean Rank Correlation = {mean_rank_corr:.4f}"
             )
+            write_info(run_name, ["ic50", index, epoch, train_loss, val_loss, mean_rank_corr])
 
         hodge_file = split_dir / "train_hodge.csv"
         if not hodge_file.exists():
@@ -90,3 +97,4 @@ if __name__ == "__main__":
             logger.info(
                 f"Epoch {epoch + 1}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}, Mean Rank Correlation = {mean_rank_corr:.4f}"
             )
+            write_info(run_name, ["hodge", index, epoch, train_loss, val_loss, mean_rank_corr])
