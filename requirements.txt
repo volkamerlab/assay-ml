@@ -1,0 +1,8 @@
+torch
+fair-esm
+tqdm
+pandas
+scikit-learn
+rdkit
+jupyterlab
+seaborn
