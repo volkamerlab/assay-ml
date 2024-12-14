@@ -59,7 +59,7 @@ def parallel_hodge_rank(kinodata):
         tgt_data.to_csv(file_path, index=False)
         group_files.append(file_path)
 
-    with ProcessPoolExecutor() as executor:
+    with ProcessPoolExecutor(max_workers=32) as executor:
         results = list(
             tqdm.tqdm(
                 executor.map(process_target_group_from_file, group_files),

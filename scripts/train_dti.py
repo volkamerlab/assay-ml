@@ -36,19 +36,20 @@ if __name__ == "__main__":
             val_data, fp_gen=fp_gen, target=tgt_name, keep_cols=["assay_id"]
         )
 
-        train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=256, shuffle=False)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
         protein_input_size = 1280
         ligand_input_size = 2048
         embedding_size = 256
+        batch_size = 256
 
         model = CombinedModel(protein_input_size, ligand_input_size, embedding_size).to(
             DEVICE
         )
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-        for epoch in range(2):
+        for epoch in range(30):
             train_loss = train_model(model, train_loader, optimizer)
             val_loss, mean_rank_corr = val_model(model, val_loader)
             logger.info(
@@ -58,7 +59,7 @@ if __name__ == "__main__":
         hodge_file = split_dir / "train_hodge.csv"
         if not hodge_file.exists():
             hodge_df = parallel_hodge_rank(train_data)
-            hodge_kd = kinodata.merge(
+            hodge_kd = train_data.merge(
                 hodge_df,
                 on=["compound_structures.canonical_smiles", "UniprotID"],
                 how="inner",
@@ -71,11 +72,11 @@ if __name__ == "__main__":
             hodge_kd, fp_gen=fp_gen, target="hodge_score", keep_cols=["assay_id"]
         )
         val_dataset = ActivityDataset(
-            kinodata[val], fp_gen=fp_gen, target=tgt_name, keep_cols=["assay_id"]
+            val_dataset, fp_gen=fp_gen, target=tgt_name, keep_cols=["assay_id"]
         )
 
-        train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=256, shuffle=False)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         model = CombinedModel(protein_input_size, ligand_input_size, embedding_size).to(
@@ -83,7 +84,7 @@ if __name__ == "__main__":
         )
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-        for epoch in range(2):
+        for epoch in range(30):
             train_loss = train_model(model, train_loader, optimizer)
             val_loss, mean_rank_corr = val_model(model, val_loader)
             logger.info(

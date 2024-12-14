@@ -1,5 +1,5 @@
 universe = docker
-docker_image = ubuntu:latest
+docker_image = gjoschka/kinodata3d-b0:2.3.0-cuda12.1
 executable = train_dti.sh
 output = train_dti.$(ClusterId).out
 error = train_dti.$(ClusterId).err
