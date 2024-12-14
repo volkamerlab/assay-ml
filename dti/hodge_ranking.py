@@ -1,5 +1,6 @@
 from concurrent.futures import ProcessPoolExecutor
 from collections import namedtuple
+import uuid
 
 import tqdm
 import numpy as np
@@ -50,7 +51,7 @@ def parallel_hodge_rank(kinodata):
 
     groups = list(kinodata.groupby("UniprotID"))
 
-    temp_dir = DATA / "hodge_temp_data"
+    temp_dir = DATA / "hodge_temp_data" / uuid.uuid4().hex
     temp_dir.mkdir(exist_ok=True)
 
     group_files = []

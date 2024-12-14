@@ -42,20 +42,22 @@ if __name__ == "__main__":
             val_data, fp_gen=fp_gen, target=tgt_name, keep_cols=["assay_id"]
         )
 
+        num_epochs = 1
+        batch_size = 256
+
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
         protein_input_size = 1280
         ligand_input_size = 2048
         embedding_size = 256
-        batch_size = 256
 
         model = CombinedModel(protein_input_size, ligand_input_size, embedding_size).to(
             DEVICE
         )
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-        for epoch in range(30):
+        for epoch in range(num_epochs):
             train_loss = train_model(model, train_loader, optimizer)
             val_loss, mean_rank_corr = val_model(model, val_loader)
             logger.info(
@@ -73,13 +75,13 @@ if __name__ == "__main__":
             )
             hodge_kd.to_csv(hodge_file)
         else:
-            pd.read_csv(hodge_file, index_col=0)
+            hodge_kd = pd.read_csv(hodge_file, index_col=0)
 
         train_dataset = ActivityDataset(
             hodge_kd, fp_gen=fp_gen, target="hodge_score", keep_cols=["assay_id"]
         )
         val_dataset = ActivityDataset(
-            val_dataset, fp_gen=fp_gen, target=tgt_name, keep_cols=["assay_id"]
+            val_data, fp_gen=fp_gen, target=tgt_name, keep_cols=["assay_id"]
         )
 
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -91,7 +93,7 @@ if __name__ == "__main__":
         )
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-        for epoch in range(30):
+        for epoch in range(num_epochs):
             train_loss = train_model(model, train_loader, optimizer)
             val_loss, mean_rank_corr = val_model(model, val_loader)
             logger.info(
