@@ -22,6 +22,7 @@ from dti.hodge_ranking import parallel_hodge_rank
 
 
 def write_info(run_name: str, fields: list):
+    (OUTPUT / run_name).mkdir(exist_ok = True, parents=True)
     with open(OUTPUT / run_name / "optimization.csv", "a") as f:
         f.write(",".join(map(str, fields)) + "\n")
 
@@ -41,6 +42,7 @@ if __name__ == "__main__":
     target_dir = DATA / run_name
     split_dir = split_kinodata(target_dir, k=k)
     for index in range(0, k, 2):
+        logger.info(f"fit split {index}")
         test_idcs = [index, (index + 1) % k]
         val_idx = (index + 2) % k
         train_idcs = [i for i in range(k) if i not in test_idcs and i != val_idx]
@@ -56,6 +58,7 @@ if __name__ == "__main__":
             [pd.read_csv(split_dir / f"{i}.csv", index_col=0) for i in test_idcs]
         )
 
+        logger.info("normalize ic50 data")
         scaler = StandardScaler()
         tgt_name = "scaled_ic50"
         train_data[tgt_name] = scaler.fit_transform(
@@ -65,19 +68,21 @@ if __name__ == "__main__":
         val_data[tgt_name] = scaler.transform(val_data[ACT].values.reshape(-1, 1))
 
         info_cols = ["activities.activity_id", "assay_id"]
+        logger.info("create training set")
         train_dataset = ActivityDataset(
             train_data,
             fp_gen=fp_gen,
             target=tgt_name,
             info_cols=info_cols,
         )
-
+        logger.info("create test set")
         test_dataset = ActivityDataset(
             test_data,
             fp_gen=fp_gen,
             target=tgt_name,
             info_cols=info_cols,
         )
+        logger.info("create validation set")
         val_dataset = ActivityDataset(
             val_data,
             fp_gen=fp_gen,
@@ -96,6 +101,7 @@ if __name__ == "__main__":
         ligand_dim = 2048
         embedding_size = 256
 
+        logger.info("train pIC50 model")
         model = CombinedModel(protein_dim, ligand_dim, embedding_size).to(DEVICE)
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
@@ -103,22 +109,22 @@ if __name__ == "__main__":
         for epoch in range(num_epochs):
             train_loss = train_model(model, train_loader, optimizer)
             val_loss, mean_rank_corr = val_model(model, val_loader)
-            if mean_rank_corr > best_corr:
-                best_corr = mean_rank_corr
-                val_loss, mean_rank_corr = val_model(
-                    model,
-                    test_loader,
-                    prediction_file=target_dir / f"index{index}_epoch{epoch}_preds.csv",
-                )
-                f"Epoch {epoch + 1}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}, Mean Rank Correlation = {mean_rank_corr:.4f}"
-            else:
-                logger.info(
-                    f"Epoch {epoch + 1}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}, Mean Rank Correlation = {mean_rank_corr:.4f}"
-                )
+            logger.info(
+                f"[ic50] Epoch {epoch + 1}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}, Mean Rank Correlation = {mean_rank_corr:.4f}"
+            )
             write_info(
                 run_name, ["ic50", index, epoch, train_loss, val_loss, mean_rank_corr]
             )
+            if mean_rank_corr > best_corr:
+                best_corr = mean_rank_corr
+                test_loss, mean_rank_corr = val_model(
+                    model,
+                    test_loader,
+                    prediction_file=target_dir / f"pIC50_index{index}_preds.csv",
+                )
+                logger.info(f"[ic50] Test Loss = {test_loss:.4f}, Mean Rank Correlation = {mean_rank_corr:.4f}")
 
+        logger.info("hodge ranking")
         hodge_file = split_dir / f"train_hodge_{index}.csv"
         if not hodge_file.exists():
             hodge_df = parallel_hodge_rank(train_data)
@@ -129,21 +135,24 @@ if __name__ == "__main__":
             )
             hodge_kd.to_csv(hodge_file)
         else:
+            logger.info("found cached Hodge ranking data")
             hodge_kd = pd.read_csv(hodge_file, index_col=0)
 
-        tgt_name = "hodge_score"
+        logger.info("create training set")
         train_dataset = ActivityDataset(
             hodge_kd,
             fp_gen=fp_gen,
-            target=tgt_name,
+            target="hodge_score",
             info_cols=info_cols,
         )
+        logger.info("create test set")
         test_dataset = ActivityDataset(
             test_data,
             fp_gen=fp_gen,
             target=tgt_name,
             info_cols=info_cols,
         )
+        logger.info("create validationset")
         val_dataset = ActivityDataset(
             val_data,
             fp_gen=fp_gen,
@@ -155,27 +164,26 @@ if __name__ == "__main__":
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        model = CombinedModel(protein_dim, ligand_dim, embedding_size).to(device)
+        logger.info("train Hodge model")
+        model = CombinedModel(protein_dim, ligand_dim, embedding_size).to(DEVICE)
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
         best_corr = 0
         for epoch in range(num_epochs):
             train_loss = train_model(model, train_loader, optimizer)
             val_loss, mean_rank_corr = val_model(model, val_loader)
-            if mean_rank_corr > best_corr:
-                best_corr = mean_rank_corr
-                val_loss, mean_rank_corr = val_model(
-                    model,
-                    test_loader,
-                    prediction_file=target_dir / f"index{index}_epoch{epoch}_preds.csv",
-                )
-                f"Epoch {epoch + 1}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}, Mean Rank Correlation = {mean_rank_corr:.4f}"
-            else:
-                logger.info(
-                    f"Epoch {epoch + 1}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}, Mean Rank Correlation = {mean_rank_corr:.4f}"
-                )
+            logger.info(
+                f"[hodge] Epoch {epoch + 1}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}, Mean Rank Correlation = {mean_rank_corr:.4f}"
+            )
             write_info(
                 run_name, ["ic50", index, epoch, train_loss, val_loss, mean_rank_corr]
             )
-
+            if mean_rank_corr > best_corr:
+                best_corr = mean_rank_corr
+                test_loss, mean_rank_corr = val_model(
+                    model,
+                    test_loader,
+                    prediction_file=target_dir / f"hodge_index{index}_preds.csv",
+                )
+                logger.info(f"[hodge] Test Loss = {test_loss:.4f}, Mean Rank Correlation = {mean_rank_corr:.4f}")
+        logger.info("done")
