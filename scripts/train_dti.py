@@ -15,13 +15,14 @@ from dti.training import train_model, val_model
 from dti.hodge_ranking import parallel_hodge_rank
 
 def write_info(run_name: str, fields: list):
-    with open(OUTPUT / (run_name + ".csv"), "w") as f:
+    with open(OUTPUT / (run_name + ".csv"), "a") as f:
         f.write(",".join(map(str, fields)) + "\n")
 
 if __name__ == "__main__":
     run_name = uuid.uuid4().hex[:8]
     init_logging(run_name)
     logger = logging.getLogger("main")
+    write_info(run_name, ["model_type", "index", "epoch", "train_loss", "val_loss", "mean_rank_corr"])
 
     fp_gen = FingerprintFactory()
 
@@ -42,7 +43,7 @@ if __name__ == "__main__":
             val_data, fp_gen=fp_gen, target=tgt_name, keep_cols=["assay_id"]
         )
 
-        num_epochs = 1
+        num_epochs = 100
         batch_size = 256
 
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)

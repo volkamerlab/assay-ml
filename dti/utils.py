@@ -1,4 +1,4 @@
-from typing import Union, NoneType
+from typing import Union
 import time
 import logging
 from pathlib import Path
@@ -12,9 +12,9 @@ ACT = "activities.standard_value"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def init_logging(run_name: Union[str, NoneType] = str(time.time())):
+def init_logging(run_name: Union[str, None] = str(time.time())):
     OUTPUT.mkdir(exist_ok=True)
-    log_file = log_dir / (run_name + ".log")
+    log_file = OUTPUT / (run_name + ".log")
     logging.basicConfig(
         filename=log_file,
         filemode="w",
