@@ -37,10 +37,10 @@ if __name__ == "__main__":
 
         tgt_name = "scaled_ic50"
         train_dataset = ActivityDataset(
-            train_data, fp_gen=fp_gen, target=tgt_name, keep_cols=["assay_id"]
+            train_data, fp_gen=fp_gen, target=tgt_name, info_cols=["assay_id"]
         )
         val_dataset = ActivityDataset(
-            val_data, fp_gen=fp_gen, target=tgt_name, keep_cols=["assay_id"]
+            val_data, fp_gen=fp_gen, target=tgt_name, info_cols=["assay_id"]
         )
 
         num_epochs = 100
@@ -79,10 +79,10 @@ if __name__ == "__main__":
             hodge_kd = pd.read_csv(hodge_file, index_col=0)
 
         train_dataset = ActivityDataset(
-            hodge_kd, fp_gen=fp_gen, target="hodge_score", keep_cols=["assay_id"]
+            hodge_kd, fp_gen=fp_gen, target="hodge_score", info_cols=["assay_id"]
         )
         val_dataset = ActivityDataset(
-            val_data, fp_gen=fp_gen, target=tgt_name, keep_cols=["assay_id"]
+            val_data, fp_gen=fp_gen, target=tgt_name, info_cols=["assay_id"]
         )
 
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)

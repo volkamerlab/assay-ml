@@ -134,7 +134,7 @@ class ActivityDataset(Dataset):
         self,
         kinodata: pd.DataFrame,
         target: str = ACT,
-        keep_cols: List[str] = [],
+        info_cols: List[str] = [],
         fp_gen: Union[FingerprintFactory, None] = None,
     ):
         super().__init__()
@@ -148,7 +148,8 @@ class ActivityDataset(Dataset):
         )
         self._compute_protein_features(kinodata)
         self.labels = torch.tensor(kinodata[target].values, dtype=torch.float32)
-        self.info = torch.tensor(kinodata[keep_cols].values)
+        self.info_cols = info_cols
+        self.info = torch.tensor(kinodata[info_cols].values)
 
     def _compute_protein_features(self, data: pd.DataFrame):
         logger.info("Computing ESM embeddings")
@@ -188,6 +189,22 @@ class ActivityDataset(Dataset):
             self.labels[idx],
             self.info[idx],
         )
+
+
+def split_kinodata(target_dir: Union[Path, str] = DATA / "processed",
+                   k: int = 10):
+    target_dir = target_dir / "splits"
+    target_dir.mkdir(exist_ok=True, parents=True)
+    kinodata = load_kinodata()
+    kinodata["assay_id"] = kinodata["assays.chembl_id"].str[6:].astype(int)
+
+    col = "assay_id"
+    partition = split_kfold_by(kinodata, column=col, k=k)
+
+    for index in range(k):
+        kinodata[kinodata["assay_id"].isin(partition[index])].to_csv(target_dir / f"{index}.csv")
+
+    return target_dir
 
 
 def process_kinodata_default_dti(

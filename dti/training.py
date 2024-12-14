@@ -12,7 +12,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def val_model(model, loader, criterion=nn.L1Loss()):
+def val_model(model, loader, criterion=nn.L1Loss(), prediction_file=None):
     model.eval()
     val_loss = 0
     with torch.no_grad():
@@ -31,23 +31,27 @@ def val_model(model, loader, criterion=nn.L1Loss()):
 
             all_preds.extend(list(predictions.cpu().numpy().flatten()))
             all_labels.extend(list(labels.cpu().numpy().flatten()))
-            all_info.extend(list(info.cpu().numpy().flatten()))
+            all_info.append(info.cpu().numpy())
 
-    val_data = pd.DataFrame(
-        {
+    content = {
             "prediction": all_preds,
-            "label": all_labels,
-            "assay": all_info,
+            "target": all_labels,
         }
-    )
-    mean_rank_corr = 0
-    for assay_id, group in val_data.groupby("assay"):
-        if group["label"].nunique() == 1 or group["prediction"].nunique() == 1:
-            continue
-        rank_corr, _ = spearmanr(group["prediction"], group["label"])
-        if np.isnan(rank_corr):
-            continue
-        mean_rank_corr += len(group) * rank_corr / len(val_data)
+    all_info = np.concat(all_info)
+    for i, col in enumerate(loader.dataset.info_cols):
+        content[col] = list(all_info[:,i].flatten())
+    val_data = pd.DataFrame(content)
+    if prediction_file is not None:
+        val_data.to_csv(prediction_file)
+    if "assay_id" in val_data.columns:
+        mean_rank_corr = 0
+        for assay_id, group in val_data.groupby("assay_id"):
+            if group["target"].nunique() == 1 or group["prediction"].nunique() == 1:
+                continue
+            rank_corr, _ = spearmanr(group["prediction"], group["target"])
+            if np.isnan(rank_corr):
+                continue
+            mean_rank_corr += len(group) * rank_corr / len(val_data)
 
     val_loss /= len(loader)
 
