@@ -153,7 +153,7 @@ def main():
             logger.info("Found cached Hodge ranking data")
             hodge_kd = pd.read_csv(hodge_file, index_col=0)
 
-        train_dataset = ActivityDataset(hodge_kd, target="hodge_score")
+        train_dataset = ActivityDataset(hodge_kd, target="hodge_score", info_cols=info_cols)
         train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
 
         train_and_evaluate_model(
