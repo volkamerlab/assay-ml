@@ -112,9 +112,10 @@ def split_kfold_by(
 
 
 def compute_fp(smi: str):
-    mfpgen = rdFingerprintGenerator.GetRDKitFPGenerator(
-        maxPath=5, fpSize=2048
-    )
+    # mfpgen = rdFingerprintGenerator.GetRDKitFPGenerator(
+        # maxPath=5, fpSize=2048
+    # )
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
     try:
         return mfpgen.GetFingerprintAsNumPy(Chem.MolFromSmiles(smi))
     except TypeError:
