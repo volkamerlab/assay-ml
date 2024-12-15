@@ -91,7 +91,7 @@ def train_and_evaluate_model(run_name, train_loader, val_loader, test_loader, lo
         )
 
         if val_rank_corr > best_corr:
-            logger.info("[rank] Updating best rank corr.")
+            logger.info("[{target_name}] Updating best rank corr.")
             best_corr = val_rank_corr
             torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")
             test_loss, test_rank_corr = model_epoch(
