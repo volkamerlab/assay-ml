@@ -193,6 +193,8 @@ class ActivityDataset(Dataset):
 
 def split_kinodata(target_dir: Union[Path, str] = DATA / "processed", k: int = 10):
     target_dir = target_dir / "splits"
+    if target_dir.exists():
+        return target_dir
     target_dir.mkdir(exist_ok=True, parents=True)
     kinodata = load_kinodata()
     kinodata["assay_id"] = kinodata["assays.chembl_id"].str[6:].astype(int)

@@ -12,26 +12,39 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def val_model(model, loader, criterion=nn.L1Loss(), prediction_file=None):
-    model.eval()
-    val_loss = 0
-    with torch.no_grad():
-        all_preds = list()
-        all_labels = list()
-        all_info = list()
-        for protein_features, ligand_features, labels, info in tqdm.tqdm(loader):
-            protein_features, ligand_features, labels = (
-                protein_features.to(DEVICE),
-                ligand_features.to(DEVICE),
-                labels.to(DEVICE),
-            )
-            predictions = model(protein_features, ligand_features).squeeze()
-            loss = criterion(predictions, labels)
-            val_loss += loss.item()
+def model_epoch(model, loader, optimizer=None, criterion=None, prediction_file=None):
+    if optimizer is not None:
+        criterion = nn.MSELoss() if criterion is None else criterion
+        model.train()
+    else:
+        criterion = nn.L1Loss() if criterion is None else criterion
+        model.eval()
+    torch.set_grad_enabled(optimizer is not None)
 
-            all_preds.extend(list(predictions.cpu().numpy().flatten()))
-            all_labels.extend(list(labels.cpu().numpy().flatten()))
-            all_info.append(info.cpu().numpy())
+    total_loss = 0
+    all_preds = list()
+    all_labels = list()
+    all_info = list()
+    for protein_features, ligand_features, labels, info in tqdm.tqdm(loader):
+        protein_features, ligand_features, labels = (
+            protein_features.to(DEVICE),
+            ligand_features.to(DEVICE),
+            labels.to(DEVICE),
+        )
+        if optimizer is not None:
+            optimizer.zero_grad()
+        predictions = model(protein_features, ligand_features).squeeze()
+        loss = criterion(predictions, labels)
+        if optimizer is not None:
+            loss.backward()
+            optimizer.step()
+        total_loss += loss.item()
+
+        all_preds.extend(list(predictions.detach().numpy().flatten()))
+        all_labels.extend(list(labels.detach().numpy().flatten()))
+        all_info.append(info.detach().numpy())
+
+    torch.set_grad_enabled(True)
 
     content = {
         "prediction": all_preds,
@@ -40,43 +53,28 @@ def val_model(model, loader, criterion=nn.L1Loss(), prediction_file=None):
     all_info = np.concat(all_info)
     for i, col in enumerate(loader.dataset.info_cols):
         content[col] = list(all_info[:, i].flatten())
-    val_data = pd.DataFrame(content)
+    prediction_data = pd.DataFrame(content)
     if prediction_file is not None:
-        val_data.to_csv(prediction_file)
-    if "assay_id" in val_data.columns:
-        mean_rank_corr = 0
-        for assay_id, group in val_data.groupby("assay_id"):
-            if group["target"].nunique() == 1 or group["prediction"].nunique() == 1:
-                continue
-            result = kendalltau(
-                group["prediction"], group["target"], nan_policy="raise", variant="c"
-            )
-            rank_corr = result.statistic
-            if np.isnan(rank_corr):
-                continue
-            mean_rank_corr += len(group) * rank_corr / len(val_data)
+        prediction_data.to_csv(prediction_file)
+    if "assay_id" in prediction_data.columns:
+        mean_rank_corr = rank_corr(prediction_data)
 
-    val_loss /= len(loader)
+    total_loss /= len(loader)
 
-    return val_loss, mean_rank_corr
+    return total_loss, mean_rank_corr
 
 
-def train_model(model, loader, optimizer, criterion=nn.MSELoss()):
-    model.train()
-    train_loss = 0
-    for protein_features, ligand_features, labels, _ in tqdm.tqdm(loader):
-        protein_features, ligand_features, labels = (
-            protein_features.to(DEVICE),
-            ligand_features.to(DEVICE),
-            labels.to(DEVICE),
+def rank_corr(prediction_data: pd.DataFrame) -> float:
+    mean_rank_corr = 0
+    for assay_id, group in prediction_data.groupby("assay_id"):
+        if group["target"].nunique() == 1 or group["prediction"].nunique() == 1:
+            continue
+        result = kendalltau(
+            group["prediction"], group["target"], nan_policy="raise", variant="c"
         )
+        rank_corr = result.statistic
+        if np.isnan(rank_corr):
+            continue
+        mean_rank_corr += len(group) * rank_corr / len(prediction_data)
 
-        optimizer.zero_grad()
-        predictions = model(protein_features, ligand_features).squeeze()
-        loss = criterion(predictions, labels)
-        loss.backward()
-        optimizer.step()
-
-        train_loss += loss.item()
-    train_loss /= len(loader)
-    return train_loss
+    return mean_rank_corr
