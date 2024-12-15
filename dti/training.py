@@ -14,11 +14,11 @@ logger = logging.getLogger(__name__)
 
 def model_epoch(model, loader, optimizer=None, criterion=None, prediction_file=None):
     if optimizer is not None:
-        logger.info('train model')
+        logger.debug('train model')
         criterion = nn.MSELoss() if criterion is None else criterion
         model.train()
     else:
-        logger.info('evaluate model')
+        logger.debug('evaluate model')
         criterion = nn.L1Loss() if criterion is None else criterion
         model.eval()
     torch.set_grad_enabled(optimizer is not None)
@@ -42,9 +42,9 @@ def model_epoch(model, loader, optimizer=None, criterion=None, prediction_file=N
             optimizer.step()
         total_loss += loss.item()
 
-        all_preds.extend(list(predictions.detach().numpy().flatten()))
-        all_labels.extend(list(labels.detach().numpy().flatten()))
-        all_info.append(info.detach().numpy())
+        all_preds.extend(list(predictions.detach().cpu().numpy().flatten()))
+        all_labels.extend(list(labels.detach().cpu().numpy().flatten()))
+        all_info.append(info.detach().cpu().numpy())
 
     torch.set_grad_enabled(True)
 

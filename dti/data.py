@@ -111,24 +111,6 @@ def split_kfold_by(
     return values.reshape(k, -1)
 
 
-class FingerprintFactory(Callable):
-    def __init__(self, mfpgen=None):
-        if mfpgen is None:
-            self.mfpgen = rdFingerprintGenerator.GetRDKitFPGenerator(
-                maxPath=5, fpSize=2048
-            )
-
-    @functools.cache
-    def __call__(self, smi: str) -> Union[str, NoReturn]:
-        try:
-            return torch.tensor(
-                self.mfpgen.GetFingerprintAsNumPy(Chem.MolFromSmiles(smi)),
-                dtype=torch.float32,
-            )
-        except TypeError:
-            logger.warning(f"No fp for SMILES={smi}")
-            return None
-
 def compute_fp(smi: str):
     mfpgen = rdFingerprintGenerator.GetRDKitFPGenerator(
         maxPath=5, fpSize=2048
@@ -139,20 +121,17 @@ def compute_fp(smi: str):
         logger.warn(f"No fp for SMILES={smi}")
         return None
 
+
 class ActivityDataset(Dataset):
     def __init__(
         self,
         kinodata: pd.DataFrame,
         target: str = ACT,
         info_cols: List[str] = [],
-        fp_gen: Union[FingerprintFactory, None] = None,
         model_name: str = "esm2_t33_650M_UR50D",
     ):
         super().__init__()
-        if fp_gen is None:
-            self.fp_gen = FingerprintFactory()
-        else:
-            self.fp_gen = fp_gen
+        logger.info(f"creating dataset of size {len(kinodata)}")
         logger.info("computing fingerprints")
         with Pool(16) as p:
             fps = p.map(compute_fp, kinodata[SMILES].values)

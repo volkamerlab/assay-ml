@@ -12,7 +12,6 @@ from dti import utils
 from dti.data import (
     ActivityDataset,
     process_kinodata_default_dti,
-    FingerprintFactory,
     split_kinodata,
 )
 from dti.utils import ACT, DEVICE, DATA, OUTPUT, init_logging
@@ -31,7 +30,7 @@ def normalize_activity(data: pd.DataFrame, target_col: str, scaler: StandardScal
     data[target_col] = scaler.transform(data[ACT].values.reshape(-1, 1))
     return data
 
-def prepare_datasets(data_dir, split_dir, fp_gen, tgt_name, k, logger):
+def prepare_datasets(data_dir, split_dir, tgt_name, k, logger):
     """Prepare train, validation, and test datasets."""
     for index in range(0, k, 2):
         logger.info(f"Preparing datasets for split {index}")
@@ -121,16 +120,16 @@ def main():
         ],
     )
 
-    fp_gen = FingerprintFactory()
     data_dir = DATA / "processed"
     split_dir = split_kinodata(data_dir, k=10)
     tgt_name = "scaled_ic50"
 
-    for train_data, val_data, test_data, index in prepare_datasets(data_dir, split_dir, fp_gen, tgt_name, 10, logger):
+    for train_data, val_data, test_data, index in prepare_datasets(data_dir, split_dir, tgt_name, 10, logger):
         logger.info("Creating datasets")
-        train_dataset = ActivityDataset(train_data, fp_gen=fp_gen, target=tgt_name)
-        val_dataset = ActivityDataset(val_data, fp_gen=fp_gen, target=tgt_name)
-        test_dataset = ActivityDataset(test_data, fp_gen=fp_gen, target=tgt_name)
+        info_cols = ["activities.activity_id", "assay_id"]
+        train_dataset = ActivityDataset(train_data, target=tgt_name, info_cols=info_cols)
+        val_dataset = ActivityDataset(val_data, target=tgt_name, info_cols=info_cols)
+        test_dataset = ActivityDataset(test_data, target=tgt_name, info_cols=info_cols)
 
         train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=256, shuffle=False)
@@ -154,7 +153,7 @@ def main():
             logger.info("Found cached Hodge ranking data")
             hodge_kd = pd.read_csv(hodge_file, index_col=0)
 
-        train_dataset = ActivityDataset(hodge_kd, fp_gen=fp_gen, target="hodge_score")
+        train_dataset = ActivityDataset(hodge_kd, target="hodge_score")
         train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
 
         train_and_evaluate_model(
