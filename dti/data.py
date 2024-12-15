@@ -2,6 +2,7 @@ from typing import Sequence, List, Union, NoReturn, Callable
 import functools
 import logging
 from pathlib import Path
+from multiprocessing import Pool
 
 import tqdm
 import pandas as pd
@@ -44,14 +45,14 @@ def extract_embeddings(
     if len(data) == 0:
         return
 
-    logger.info("Setting up ESM model")
+    logger.info("setting up ESM model")
     model, alphabet = pretrained.load_model_and_alphabet(model_name)
     model.eval()
 
     if torch.cuda.is_available():
         model = model.cuda()
 
-    logger.info(f"Computing ESM embeddings for {len(data)} sequences")
+    logger.info(f"computing ESM embeddings for {len(data)} sequences")
     batches = dataset.get_batch_indices(tokens_per_batch, extra_toks_per_seq=1)
 
     data_loader = torch.utils.data.DataLoader(
@@ -113,8 +114,8 @@ def split_kfold_by(
 class FingerprintFactory(Callable):
     def __init__(self, mfpgen=None):
         if mfpgen is None:
-            self.mfpgen = rdFingerprintGenerator.GetMorganGenerator(
-                radius=2, fpSize=2048
+            self.mfpgen = rdFingerprintGenerator.GetRDKitFPGenerator(
+                maxPath=5, fpSize=2048
             )
 
     @functools.cache
@@ -128,6 +129,15 @@ class FingerprintFactory(Callable):
             logger.warning(f"No fp for SMILES={smi}")
             return None
 
+def compute_fp(smi: str):
+    mfpgen = rdFingerprintGenerator.GetRDKitFPGenerator(
+        maxPath=5, fpSize=2048
+    )
+    try:
+        return mfpgen.GetFingerprintAsNumPy(Chem.MolFromSmiles(smi))
+    except TypeError:
+        logger.warn(f"No fp for SMILES={smi}")
+        return None
 
 class ActivityDataset(Dataset):
     def __init__(
@@ -136,24 +146,28 @@ class ActivityDataset(Dataset):
         target: str = ACT,
         info_cols: List[str] = [],
         fp_gen: Union[FingerprintFactory, None] = None,
+        model_name: str = "esm2_t33_650M_UR50D",
     ):
         super().__init__()
         if fp_gen is None:
             self.fp_gen = FingerprintFactory()
         else:
             self.fp_gen = fp_gen
-        logger.info("Computing fingerprints")
-        self.ligand_features = torch.stack(
-            [self.fp_gen(smi) for smi in tqdm.tqdm(kinodata[SMILES].values)]
-        )
-        self._compute_protein_features(kinodata)
+        logger.info("computing fingerprints")
+        with Pool(16) as p:
+            fps = p.map(compute_fp, kinodata[SMILES].values)
+        mask = [fp is not None for fp in fps]
+        if len(mask) - sum(mask) > 0:
+            logger.info(f'dropping {len(mask) - sum(mask)}/{len(mask)} data points w/o FP')
+        kinodata = kinodata[mask]
+        self.ligand_features = torch.tensor(np.stack([fp for fp in fps if fp is not None]), dtype=torch.float32)
+        self._compute_protein_features(kinodata, model_name)
         self.labels = torch.tensor(kinodata[target].values, dtype=torch.float32)
         self.info_cols = info_cols
         self.info = torch.tensor(kinodata[info_cols].values)
 
-    def _compute_protein_features(self, data: pd.DataFrame):
-        logger.info("Computing ESM embeddings")
-
+    def _compute_protein_features(self, data: pd.DataFrame, model_name: str):
+        logger.info(f"computing protein features: {model_name}")
         done = []
         fasta_file = DATA / "data.fasta"
         with open(fasta_file, "w") as f:
@@ -164,7 +178,6 @@ class ActivityDataset(Dataset):
                 f.write(f">{uniprot}\n{row['component_sequences.sequence']}\n")
                 done.append(uniprot)
 
-        model_name = "esm2_t33_650M_UR50D"
         output_dir = DATA / model_name
         output_dir.mkdir(exist_ok=True)
         extract_embeddings(model_name, fasta_file, output_dir)

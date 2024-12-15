@@ -14,9 +14,11 @@ logger = logging.getLogger(__name__)
 
 def model_epoch(model, loader, optimizer=None, criterion=None, prediction_file=None):
     if optimizer is not None:
+        logger.info('train model')
         criterion = nn.MSELoss() if criterion is None else criterion
         model.train()
     else:
+        logger.info('evaluate model')
         criterion = nn.L1Loss() if criterion is None else criterion
         model.eval()
     torch.set_grad_enabled(optimizer is not None)
@@ -55,6 +57,7 @@ def model_epoch(model, loader, optimizer=None, criterion=None, prediction_file=N
         content[col] = list(all_info[:, i].flatten())
     prediction_data = pd.DataFrame(content)
     if prediction_file is not None:
+        logger.info(f'writing predictions to {prediction_file}')
         prediction_data.to_csv(prediction_file)
     if "assay_id" in prediction_data.columns:
         mean_rank_corr = rank_corr(prediction_data)
