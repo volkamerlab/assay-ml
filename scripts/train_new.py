@@ -38,6 +38,9 @@ def prepare_datasets(data_dir, split_dir, tgt_name, k, logger):
         test_idcs = [index, (index + 1) % k]
         val_idx = (index + 2) % k
         train_idcs = [i for i in range(k) if i not in test_idcs and i != val_idx]
+        logger.info(f"train={test_idcs}")
+        logger.info(f"test={train_idcs}")
+        logger.info(f"val=[{val_idx}]")
 
         val_data = pd.read_csv(split_dir / f"{val_idx}.csv", index_col=0)
         train_data = pd.concat(
@@ -63,11 +66,10 @@ def train_and_evaluate_model(run_name, train_loader, val_loader, test_loader, lo
     protein_dim = 1280
     ligand_dim = 2048
     embedding_size = 256
-    num_epochs = 100
-    batch_size = 256
+    num_epochs = 300
 
     model = CombinedModel(protein_dim, ligand_dim, embedding_size).to(DEVICE)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
     best_corr = 0
     for epoch in range(num_epochs):
@@ -91,7 +93,7 @@ def train_and_evaluate_model(run_name, train_loader, val_loader, test_loader, lo
         )
 
         if val_rank_corr > best_corr:
-            logger.info("[{target_name}] Updating best rank corr.")
+            logger.info(f"[{target_name}] Updating best rank corr.")
             best_corr = val_rank_corr
             torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")
             test_loss, test_rank_corr = model_epoch(
@@ -104,9 +106,10 @@ def train_and_evaluate_model(run_name, train_loader, val_loader, test_loader, lo
             )
 
 def main():
-    run_name = uuid.uuid4().hex[:8]
+    run_name = uuid.uuid4().hex[:5]
     init_logging(run_name)
     logger = logging.getLogger("main")
+    batch_size = 256
     
     write_info(
         run_name,
@@ -132,9 +135,9 @@ def main():
         val_dataset = ActivityDataset(val_data, target=tgt_name, info_cols=info_cols)
         test_dataset = ActivityDataset(test_data, target=tgt_name, info_cols=info_cols)
 
-        train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=256, shuffle=False)
-        test_loader = DataLoader(test_dataset, batch_size=256, shuffle=False)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
         train_and_evaluate_model(
             run_name, train_loader, val_loader, test_loader, logger, "ic50", index
@@ -155,7 +158,7 @@ def main():
             hodge_kd = pd.read_csv(hodge_file, index_col=0)
 
         train_dataset = ActivityDataset(hodge_kd, target="hodge_score", info_cols=info_cols)
-        train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
         train_and_evaluate_model(
             run_name, train_loader, val_loader, test_loader, logger, "rank", index
