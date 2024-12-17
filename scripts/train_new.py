@@ -19,36 +19,30 @@ from dti.model import CombinedModel
 from dti.training import model_epoch
 from dti.hodge_ranking import parallel_hodge_rank
 
+
 def write_info(run_name: str, fields: list):
     """Write optimization data to a CSV file."""
     (OUTPUT / run_name).mkdir(exist_ok=True, parents=True)
     with open(OUTPUT / run_name / "optimization.csv", "a") as f:
         f.write(",".join(map(str, fields)) + "\n")
 
+
 def normalize_activity(data: pd.DataFrame, target_col: str, scaler: StandardScaler):
     """Normalize activity data to a standard normal distribution."""
     data[target_col] = scaler.transform(data[ACT].values.reshape(-1, 1))
     return data
 
-def prepare_datasets(data_dir, split_dir, tgt_name, k, logger):
+
+def prepare_datasets(data_dir, tgt_name, k, logger):
     """Prepare train, validation, and test datasets."""
-    for index in range(0, k, 2):
+    split_kinodata(data_dir, k=k)
+    for index in range(k):
         logger.info(f"Preparing datasets for split {index}")
+        split_dir = data_dir / f"{index}"
 
-        test_idcs = [index, (index + 1) % k]
-        val_idx = (index + 2) % k
-        train_idcs = [i for i in range(k) if i not in test_idcs and i != val_idx]
-        logger.info(f"train={test_idcs}")
-        logger.info(f"test={train_idcs}")
-        logger.info(f"val=[{val_idx}]")
-
-        val_data = pd.read_csv(split_dir / f"{val_idx}.csv", index_col=0)
-        train_data = pd.concat(
-            [pd.read_csv(split_dir / f"{i}.csv", index_col=0) for i in train_idcs]
-        )
-        test_data = pd.concat(
-            [pd.read_csv(split_dir / f"{i}.csv", index_col=0) for i in test_idcs]
-        )
+        val_data = pd.read_csv(split_dir / "val.csv", index_col=0)
+        train_data = pd.read_csv(split_dir / "train.csv", index_col=0)
+        test_data = pd.read_csv(split_dir / "test.csv", index_col=0)
 
         logger.info("Normalizing activity data")
         scaler = StandardScaler()
@@ -58,9 +52,26 @@ def prepare_datasets(data_dir, split_dir, tgt_name, k, logger):
         test_data = normalize_activity(test_data, tgt_name, scaler)
         val_data = normalize_activity(val_data, tgt_name, scaler)
 
-        yield train_data, val_data, test_data, index
+        hodge_file = split_dir / f"train_hodge.csv"
+        if not hodge_file.exists():
+            logger.info("Computing Hodge ranking")
+            hodge_df = parallel_hodge_rank(train_data)
+            hodge_kd = train_data.merge(
+                hodge_df,
+                on=["compound_structures.canonical_smiles", "UniprotID"],
+                how="inner",
+            )
+            hodge_kd.to_csv(hodge_file)
+        else:
+            logger.info("Found cached Hodge ranking data")
+            hodge_kd = pd.read_csv(hodge_file, index_col=0)
 
-def train_and_evaluate_model(run_name, train_loader, val_loader, test_loader, logger, target_name, index):
+        yield index, train_data, hodge_kd, val_data, test_data
+
+
+def train_and_evaluate_model(
+    run_name, train_loader, val_loader, test_loader, logger, target_name, index
+):
     """Train and evaluate the model."""
     logger.info(f"Training model for target: {target_name}")
     protein_dim = 1280
@@ -99,11 +110,14 @@ def train_and_evaluate_model(run_name, train_loader, val_loader, test_loader, lo
             test_loss, test_rank_corr = model_epoch(
                 model,
                 test_loader,
-                prediction_file=OUTPUT / run_name / f"{target_name}_index{index}_preds.csv",
+                prediction_file=OUTPUT
+                / run_name
+                / f"{target_name}_index{index}_preds.csv",
             )
             logger.info(
                 f"[{target_name}] test_loss={test_loss:.4f} test_rank_corr={test_rank_corr:.4f}"
             )
+
 
 def main():
     run_name = uuid.uuid4().hex[:5]
@@ -125,13 +139,16 @@ def main():
     )
 
     data_dir = DATA / "processed"
-    split_dir = split_kinodata(data_dir, k=10)
     tgt_name = "scaled_ic50"
 
-    for train_data, val_data, test_data, index in prepare_datasets(data_dir, split_dir, tgt_name, 10, logger):
+    for index, train_data, hodge_kd, val_data, test_data in prepare_datasets(
+        data_dir, tgt_name, 5, logger
+    ):
         logger.info("Creating datasets")
         info_cols = ["activities.activity_id", "assay_id"]
-        train_dataset = ActivityDataset(train_data, target=tgt_name, info_cols=info_cols)
+        train_dataset = ActivityDataset(
+            train_data, target=tgt_name, info_cols=info_cols
+        )
         val_dataset = ActivityDataset(val_data, target=tgt_name, info_cols=info_cols)
         test_dataset = ActivityDataset(test_data, target=tgt_name, info_cols=info_cols)
 
@@ -143,22 +160,10 @@ def main():
             run_name, train_loader, val_loader, test_loader, logger, "ic50", index
         )
 
-        logger.info("Performing Hodge ranking")
-        hodge_file = data_dir / f"train_hodge_{index}.csv"
-        if not hodge_file.exists():
-            hodge_df = parallel_hodge_rank(train_data)
-            hodge_kd = train_data.merge(
-                hodge_df,
-                on=["compound_structures.canonical_smiles", "UniprotID"],
-                how="inner",
-            )
-            hodge_kd.to_csv(hodge_file)
-        else:
-            logger.info("Found cached Hodge ranking data")
-            hodge_kd = pd.read_csv(hodge_file, index_col=0)
-
-        train_dataset = ActivityDataset(hodge_kd, target="hodge_score", info_cols=info_cols)
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        train_dataset = ActivityDataset(
+            hodge_kd, target="hodge_score", info_cols=info_cols
+        )
+        train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
 
         train_and_evaluate_model(
             run_name, train_loader, val_loader, test_loader, logger, "rank", index
@@ -166,6 +171,6 @@ def main():
 
     logger.info("Pipeline completed")
 
+
 if __name__ == "__main__":
     main()
-

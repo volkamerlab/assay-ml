@@ -184,9 +184,8 @@ class ActivityDataset(Dataset):
         )
 
 
-def split_kinodata(target_dir: Union[Path, str] = DATA / "processed", k: int = 10):
-    target_dir = target_dir / "splits"
-    if target_dir.exists():
+def split_kinodata(target_dir: Union[Path, str] = DATA / "processed", k: int = 5):
+    if (target_dir / "0").exists():
         return target_dir
     target_dir.mkdir(exist_ok=True, parents=True)
     kinodata = load_kinodata()
@@ -196,9 +195,17 @@ def split_kinodata(target_dir: Union[Path, str] = DATA / "processed", k: int = 1
     partition = split_kfold_by(kinodata, column=col, k=k)
 
     for index in range(k):
+        split_dir = target_dir / f"{index}"
+        split_dir.mkdir()
         kinodata[kinodata["assay_id"].isin(partition[index])].to_csv(
-            target_dir / f"{index}.csv"
+            split_dir / "test.csv"
         )
+        rest = kinodata[~kinodata["assay_id"].isin(partition[index])]
+        idcs = np.arange(len(rest))
+        np.random.shuffle(idcs)
+        split = len(rest) // 8
+        rest.iloc[idcs[:split]].to_csv(split_dir / "val.csv")
+        rest.iloc[idcs[split:]].to_csv(split_dir / "train.csv")
 
     return target_dir
 
