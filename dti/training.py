@@ -68,16 +68,19 @@ def model_epoch(model, loader, optimizer=None, criterion=None, prediction_file=N
 
 
 def rank_corr(prediction_data: pd.DataFrame) -> float:
-    mean_rank_corr = 0
+    overall_tau = 0
+    total_weight = 0
     for assay_id, group in prediction_data.groupby("assay_id"):
         if group["target"].nunique() == 1 or group["prediction"].nunique() == 1:
             continue
-        result = kendalltau(
+        assay_weight = binom(len(group), 2)
+        tau = kendalltau(
             group["prediction"], group["target"], nan_policy="raise", variant="c"
-        )
-        rank_corr = result.statistic
+        ).statistic
         if np.isnan(rank_corr):
             continue
-        mean_rank_corr += len(group) * rank_corr / len(prediction_data)
+        total_weight += assay_weight
+        overall_tau += assay_weight * tau
+    overall_tau /= total_weight
 
-    return mean_rank_corr
+    return overall_tau
