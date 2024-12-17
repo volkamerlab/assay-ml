@@ -66,7 +66,7 @@ def train_and_evaluate_model(run_name, train_loader, val_loader, test_loader, lo
     protein_dim = 1280
     ligand_dim = 2048
     embedding_size = 256
-    num_epochs = 300
+    num_epochs = 500
 
     model = CombinedModel(protein_dim, ligand_dim, embedding_size).to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
