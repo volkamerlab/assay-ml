@@ -14,4 +14,4 @@ source venv/bin/activate
 pip install -r requirements.txt
 pip install -e .
 
-python scripts/train_new.py
+python scripts/train.py
