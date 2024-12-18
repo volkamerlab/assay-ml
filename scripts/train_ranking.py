@@ -12,7 +12,15 @@ from dti.data import (
     ActivityDataset,
     prepare_datasets,
 )
-from dti.utils import ACT, DATA, OUTPUT, init_logging, write_info, write_header, train_and_evaluate_model
+from dti.utils import (
+    ACT,
+    DATA,
+    OUTPUT,
+    init_logging,
+    write_info,
+    write_header,
+    train_and_evaluate_model,
+)
 from dti.model import CombinedModel
 from dti.training import model_epoch
 
@@ -34,7 +42,9 @@ def main():
         info_cols = ["activities.activity_id", "assay_id"]
         val_dataset = ActivityDataset(val_data, target=tgt_name, info_cols=info_cols)
         test_dataset = ActivityDataset(test_data, target=tgt_name, info_cols=info_cols)
-        train_dataset = ActivityDataset(hodge_kd, target="hodge_score", info_cols=info_cols)
+        train_dataset = ActivityDataset(
+            hodge_kd, target="hodge_score", info_cols=info_cols
+        )
 
         train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)

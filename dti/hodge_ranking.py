@@ -32,20 +32,20 @@ def _process_target_group_from_file(args):
 
     # intra-assay preferences
     # for assay_id, subset in group_data.groupby("assay_id"):
-        # for i in range(len(subset)):
-            # for j in range(i):
-                # pref = subset.iloc[i][ACT] - subset.iloc[j][ACT]
-                # cmpd_i, cmpd_j = subset.iloc[i][SMILES], subset.iloc[j][SMILES]
-                # c_i, c_j = cmpds.index(cmpd_i), cmpds.index(cmpd_j)
-                # y_bar[c_i, c_j] += pref
-                # y_bar[c_j, c_i] -= pref
-                # weights[c_i, c_j] += 1
+    # for i in range(len(subset)):
+    # for j in range(i):
+    # pref = subset.iloc[i][ACT] - subset.iloc[j][ACT]
+    # cmpd_i, cmpd_j = subset.iloc[i][SMILES], subset.iloc[j][SMILES]
+    # c_i, c_j = cmpds.index(cmpd_i), cmpds.index(cmpd_j)
+    # y_bar[c_i, c_j] += pref
+    # y_bar[c_j, c_i] -= pref
+    # weights[c_i, c_j] += 1
 
     for i in range(len(group_data)):
         for j in range(i):
             row_i, row_j = group_data.iloc[i], group_data.iloc[j]
             assay_i, assay_j = row_i["assay_id"], row_j["assay_id"]
-            weight = inter_assay_weight if assay_i == assay_j else 1.
+            weight = inter_assay_weight if assay_i == assay_j else 1.0
             cmpd_i, cmpd_j = row_i[SMILES], row_j[SMILES]
             c_i, c_j = cmpds.index(cmpd_i), cmpds.index(cmpd_j)
             pref = group_data.iloc[i][ACT] - group_data.iloc[j][ACT]

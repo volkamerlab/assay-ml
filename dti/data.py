@@ -114,7 +114,7 @@ def split_kfold_by(
 
 def compute_fp(smi: str):
     # mfpgen = rdFingerprintGenerator.GetRDKitFPGenerator(
-        # maxPath=5, fpSize=2048
+    # maxPath=5, fpSize=2048
     # )
     mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
     try:
@@ -139,9 +139,13 @@ class ActivityDataset(Dataset):
             fps = p.map(compute_fp, kinodata[SMILES].values)
         mask = [fp is not None for fp in fps]
         if len(mask) - sum(mask) > 0:
-            logger.info(f'dropping {len(mask) - sum(mask)}/{len(mask)} data points w/o FP')
+            logger.info(
+                f"dropping {len(mask) - sum(mask)}/{len(mask)} data points w/o FP"
+            )
         kinodata = kinodata[mask]
-        self.ligand_features = torch.tensor(np.stack([fp for fp in fps if fp is not None]), dtype=torch.float32)
+        self.ligand_features = torch.tensor(
+            np.stack([fp for fp in fps if fp is not None]), dtype=torch.float32
+        )
         self._compute_protein_features(kinodata, model_name)
         self.labels = torch.tensor(kinodata[target].values, dtype=torch.float32)
         self.info_cols = info_cols
@@ -186,7 +190,11 @@ class ActivityDataset(Dataset):
         )
 
 
-def split_kinodata(target_dir: Union[Path, str] = DATA / "processed", k: int = 5, random_valset: bool = False):
+def split_kinodata(
+    target_dir: Union[Path, str] = DATA / "processed",
+    k: int = 5,
+    random_valset: bool = False,
+):
     if (target_dir / "0").exists():
         return target_dir
     target_dir.mkdir(exist_ok=True, parents=True)
@@ -210,7 +218,7 @@ def split_kinodata(target_dir: Union[Path, str] = DATA / "processed", k: int = 5
             rest.iloc[idcs[:split]].to_csv(split_dir / "val.csv")
             rest.iloc[idcs[split:]].to_csv(split_dir / "train.csv")
         else:
-            val_assays = partition[(index + 1) % k][:partition.shape[1] // 2]
+            val_assays = partition[(index + 1) % k][: partition.shape[1] // 2]
             rest[rest["assay_id"].isin(val_assays)].to_csv(split_dir / "val.csv")
             rest[~rest["assay_id"].isin(val_assays)].to_csv(split_dir / "train.csv")
 
@@ -223,7 +231,9 @@ def normalize_activity(data: pd.DataFrame, target_col: str, scaler: StandardScal
     return data
 
 
-def prepare_datasets(data_dir, tgt_name, k, logger, inter_assay_weight: Union[float, None]):
+def prepare_datasets(
+    data_dir, tgt_name, k, logger, inter_assay_weight: Union[float, None]
+):
     """Prepare train, validation, and test datasets."""
     split_kinodata(data_dir, k=k)
     for index in range(k):

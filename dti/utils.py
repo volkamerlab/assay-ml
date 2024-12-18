@@ -28,7 +28,9 @@ def init_logging(run_name: Union[str, None] = str(time.time())):
     console_handler.setLevel(logging.INFO)
     file_handler.setLevel(logging.DEBUG)
 
-    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"
+    )
     console_handler.setFormatter(formatter)
     file_handler.setFormatter(formatter)
 
@@ -50,34 +52,57 @@ def write_header(run_name: str):
         ],
     )
 
+
 def write_info(run_name: str, fields: list):
     """Write optimization data to a CSV file."""
     (OUTPUT / run_name).mkdir(exist_ok=True, parents=True)
     with open(OUTPUT / run_name / "optimization.csv", "a") as f:
         f.write(",".join(map(str, fields)) + "\n")
 
+
 def train_and_evaluate_model(
-    run_name, train_loader, val_loader, test_loader, logger, target_name, index, **kwargs
+    run_name,
+    train_loader,
+    val_loader,
+    test_loader,
+    logger,
+    target_name,
+    index,
+    **kwargs,
 ):
     """Train and evaluate the model."""
     logger.info(f"training model for target: {target_name}")
-    opts = dict(
-        protein_dim = 1280,
-        ligand_dim = 2048,
-        embedding_size = 256,
-        num_epochs = 500,
-    ) | kwargs
+    opts = (
+        dict(
+            protein_dim=1280,
+            ligand_dim=2048,
+            embedding_size=256,
+            num_epochs=500,
+        )
+        | kwargs
+    )
 
-    model = CombinedModel(opts['protein_dim'], opts['ligand_dim'], opts['embedding_size']).to(device())
+    model = CombinedModel(
+        opts["protein_dim"], opts["ligand_dim"], opts["embedding_size"]
+    ).to(device())
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
     best_corr = 0
-    for epoch in range(opts['num_epochs']):
+    for epoch in range(opts["num_epochs"]):
         train_loss, train_rank_corr = model_epoch(model, train_loader, optimizer)
         val_loss, val_rank_corr = model_epoch(model, val_loader)
 
         logger.info(
-            " ".join([f"[{target_name}]", f"epoch={epoch + 1}/{opts['num_epochs']}", f"train_loss={train_loss:.4f}", f"val_loss={val_loss:.4f}", f"train_rank_corr={train_rank_corr:.4f}", f"val_rank_corr={val_rank_corr:.4f}"])
+            " ".join(
+                [
+                    f"[{target_name}]",
+                    f"epoch={epoch + 1}/{opts['num_epochs']}",
+                    f"train_loss={train_loss:.4f}",
+                    f"val_loss={val_loss:.4f}",
+                    f"train_rank_corr={train_rank_corr:.4f}",
+                    f"val_rank_corr={val_rank_corr:.4f}",
+                ]
+            )
         )
         write_info(
             run_name,
@@ -106,4 +131,3 @@ def train_and_evaluate_model(
             logger.info(
                 f"[{target_name}] test_loss={test_loss:.4f} test_rank_corr={test_rank_corr:.4f}"
             )
-
