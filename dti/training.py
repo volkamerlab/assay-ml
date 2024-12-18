@@ -6,12 +6,11 @@ from torch import nn
 from scipy.stats import spearmanr, kendalltau
 from scipy.special import binom
 
-from .utils import DEVICE
-
 import logging
 
 logger = logging.getLogger(__name__)
 
+device = lambda: "cuda" if torch.cuda.is_available() else "cpu"
 
 def model_epoch(model, loader, optimizer=None, criterion=None, prediction_file=None):
     if optimizer is not None:
@@ -30,9 +29,9 @@ def model_epoch(model, loader, optimizer=None, criterion=None, prediction_file=N
     all_info = list()
     for protein_features, ligand_features, labels, info in tqdm.tqdm(loader):
         protein_features, ligand_features, labels = (
-            protein_features.to(DEVICE),
-            ligand_features.to(DEVICE),
-            labels.to(DEVICE),
+            protein_features.to(device()),
+            ligand_features.to(device()),
+            labels.to(device()),
         )
         if optimizer is not None:
             optimizer.zero_grad()

@@ -12,7 +12,8 @@ DATA = Path(".") / "data"
 OUTPUT = DATA / "output"
 SMILES = "compound_structures.canonical_smiles"
 ACT = "activities.standard_value"
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+device = lambda: "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def init_logging(run_name: Union[str, None] = str(time.time())):
@@ -61,13 +62,13 @@ def train_and_evaluate_model(
     """Train and evaluate the model."""
     logger.info(f"training model for target: {target_name}")
     opts = dict(
-        protein_dim = 1280
-        ligand_dim = 2048
-        embedding_size = 256
-        num_epochs = 500
+        protein_dim = 1280,
+        ligand_dim = 2048,
+        embedding_size = 256,
+        num_epochs = 500,
     ) | kwargs
 
-    model = CombinedModel(opts['protein_dim'], opts['ligand_dim'], opts['embedding_size']).to(DEVICE)
+    model = CombinedModel(opts['protein_dim'], opts['ligand_dim'], opts['embedding_size']).to(device())
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
     best_corr = 0

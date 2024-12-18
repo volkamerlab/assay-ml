@@ -17,7 +17,7 @@ from torch import nn
 from esm import FastaBatchedDataset, pretrained
 from sklearn.preprocessing import StandardScaler
 
-from .utils import DATA, SMILES, ACT, DEVICE
+from .utils import DATA, SMILES, ACT, device
 from .hodge_ranking import parallel_hodge_rank
 
 import logging
@@ -68,7 +68,7 @@ def extract_embeddings(
         for batch_idx, (labels, strs, toks) in tqdm.tqdm(
             enumerate(data_loader), total=len(batches)
         ):
-            toks = toks.to(DEVICE, non_blocking=True)
+            toks = toks.to(device(), non_blocking=True)
 
             out = model(toks, repr_layers=repr_layers, return_contacts=False)
 
