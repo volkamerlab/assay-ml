@@ -11,7 +11,6 @@ from sklearn.preprocessing import StandardScaler
 from dti import utils
 from dti.data import (
     ActivityDataset,
-    process_kinodata_default_dti,
     split_kinodata,
 )
 from dti.utils import ACT, DEVICE, DATA, OUTPUT, init_logging
