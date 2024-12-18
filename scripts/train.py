@@ -36,14 +36,13 @@ def prepare_datasets(data_dir, tgt_name, k, logger):
     """Prepare train, validation, and test datasets."""
     split_kinodata(data_dir, k=k)
     for index in range(k):
-        logger.info(f"Preparing datasets for split {index}")
         split_dir = data_dir / f"{index}"
+        logger.info(f"reading dataset from {index}")
 
         val_data = pd.read_csv(split_dir / "val.csv", index_col=0)
         train_data = pd.read_csv(split_dir / "train.csv", index_col=0)
         test_data = pd.read_csv(split_dir / "test.csv", index_col=0)
 
-        logger.info("Normalizing activity data")
         scaler = StandardScaler()
         train_data[tgt_name] = scaler.fit_transform(
             train_data[ACT].values.reshape(-1, 1)
@@ -53,7 +52,7 @@ def prepare_datasets(data_dir, tgt_name, k, logger):
 
         hodge_file = split_dir / f"train_hodge.csv"
         if not hodge_file.exists():
-            logger.info("Computing Hodge ranking")
+            logger.info("computing Hodge ranking")
             hodge_df = parallel_hodge_rank(train_data)
             hodge_kd = train_data.merge(
                 hodge_df,
@@ -62,7 +61,7 @@ def prepare_datasets(data_dir, tgt_name, k, logger):
             )
             hodge_kd.to_csv(hodge_file)
         else:
-            logger.info("Found cached Hodge ranking data")
+            logger.info(f"cached Hodge ranking data at {hodge_file}")
             hodge_kd = pd.read_csv(hodge_file, index_col=0)
 
         yield index, train_data, hodge_kd, val_data, test_data
@@ -72,7 +71,7 @@ def train_and_evaluate_model(
     run_name, train_loader, val_loader, test_loader, logger, target_name, index
 ):
     """Train and evaluate the model."""
-    logger.info(f"Training model for target: {target_name}")
+    logger.info(f"training model for target: {target_name}")
     protein_dim = 1280
     ligand_dim = 2048
     embedding_size = 256
@@ -87,7 +86,7 @@ def train_and_evaluate_model(
         val_loss, val_rank_corr = model_epoch(model, val_loader)
 
         logger.info(
-            f"[{target_name}] epoch={epoch + 1} train_loss={train_loss:.4f} val_loss={val_loss:.4f} train_rank_corr={train_rank_corr:.4f} val_rank_corr={val_rank_corr:.4f}"
+            f"[{target_name}] epoch={epoch + 1}/{num_epochs} train_loss={train_loss:.4f} val_loss={val_loss:.4f} train_rank_corr={train_rank_corr:.4f} val_rank_corr={val_rank_corr:.4f}"
         )
         write_info(
             run_name,
@@ -103,7 +102,7 @@ def train_and_evaluate_model(
         )
 
         if val_rank_corr > best_corr:
-            logger.info(f"[{target_name}] Updating best rank corr.")
+            logger.info(f"[{target_name}] updating test set predictions")
             best_corr = val_rank_corr
             torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")
             test_loss, test_rank_corr = model_epoch(
@@ -143,7 +142,6 @@ def main():
     for index, train_data, hodge_kd, val_data, test_data in prepare_datasets(
         data_dir, tgt_name, 5, logger
     ):
-        logger.info("Creating datasets")
         info_cols = ["activities.activity_id", "assay_id"]
         train_dataset = ActivityDataset(
             train_data, target=tgt_name, info_cols=info_cols
@@ -168,7 +166,7 @@ def main():
             run_name, train_loader, val_loader, test_loader, logger, "rank", index
         )
 
-    logger.info("Pipeline completed")
+    logger.info("pipeline completed")
 
 
 if __name__ == "__main__":
