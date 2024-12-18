@@ -11,7 +11,7 @@ fi
 
 source venv/bin/activate
 
-pip install -r requirements.txt
-pip install -e .
+#pip install -r requirements.txt
+#pip install -e .
 
-python scripts/train.py
+python $1 $2

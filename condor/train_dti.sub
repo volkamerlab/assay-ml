@@ -1,9 +1,10 @@
 universe = docker
 docker_image = gjoschka/kinodata3d-b0:2.3.0-cuda12.1
 executable = run_training.sh
-output = logs/train_dti.$(ClusterId).out
-error = logs/train_dti.$(ClusterId).err
-log = logs/train_dti.$(ClusterId).log
+arguments = $(script) $(weight)
+output = logs/train_dti.$(ClusterId).$(ProcId).out
+error = logs/train_dti.$(ClusterId).$(ProcId).err
+log = logs/train_dti.$(ClusterId).$(ProcId).log
 should_transfer_files   = YES
 when_to_transfer_output = ON_EXIT
 request_GPUs = 1
@@ -11,4 +12,9 @@ request_CPUs = 16
 request_memory = 64G
 requirements = UidDomain == "cs.uni-saarland.de"
 +WantGPUHomeMounted = true
-queue
+queue script, weight from (
+    scripts/train_baseline.py, 0
+    scripts/train_ranking.py, 0
+    scripts/train_ranking.py, 0.5
+    scripts/train_ranking.py, 1
+)

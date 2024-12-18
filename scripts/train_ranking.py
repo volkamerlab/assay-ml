@@ -1,6 +1,7 @@
 import logging
 import uuid
 from pathlib import Path
+import sys
 
 import pandas as pd
 import torch
@@ -17,7 +18,7 @@ from dti.training import model_epoch
 
 
 def main():
-    inter_assay_weight = 0
+    inter_assay_weight = float(sys.argv[1])
     run_name = f"hodge_lam{inter_assay_weight}_" + uuid.uuid4().hex[:5]
     init_logging(run_name)
     logger = logging.getLogger("main")
@@ -38,7 +39,6 @@ def main():
         train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
 
         train_and_evaluate_model(
             run_name, train_loader, val_loader, test_loader, logger, "rank", index
