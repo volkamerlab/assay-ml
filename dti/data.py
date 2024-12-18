@@ -184,7 +184,7 @@ class ActivityDataset(Dataset):
         )
 
 
-def split_kinodata(target_dir: Union[Path, str] = DATA / "processed", k: int = 5):
+def split_kinodata(target_dir: Union[Path, str] = DATA / "processed", k: int = 5, random_valset: bool = False):
     if (target_dir / "0").exists():
         return target_dir
     target_dir.mkdir(exist_ok=True, parents=True)
@@ -201,45 +201,15 @@ def split_kinodata(target_dir: Union[Path, str] = DATA / "processed", k: int = 5
             split_dir / "test.csv"
         )
         rest = kinodata[~kinodata["assay_id"].isin(partition[index])]
-        idcs = np.arange(len(rest))
-        np.random.shuffle(idcs)
-        split = len(rest) // 8
-        rest.iloc[idcs[:split]].to_csv(split_dir / "val.csv")
-        rest.iloc[idcs[split:]].to_csv(split_dir / "train.csv")
-
-    return target_dir
-
-
-def process_kinodata_default_dti(
-    target_dir: Union[Path, str] = DATA / "processed", k: int = 5
-):
-    kinodata = load_kinodata()
-    kinodata["assay_id"] = kinodata["assays.chembl_id"].str[6:].astype(int)
-
-    col = "assay_id"
-    partition = split_kfold_by(kinodata, column=col, k=k)
-
-    for index in range(k):
-        split_dir = target_dir / str(index)
-        train_file = split_dir / "train.csv"
-        test_file = split_dir / "test.csv"
-
-        if train_file.exists() and test_file.exists():
-            continue
+        if random_valset:
+            idcs = np.arange(len(rest))
+            np.random.shuffle(idcs)
+            split = len(rest) // 8
+            rest.iloc[idcs[:split]].to_csv(split_dir / "val.csv")
+            rest.iloc[idcs[split:]].to_csv(split_dir / "train.csv")
         else:
-            split_dir.mkdir(exist_ok=True, parents=True)
-        train = ~kinodata[col].isin(partition[index])
-        test = kinodata[col].isin(partition[index])
-
-        scaler = StandardScaler()
-        tgt_name = "scaled_ic50"
-        kinodata.loc[train, tgt_name] = scaler.fit_transform(
-            kinodata.loc[train, ACT].values.reshape(-1, 1)
-        )
-        kinodata[train].to_csv(train_file)
-        kinodata.loc[test, tgt_name] = scaler.transform(
-            kinodata.loc[test, ACT].values.reshape(-1, 1)
-        )
-        kinodata[test].to_csv(test_file)
+            val_assays = partition[(index + 1) % k][:partition.shape[1] // 2]
+            rest[rest["assay_id"].isin(val_assays)].to_csv(split_dir / "val.csv")
+            rest[~rest["assay_id"].isin(val_assays)].to_csv(split_dir / "train.csv")
 
     return target_dir
