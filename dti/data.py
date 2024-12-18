@@ -151,13 +151,14 @@ class ActivityDataset(Dataset):
         logger.info(f"computing protein features: {model_name}")
         done = []
         fasta_file = DATA / "data.fasta"
-        with open(fasta_file, "w") as f:
-            for i, row in data.iterrows():
-                uniprot = row["UniprotID"]
-                if uniprot in done:
-                    continue
-                f.write(f">{uniprot}\n{row['component_sequences.sequence']}\n")
-                done.append(uniprot)
+        if not fasta_file.exists():
+            with open(fasta_file, "w") as f:
+                for i, row in data.iterrows():
+                    uniprot = row["UniprotID"]
+                    if uniprot in done:
+                        continue
+                    f.write(f">{uniprot}\n{row['component_sequences.sequence']}\n")
+                    done.append(uniprot)
 
         output_dir = DATA / model_name
         output_dir.mkdir(exist_ok=True)
