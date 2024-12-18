@@ -23,7 +23,8 @@ def _process_target_group_from_file(args):
     input_file, inter_assay_weight = args
     group_data = pd.read_csv(input_file)
     target = group_data["UniprotID"].iloc[0]
-    group_data[group_data.groupby("assay_id")["assay_id"].transform("count") > 1]
+    if inter_assay_weight == 0:
+        group_data[group_data.groupby("assay_id")["assay_id"].transform("count") > 1]
     cmpds = list(group_data[SMILES].unique())
     dim = len(cmpds)
     y_bar = np.zeros((dim, dim))
@@ -61,7 +62,7 @@ def _process_target_group_from_file(args):
 
 
 def parallel_hodge_rank(kinodata: pd.DataFrame, inter_assay_weight: float = 0):
-    logger.info("Compute Hodge ranking for all targets")
+    logger.info(f"compute Hodge ranking (inter_assay_weight={inter_assay_weight})")
     global __all_scores
     __all_scores = list()
 
@@ -102,5 +103,5 @@ def hodge_rank(y_bar, w, diag_stab=0.0):
         scores = -np.linalg.pinv(laplacian) @ divergence
         return scores
     except np.linalg.LinAlgError:
-        logger.warning("Unstable SVD")
+        logger.warning("unstable SVD")
         return hodge_rank(y_bar, w, diag_stab=diag_stab + 1e-5)

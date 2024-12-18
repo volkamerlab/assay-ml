@@ -18,6 +18,7 @@ from esm import FastaBatchedDataset, pretrained
 from sklearn.preprocessing import StandardScaler
 
 from .utils import DATA, SMILES, ACT, DEVICE
+from .hodge_ranking import parallel_hodge_rank
 
 import logging
 
@@ -213,3 +214,47 @@ def split_kinodata(target_dir: Union[Path, str] = DATA / "processed", k: int = 5
             rest[~rest["assay_id"].isin(val_assays)].to_csv(split_dir / "train.csv")
 
     return target_dir
+
+
+def normalize_activity(data: pd.DataFrame, target_col: str, scaler: StandardScaler):
+    """Normalize activity data to a standard normal distribution."""
+    data[target_col] = scaler.transform(data[ACT].values.reshape(-1, 1))
+    return data
+
+
+def prepare_datasets(data_dir, tgt_name, k, logger, inter_assay_weight: Union[float, None]):
+    """Prepare train, validation, and test datasets."""
+    split_kinodata(data_dir, k=k)
+    for index in range(k):
+        split_dir = data_dir / f"{index}"
+        logger.info(f"reading dataset from {split_dir}")
+
+        val_data = pd.read_csv(split_dir / "val.csv", index_col=0)
+        train_data = pd.read_csv(split_dir / "train.csv", index_col=0)
+        test_data = pd.read_csv(split_dir / "test.csv", index_col=0)
+
+        scaler = StandardScaler()
+        train_data[tgt_name] = scaler.fit_transform(
+            train_data[ACT].values.reshape(-1, 1)
+        )
+        test_data = normalize_activity(test_data, tgt_name, scaler)
+        val_data = normalize_activity(val_data, tgt_name, scaler)
+
+        if inter_assay_weight is not None:
+            hodge_file = split_dir / f"train_hodge_lam{inter_assay_weight:.2f}.csv"
+            if not hodge_file.exists():
+                logger.info("computing Hodge ranking")
+                hodge_df = parallel_hodge_rank(train_data)
+                hodge_kd = train_data.merge(
+                    hodge_df,
+                    on=["compound_structures.canonical_smiles", "UniprotID"],
+                    how="inner",
+                )
+                hodge_kd.to_csv(hodge_file)
+            else:
+                logger.info(f"cached Hodge ranking data at {hodge_file}")
+                hodge_kd = pd.read_csv(hodge_file, index_col=0)
+        else:
+            hodge_kd = None
+
+        yield index, train_data, hodge_kd, val_data, test_data
