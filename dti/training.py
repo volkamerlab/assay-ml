@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from torch import nn
 from scipy.stats import spearmanr, kendalltau
+from scipy.special import binom
 
 from .utils import DEVICE
 
@@ -77,7 +78,7 @@ def rank_corr(prediction_data: pd.DataFrame) -> float:
         tau = kendalltau(
             group["prediction"], group["target"], nan_policy="raise", variant="c"
         ).statistic
-        if np.isnan(rank_corr):
+        if np.isnan(tau):
             continue
         total_weight += assay_weight
         overall_tau += assay_weight * tau
