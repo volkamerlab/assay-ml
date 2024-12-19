@@ -255,7 +255,7 @@ def prepare_datasets(
             hodge_file = split_dir / f"train_hodge_lam{inter_assay_weight:.2f}.csv"
             if not hodge_file.exists():
                 logger.info("computing Hodge ranking")
-                hodge_df = parallel_hodge_rank(train_data)
+                hodge_df = parallel_hodge_rank(train_data, inter_assay_weight)
                 hodge_kd = train_data.merge(
                     hodge_df,
                     on=["compound_structures.canonical_smiles", "UniprotID"],
