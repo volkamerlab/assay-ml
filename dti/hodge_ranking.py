@@ -23,35 +23,31 @@ def _process_target_group_from_file(args):
     input_file, inter_assay_weight = args
     group_data = pd.read_csv(input_file)
     target = group_data["UniprotID"].iloc[0]
+
     if inter_assay_weight == 0:
-        group_data[group_data.groupby("assay_id")["assay_id"].transform("count") > 1]
-    cmpds = list(group_data[SMILES].unique())
+        group_data = group_data[group_data.groupby("assay_id")["assay_id"].transform("count") > 1]
+
+    cmpds = group_data[SMILES].unique()
+    cmpd_to_idx = {cmpd: idx for idx, cmpd in enumerate(cmpds)}
     dim = len(cmpds)
+
     y_bar = np.zeros((dim, dim))
     weights = np.zeros((dim, dim))
 
-    # intra-assay preferences
-    # for assay_id, subset in group_data.groupby("assay_id"):
-    # for i in range(len(subset)):
-    # for j in range(i):
-    # pref = subset.iloc[i][ACT] - subset.iloc[j][ACT]
-    # cmpd_i, cmpd_j = subset.iloc[i][SMILES], subset.iloc[j][SMILES]
-    # c_i, c_j = cmpds.index(cmpd_i), cmpds.index(cmpd_j)
-    # y_bar[c_i, c_j] += pref
-    # y_bar[c_j, c_i] -= pref
-    # weights[c_i, c_j] += 1
+    cmpd_indices = group_data[SMILES].map(cmpd_to_idx).values
+    assay_ids = group_data["assay_id"].values
+    activity = group_data[ACT].values
 
     for i in range(len(group_data)):
+        c_i = cmpd_indices[i]
         for j in range(i):
-            row_i, row_j = group_data.iloc[i], group_data.iloc[j]
-            assay_i, assay_j = row_i["assay_id"], row_j["assay_id"]
-            weight = inter_assay_weight if assay_i != assay_j else 1.0
-            cmpd_i, cmpd_j = row_i[SMILES], row_j[SMILES]
-            c_i, c_j = cmpds.index(cmpd_i), cmpds.index(cmpd_j)
-            pref = group_data.iloc[i][ACT] - group_data.iloc[j][ACT]
+            c_j = cmpd_indices[j]
+            weight = inter_assay_weight if assay_ids[i] != assay_ids[j] else 1.0
+            pref = activity[i] - activity[j]
             y_bar[c_i, c_j] += weight * pref
             y_bar[c_j, c_i] -= weight * pref
             weights[c_i, c_j] += weight
+
 
     weights[np.diag_indices_from(weights)] = 0
     weights += weights.T
