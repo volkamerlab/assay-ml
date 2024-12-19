@@ -30,6 +30,9 @@ def _process_target_group_from_file(args):
             group_data.groupby("assay_id")["assay_id"].transform("count") > 1
         ]
 
+    if len(group_data) == 1:
+        return []
+
     cmpds = group_data[SMILES].unique()
     cmpd_to_idx = {cmpd: idx for idx, cmpd in enumerate(cmpds)}
     dim = len(cmpds)
