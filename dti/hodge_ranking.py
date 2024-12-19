@@ -45,7 +45,7 @@ def _process_target_group_from_file(args):
         for j in range(i):
             row_i, row_j = group_data.iloc[i], group_data.iloc[j]
             assay_i, assay_j = row_i["assay_id"], row_j["assay_id"]
-            weight = inter_assay_weight if assay_i == assay_j else 1.0
+            weight = inter_assay_weight if assay_i != assay_j else 1.0
             cmpd_i, cmpd_j = row_i[SMILES], row_j[SMILES]
             c_i, c_j = cmpds.index(cmpd_i), cmpds.index(cmpd_j)
             pref = group_data.iloc[i][ACT] - group_data.iloc[j][ACT]
