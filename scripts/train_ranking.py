@@ -30,7 +30,7 @@ def main():
     run_name = f"hodge_lam{inter_assay_weight}_" + uuid.uuid4().hex[:5]
     init_logging(run_name)
     logger = logging.getLogger("main")
-    batch_size = 256
+    batch_size = 512
 
     write_header(run_name)
     data_dir = DATA / "processed"
