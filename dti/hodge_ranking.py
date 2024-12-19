@@ -2,11 +2,12 @@ from concurrent.futures import ProcessPoolExecutor
 from collections import namedtuple
 import uuid
 from pathlib import Path
+import os
 
 import tqdm
 import numpy as np
 import pandas as pd
-import os
+from sklearn.preprocessing import StandardScaler
 
 from .utils import DATA, ACT, SMILES
 
@@ -25,7 +26,9 @@ def _process_target_group_from_file(args):
     target = group_data["UniprotID"].iloc[0]
 
     if inter_assay_weight == 0:
-        group_data = group_data[group_data.groupby("assay_id")["assay_id"].transform("count") > 1]
+        group_data = group_data[
+            group_data.groupby("assay_id")["assay_id"].transform("count") > 1
+        ]
 
     cmpds = group_data[SMILES].unique()
     cmpd_to_idx = {cmpd: idx for idx, cmpd in enumerate(cmpds)}
@@ -47,7 +50,6 @@ def _process_target_group_from_file(args):
             y_bar[c_i, c_j] += weight * pref
             y_bar[c_j, c_i] -= weight * pref
             weights[c_i, c_j] += weight
-
 
     weights[np.diag_indices_from(weights)] = 0
     weights += weights.T
@@ -97,6 +99,7 @@ def hodge_rank(y_bar, w, diag_stab=0.0):
     divergence = (w * y_bar).sum(0)
     try:
         scores = -np.linalg.pinv(laplacian) @ divergence
+        scores = StandardScaler().fit_transform(scores.reshape(-1, 1)).flatten()
         return scores
     except np.linalg.LinAlgError:
         logger.warning("unstable SVD")
