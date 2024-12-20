@@ -27,17 +27,17 @@ from dti.training import model_epoch
 
 def main():
     inter_assay_weight = float(sys.argv[1])
-    run_name = f"hodge_lam{inter_assay_weight}_" + uuid.uuid4().hex[:5]
+    run_name = f"hodge_cos_rand_valset_lam{inter_assay_weight}_" + uuid.uuid4().hex[:3]
     init_logging(run_name)
     logger = logging.getLogger("main")
     batch_size = 512
 
     write_header(run_name)
-    data_dir = DATA / "processed"
+    data_dir = DATA / "processed_rand_valset"
     tgt_name = "scaled_ic50"
 
     for index, train_data, hodge_kd, val_data, test_data in prepare_datasets(
-        data_dir, tgt_name, 5, logger, inter_assay_weight
+        data_dir, tgt_name, 5, logger, inter_assay_weight, True
     ):
         info_cols = ["activities.activity_id", "assay_id"]
         val_dataset = ActivityDataset(val_data, target=tgt_name, info_cols=info_cols)

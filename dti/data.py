@@ -212,12 +212,14 @@ def split_kinodata(
         )
         rest = kinodata[~kinodata["assay_id"].isin(partition[index])]
         if random_valset:
+            logger.info("random validation set")
             idcs = np.arange(len(rest))
             np.random.shuffle(idcs)
             split = len(rest) // 8
             rest.iloc[idcs[:split]].to_csv(split_dir / "val.csv")
             rest.iloc[idcs[split:]].to_csv(split_dir / "train.csv")
         else:
+            logger.info("assay-split validation set")
             val_assays = partition[(index + 1) % k][: partition.shape[1] // 2]
             rest[rest["assay_id"].isin(val_assays)].to_csv(split_dir / "val.csv")
             rest[~rest["assay_id"].isin(val_assays)].to_csv(split_dir / "train.csv")
@@ -232,10 +234,10 @@ def normalize_activity(data: pd.DataFrame, target_col: str, scaler: StandardScal
 
 
 def prepare_datasets(
-    data_dir, tgt_name, k, logger, inter_assay_weight: Union[float, None]
+        data_dir, tgt_name, k, logger, inter_assay_weight: Union[float, None], random_valset: bool = False,
 ):
     """Prepare train, validation, and test datasets."""
-    split_kinodata(data_dir, k=k)
+    split_kinodata(data_dir, k=k, random_valset=random_valset)
     for index in range(k):
         split_dir = data_dir / f"{index}"
         logger.info(f"reading dataset from {split_dir}")
