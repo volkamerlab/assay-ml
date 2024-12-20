@@ -7,7 +7,9 @@ logger = logging.getLogger(__name__)
 
 
 class CombinedModel(nn.Module):
-    def __init__(self, protein_input_size, ligand_input_size, embedding_size, cosine_agg=False):
+    def __init__(
+        self, protein_input_size, ligand_input_size, embedding_size, cosine_agg=False
+    ):
         super(CombinedModel, self).__init__()
 
         self.cosing_agg = cosine_agg

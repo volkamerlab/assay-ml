@@ -84,7 +84,10 @@ def train_and_evaluate_model(
     )
 
     model = CombinedModel(
-        opts["protein_dim"], opts["ligand_dim"], opts["embedding_size"], cosine_agg=opts["cosine_agg"]
+        opts["protein_dim"],
+        opts["ligand_dim"],
+        opts["embedding_size"],
+        cosine_agg=opts["cosine_agg"],
     ).to(device())
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 

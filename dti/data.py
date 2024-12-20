@@ -231,7 +231,12 @@ def normalize_activity(data: pd.DataFrame, target_col: str, scaler: StandardScal
 
 
 def prepare_datasets(
-    data_dir, tgt_name, k, logger, inter_assay_weight: Union[float, None], random_valset: bool = False,
+    data_dir,
+    tgt_name,
+    k,
+    logger,
+    inter_assay_weight: Union[float, None],
+    random_valset: bool = False,
 ) -> Iterator[
     Tuple[int, pd.DataFrame, Union[pd.DataFrame, None], pd.DataFrame, pd.DataFrame]
 ]:
