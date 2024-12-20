@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import torch
 from torch import nn
-from scipy.stats import spearmanr, kendalltau
+from scipy.stats import kendalltau
 from scipy.special import binom
 
 import logging
@@ -60,8 +60,8 @@ def model_epoch(model, loader, optimizer=None, criterion=None, prediction_file=N
     if prediction_file is not None:
         logger.info(f"writing predictions to {prediction_file}")
         prediction_data.to_csv(prediction_file)
-    if "assay_id" in prediction_data.columns:
-        mean_rank_corr = rank_corr(prediction_data)
+    assert "assay_id" in prediction_data.columns
+    mean_rank_corr = rank_corr(prediction_data)
 
     total_loss /= len(loader)
 
@@ -71,7 +71,7 @@ def model_epoch(model, loader, optimizer=None, criterion=None, prediction_file=N
 def rank_corr(prediction_data: pd.DataFrame) -> float:
     overall_tau = 0
     total_weight = 0
-    for assay_id, group in prediction_data.groupby("assay_id"):
+    for _, group in prediction_data.groupby("assay_id"):
         if group["target"].nunique() == 1 or group["prediction"].nunique() == 1:
             continue
         assay_weight = binom(len(group), 2)

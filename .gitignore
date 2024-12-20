@@ -157,4 +157,8 @@ cython_debug/
 # Torch
 *.pt
 
-#
+# csv files
+*.csv
+
+# vim/vim
+*.swp

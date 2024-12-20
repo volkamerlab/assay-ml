@@ -1,4 +1,4 @@
-from typing import Sequence, List, Union, NoReturn, Callable
+from typing import List, Union, Iterator, Tuple
 import functools
 import logging
 from pathlib import Path
@@ -9,18 +9,15 @@ import pandas as pd
 import numpy as np
 
 from rdkit import Chem
-from rdkit.Chem import AllChem, rdFingerprintGenerator
+from rdkit.Chem import rdFingerprintGenerator
 
 import torch
-from torch.utils.data import DataLoader, Dataset
-from torch import nn
+from torch.utils.data import Dataset
 from esm import FastaBatchedDataset, pretrained
 from sklearn.preprocessing import StandardScaler
 
 from .utils import DATA, SMILES, ACT, device
 from .hodge_ranking import parallel_hodge_rank
-
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +25,12 @@ logger = logging.getLogger(__name__)
 def extract_embeddings(
     model_name: str,
     fasta_file: Union[Path, str],
-    output_dir: Union[Path, str],
+    output_dir: Path,
     tokens_per_batch: int = 4096,
     seq_length: int = 5000,
     repr_layers: List[int] = [33],
 ):
+    # adapted from https://www.kaggle.com/code/viktorfairuschin/extracting-esm-2-embeddings-from-fasta-files
 
     dataset = FastaBatchedDataset.from_file(fasta_file)
     filename = lambda uniprot_id: output_dir / f"{uniprot_id}.pt"
@@ -65,14 +63,13 @@ def extract_embeddings(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     with torch.no_grad():
-        for batch_idx, (labels, strs, toks) in tqdm.tqdm(
+        for _, (labels, strs, toks) in tqdm.tqdm(
             enumerate(data_loader), total=len(batches)
         ):
             toks = toks.to(device(), non_blocking=True)
 
             out = model(toks, repr_layers=repr_layers, return_contacts=False)
 
-            logits = out["logits"].to(device="cpu")
             representations = {
                 layer: t.to(device="cpu") for layer, t in out["representations"].items()
             }
@@ -157,7 +154,7 @@ class ActivityDataset(Dataset):
         fasta_file = DATA / "data.fasta"
         if not fasta_file.exists():
             with open(fasta_file, "w") as f:
-                for i, row in data.iterrows():
+                for _, row in data.iterrows():
                     uniprot = row["UniprotID"]
                     if uniprot in done:
                         continue
@@ -191,7 +188,7 @@ class ActivityDataset(Dataset):
 
 
 def split_kinodata(
-    target_dir: Union[Path, str] = DATA / "processed",
+    target_dir: Path = DATA / "processed",
     k: int = 5,
     random_valset: bool = False,
 ):
@@ -234,8 +231,10 @@ def normalize_activity(data: pd.DataFrame, target_col: str, scaler: StandardScal
 
 
 def prepare_datasets(
-        data_dir, tgt_name, k, logger, inter_assay_weight: Union[float, None], random_valset: bool = False,
-):
+    data_dir, tgt_name, k, logger, inter_assay_weight: Union[float, None], random_valset: bool = False,
+) -> Iterator[
+    Tuple[int, pd.DataFrame, Union[pd.DataFrame, None], pd.DataFrame, pd.DataFrame]
+]:
     """Prepare train, validation, and test datasets."""
     split_kinodata(data_dir, k=k, random_valset=random_valset)
     for index in range(k):

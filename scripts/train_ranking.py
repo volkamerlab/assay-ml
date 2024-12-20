@@ -1,28 +1,19 @@
 import logging
 import uuid
-from pathlib import Path
 import sys
 
-import pandas as pd
-import torch
-from torch.utils.data import Dataset, DataLoader
-from sklearn.preprocessing import StandardScaler
+from torch.utils.data import DataLoader
 
 from dti.data import (
     ActivityDataset,
     prepare_datasets,
 )
 from dti.utils import (
-    ACT,
     DATA,
-    OUTPUT,
     init_logging,
-    write_info,
     write_header,
     train_and_evaluate_model,
 )
-from dti.model import CombinedModel
-from dti.training import model_epoch
 
 
 def main():
@@ -39,6 +30,7 @@ def main():
     for index, train_data, hodge_kd, val_data, test_data in prepare_datasets(
         data_dir, tgt_name, 5, logger, inter_assay_weight, True
     ):
+        assert hodge_kd is not None
         info_cols = ["activities.activity_id", "assay_id"]
         val_dataset = ActivityDataset(val_data, target=tgt_name, info_cols=info_cols)
         test_dataset = ActivityDataset(test_data, target=tgt_name, info_cols=info_cols)
