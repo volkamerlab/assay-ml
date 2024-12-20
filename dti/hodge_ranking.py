@@ -55,7 +55,7 @@ def _process_target_group_from_file(args):
     weights[np.diag_indices_from(weights)] = 0
     weights += weights.T
 
-    scores = hodge_rank(y_bar, weights)
+    scores = hodge_rank(y_bar, weights, scale_scores=scale_scores)
 
     return [HodgeRank(target, cmpd, float(score)) for cmpd, score in zip(cmpds, scores)]
 
