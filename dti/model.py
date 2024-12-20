@@ -31,8 +31,8 @@ class CombinedModel(nn.Module):
         # Combined MLP
         self.combined_mlp = nn.Sequential(
             nn.Dropout(0.1),
-            nn.BatchNorm1d(embedding_size * 2),
-            nn.Linear(embedding_size * 2, 512),
+            nn.BatchNorm1d(embedding_size),
+            nn.Linear(embedding_size, 512),
             nn.SiLU(),
             nn.Dropout(0.1),
             nn.Linear(512, 128),
@@ -46,7 +46,6 @@ class CombinedModel(nn.Module):
 
         ligand_embedding = self.ligand_mlp(ligand)
 
-        combined_embedding = torch.cat([protein_embedding, ligand_embedding], dim=1)
-        # combined_embedding = protein_embedding * ligand_embedding
+        combined_embedding = protein_embedding * ligand_embedding
         output = self.combined_mlp(combined_embedding)
         return output
