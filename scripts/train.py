@@ -3,6 +3,7 @@ import uuid
 import sys
 
 from torch.utils.data import DataLoader
+from sklearn.preprocessing import StandardScaler
 
 from dti.data import (
     ActivityDataset,
@@ -17,25 +18,31 @@ from dti.utils import (
 
 
 def main():
-    inter_assay_weight = float(sys.argv[1])
-    run_name = f"hodge_cos_rand_valset_lam{inter_assay_weight}_" + uuid.uuid4().hex[:3]
+    inter_assay_weight = float(sys.argv[1]) if len(sys.argv) > 1 else None
+    run_name = f"lam{inter_assay_weight}_" + uuid.uuid4().hex[:3]
     init_logging(run_name)
     logger = logging.getLogger("main")
     batch_size = 512
 
     write_header(run_name)
-    data_dir = DATA / "processed_rand_valset"
+    data_dir = DATA / "processed"
     tgt_name = "scaled_ic50"
 
-    for index, train_data, hodge_kd, val_data, test_data in prepare_datasets(
-        data_dir, tgt_name, 5, logger, inter_assay_weight, True
+    for index, train_data, val_data, test_data in prepare_datasets(
+        data_dir, tgt_name, 5, inter_assay_weight, True
     ):
         assert hodge_kd is not None
         info_cols = ["activities.activity_id", "assay_id"]
         val_dataset = ActivityDataset(val_data, target=tgt_name, info_cols=info_cols)
         test_dataset = ActivityDataset(test_data, target=tgt_name, info_cols=info_cols)
+        scaler = StandardScaler()
+        if inter_assay_weight is not None:
+            tgt_name = "hodge_score"
+        train_data[tgt_name] = scaler.fit_transform(
+                train_data[tgt_name].values.reshape(-1, 1)
+        )
         train_dataset = ActivityDataset(
-            hodge_kd, target="hodge_score", info_cols=info_cols
+            train_data, target=tgt_name, info_cols=info_cols
         )
 
         train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)

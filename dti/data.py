@@ -98,7 +98,7 @@ def load_kinodata(
 
 
 def split_kfold_by(
-    kinodata: pd.DataFrame, k: int, column: str, seed: int = 0
+    kinodata: pd.DataFrame, k: int, column: str, seed: int = 1
 ) -> np.ndarray:
     """Return the k-fold partitioning of `kinodata[column]` in shape `(k, -1)`."""
     values = kinodata[column].unique()
@@ -234,7 +234,6 @@ def prepare_datasets(
     data_dir,
     tgt_name,
     k,
-    logger,
     inter_assay_weight: Union[float, None],
     random_valset: bool = False,
 ) -> Iterator[
@@ -258,11 +257,11 @@ def prepare_datasets(
         val_data = normalize_activity(val_data, tgt_name, scaler)
 
         if inter_assay_weight is not None:
-            hodge_file = split_dir / f"train_hodge_lam{inter_assay_weight:.2f}.csv"
+            hodge_file = split_dir / f"train_hodge_no_assay_norm_lam{inter_assay_weight:.2f}.csv"
             if not hodge_file.exists():
                 logger.info("computing Hodge ranking")
                 hodge_df = parallel_hodge_rank(train_data, inter_assay_weight)
-                hodge_kd = train_data.merge(
+                train_data = train_data.merge(
                     hodge_df,
                     on=["compound_structures.canonical_smiles", "UniprotID"],
                     how="inner",
@@ -270,8 +269,6 @@ def prepare_datasets(
                 hodge_kd.to_csv(hodge_file)
             else:
                 logger.info(f"cached Hodge ranking data at {hodge_file}")
-                hodge_kd = pd.read_csv(hodge_file, index_col=0)
-        else:
-            hodge_kd = None
+                train_data = pd.read_csv(hodge_file, index_col=0)
 
-        yield index, train_data, hodge_kd, val_data, test_data
+        yield index, train_data, val_data, test_data
