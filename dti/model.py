@@ -12,7 +12,7 @@ class CombinedModel(nn.Module):
     ):
         super(CombinedModel, self).__init__()
 
-        self.cosing_agg = cosine_agg
+        self.cosine_agg = cosine_agg
 
         # Protein sequence transformer
         self.protein_mlp = nn.Sequential(
@@ -33,10 +33,11 @@ class CombinedModel(nn.Module):
         )
 
         # Combined MLP
+        joint_embedding_size = embedding_size * (1 if cosine_agg else 2)
         self.combined_mlp = nn.Sequential(
             nn.Dropout(0.1),
-            nn.BatchNorm1d(embedding_size * (1 if cosine_agg else 2)),
-            nn.Linear(embedding_size, 512),
+            nn.BatchNorm1d(joint_embedding_size),
+            nn.Linear(joint_embedding_size, 512),
             nn.SiLU(),
             nn.Dropout(0.1),
             nn.Linear(512, 128),
