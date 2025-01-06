@@ -266,7 +266,7 @@ def prepare_datasets(
                     on=["compound_structures.canonical_smiles", "UniprotID"],
                     how="inner",
                 )
-                hodge_kd.to_csv(hodge_file)
+                train_data.to_csv(hodge_file)
             else:
                 logger.info(f"cached Hodge ranking data at {hodge_file}")
                 train_data = pd.read_csv(hodge_file, index_col=0)
