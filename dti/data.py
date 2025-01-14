@@ -16,7 +16,7 @@ from torch.utils.data import Dataset
 from esm import FastaBatchedDataset, pretrained
 from sklearn.preprocessing import StandardScaler
 
-from .utils import DATA, SMILES, ACT, device
+from .utils import DATA, SMILES, ACT, TID, SEQUENCE, ASSAY, device
 from .hodge_ranking import parallel_hodge_rank
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ def extract_embeddings(
     # adapted from https://www.kaggle.com/code/viktorfairuschin/extracting-esm-2-embeddings-from-fasta-files
 
     dataset = FastaBatchedDataset.from_file(fasta_file)
-    filename = lambda uniprot_id: output_dir / f"{uniprot_id}.pt"
+    filename = lambda tid: output_dir / f"{tid}.pt"
     data = [
         (label, seq)
         for label, seq in zip(dataset.sequence_labels, dataset.sequence_strs)
@@ -94,7 +94,30 @@ def load_kinodata(
     data = pd.read_csv(kinodata_path, index_col=0)
     data = data[data["activities.standard_type"].isin(activity_types)]
     data = data[~data["compound_structures.canonical_smiles"].isna()]
-    return data
+    data[ASSAY] = kinodata["assays.chembl_id"].str[6:].astype(int)
+    return data.rename(
+        columns={
+            "activities.standard_value": ACT,
+            "compound_structures.canonical_smiles": SMILES,
+            "component_sequences.sequence": SEQUENCE,
+            "UniprotID": TID,
+        }
+    )
+
+
+def load_landrum(landrum_path: Path = DATA / "raw" / "landrum.csv") -> pd.DataFrame:
+    logger.info(f"Loading landrum data from {landrum_path}")
+    data = pd.read_csv(landrum_path, index_col=0)
+    data = data[~data["canonical_smiles"].isna()]
+    return data.rename(
+        columns={
+            "pchembl_value": ACT,
+            "canonical_smiles": SMILES,
+            "component_sequence": SEQUENCE,
+            "tid": TID,
+            "assay_id": ASSAY,
+        }
+    )
 
 
 def split_kfold_by(
@@ -110,9 +133,6 @@ def split_kfold_by(
 
 
 def compute_fp(smi: str):
-    # mfpgen = rdFingerprintGenerator.GetRDKitFPGenerator(
-    # maxPath=5, fpSize=2048
-    # )
     mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
     try:
         return mfpgen.GetFingerprintAsNumPy(Chem.MolFromSmiles(smi))
@@ -155,10 +175,10 @@ class ActivityDataset(Dataset):
         if not fasta_file.exists():
             with open(fasta_file, "w") as f:
                 for _, row in data.iterrows():
-                    uniprot = row["UniprotID"]
+                    uniprot = row["TID"]
                     if uniprot in done:
                         continue
-                    f.write(f">{uniprot}\n{row['component_sequences.sequence']}\n")
+                    f.write(f">{uniprot}\n{row[SEQUENCE]}\n")
                     done.append(uniprot)
 
         output_dir = DATA / model_name
@@ -172,7 +192,7 @@ class ActivityDataset(Dataset):
             ][33]
 
         self.protein_features = torch.stack(
-            [load_esm(uniprot_id) for uniprot_id in data["UniprotID"]]
+            [load_esm(uniprot_id) for uniprot_id in data[TID]]
         )
 
     def __len__(self):
@@ -187,27 +207,27 @@ class ActivityDataset(Dataset):
         )
 
 
-def split_kinodata(
+def split_data(
+    data: pd.DataFrame,
     target_dir: Path = DATA / "processed",
     k: int = 5,
     random_valset: bool = False,
+    col: str = ASSAY,
 ):
+    print(target_dir)
     if (target_dir / "0").exists():
         return target_dir
     target_dir.mkdir(exist_ok=True, parents=True)
-    kinodata = load_kinodata()
-    kinodata["assay_id"] = kinodata["assays.chembl_id"].str[6:].astype(int)
 
-    col = "assay_id"
-    partition = split_kfold_by(kinodata, column=col, k=k)
+    partition = split_kfold_by(data, column=col, k=k)
 
     for index in range(k):
         split_dir = target_dir / f"{index}"
         split_dir.mkdir()
-        kinodata[kinodata["assay_id"].isin(partition[index])].to_csv(
+        data[data[ASSAY].isin(partition[index])].to_csv(
             split_dir / "test.csv"
         )
-        rest = kinodata[~kinodata["assay_id"].isin(partition[index])]
+        rest = data[~data[ASSAY].isin(partition[index])]
         if random_valset:
             logger.info("random validation set")
             idcs = np.arange(len(rest))
@@ -218,8 +238,8 @@ def split_kinodata(
         else:
             logger.info("assay-split validation set")
             val_assays = partition[(index + 1) % k][: partition.shape[1] // 2]
-            rest[rest["assay_id"].isin(val_assays)].to_csv(split_dir / "val.csv")
-            rest[~rest["assay_id"].isin(val_assays)].to_csv(split_dir / "train.csv")
+            rest[rest[ASSAY].isin(val_assays)].to_csv(split_dir / "val.csv")
+            rest[~rest[ASSAY].isin(val_assays)].to_csv(split_dir / "train.csv")
 
     return target_dir
 
@@ -231,16 +251,17 @@ def normalize_activity(data: pd.DataFrame, target_col: str, scaler: StandardScal
 
 
 def prepare_datasets(
-    data_dir,
-    tgt_name,
-    k,
+    data: pd.DataFrame,
+    data_dir: Path,
+    tgt_name: str,
+    k: int,
     inter_assay_weight: Union[float, None],
     random_valset: bool = False,
 ) -> Iterator[
     Tuple[int, pd.DataFrame, Union[pd.DataFrame, None], pd.DataFrame, pd.DataFrame]
 ]:
     """Prepare train, validation, and test datasets."""
-    split_kinodata(data_dir, k=k, random_valset=random_valset)
+    split_data(data, data_dir, k=k, random_valset=random_valset)
     for index in range(k):
         split_dir = data_dir / f"{index}"
         logger.info(f"reading dataset from {split_dir}")
@@ -257,7 +278,9 @@ def prepare_datasets(
         val_data = normalize_activity(val_data, tgt_name, scaler)
 
         if inter_assay_weight is not None:
-            hodge_file = split_dir / f"train_hodge_no_assay_norm_lam{inter_assay_weight:.2f}.csv"
+            hodge_file = (
+                split_dir / f"train_hodge_no_assay_norm_lam{inter_assay_weight:.2f}.csv"
+            )
             if not hodge_file.exists():
                 logger.info("computing Hodge ranking")
                 hodge_df = parallel_hodge_rank(train_data, inter_assay_weight)

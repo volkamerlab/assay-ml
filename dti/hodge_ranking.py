@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
-from .utils import DATA, ACT, SMILES
+from .utils import DATA, ACT, SMILES, TID, ASSAY
 
 import logging
 
@@ -15,17 +15,17 @@ logger = logging.getLogger(__name__)
 
 __all_scores = list()
 
-HodgeRank = namedtuple("HodgeRank", "UniprotID smiles hodge_score".split())
+HodgeRank = namedtuple("HodgeRank", "TID smiles hodge_score".split())
 
 
 def _process_target_group_from_file(args):
     input_file, inter_assay_weight, scale_scores = args
     group_data: pd.DataFrame = pd.read_csv(input_file)
-    target = group_data["UniprotID"].iloc[0]
+    target = group_data[TID].iloc[0]
 
     if inter_assay_weight == 0:
         group_data = group_data[
-            group_data.groupby("assay_id")["assay_id"].transform("count") > 1
+            group_data.groupby(ASSAY)[ASSAY].transform("count") > 1
         ]
 
     cmpds = group_data[SMILES].unique()
@@ -39,7 +39,7 @@ def _process_target_group_from_file(args):
     weights = np.zeros((dim, dim))
 
     cmpd_indices = group_data[SMILES].map(cmpd_to_idx).values
-    assay_ids = group_data["assay_id"].values
+    assay_ids = group_data[ASSAY].values
     activity = group_data[ACT].values
 
     for i in range(len(group_data)):
@@ -67,7 +67,7 @@ def parallel_hodge_rank(
     global __all_scores
     __all_scores = list()
 
-    groups = list(kinodata.groupby("UniprotID"))
+    groups = list(kinodata.groupby(TID))
 
     temp_dir = DATA / "hodge_temp_data" / uuid.uuid4().hex
     temp_dir.mkdir(exist_ok=True, parents=True)

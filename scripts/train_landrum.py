@@ -8,6 +8,7 @@ from sklearn.preprocessing import StandardScaler
 from dti.data import (
     ActivityDataset,
     prepare_datasets,
+    load_landrum,
 )
 from dti.utils import (
     DATA,
@@ -27,11 +28,12 @@ def main():
     batch_size = 512
 
     write_header(run_name)
-    data_dir = DATA / "processed"
+    data_dir = DATA / "processed" / "landrum"
     tgt_name = "scaled_ic50"
 
+    data = load_landrum()
     for index, train_data, val_data, test_data in prepare_datasets(
-        data_dir, tgt_name, 5, inter_assay_weight, True
+        data, data_dir, tgt_name, 5, inter_assay_weight, True
     ):
         info_cols = ["activities.activity_id", "assay_id"]
         val_dataset = ActivityDataset(val_data, target=tgt_name, info_cols=info_cols)

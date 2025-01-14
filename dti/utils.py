@@ -10,8 +10,11 @@ from .training import model_epoch
 
 DATA = Path(".") / "data"
 OUTPUT = DATA / "output"
-SMILES = "compound_structures.canonical_smiles"
-ACT = "activities.standard_value"
+SMILES = "smiles"
+ACT = "activity_value"
+SEQUENCE = "sequence"
+TID = "tid"
+ASSAY = "assay_id"
 
 device = lambda: "cuda" if torch.cuda.is_available() else "cpu"
 
