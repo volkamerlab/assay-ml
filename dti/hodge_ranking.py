@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 __all_scores = list()
 
-HodgeRank = namedtuple("HodgeRank", "TID smiles hodge_score".split())
+HodgeRank = namedtuple("HodgeRank", [TID, SMILES, "hodge_score"])
 
 
 def _process_target_group_from_file(args):

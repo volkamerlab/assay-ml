@@ -175,24 +175,24 @@ class ActivityDataset(Dataset):
         if not fasta_file.exists():
             with open(fasta_file, "w") as f:
                 for _, row in data.iterrows():
-                    uniprot = row["TID"]
-                    if uniprot in done:
+                    tid = row[TID]
+                    if tid in done:
                         continue
-                    f.write(f">{uniprot}\n{row[SEQUENCE]}\n")
-                    done.append(uniprot)
+                    f.write(f">{tid}\n{row[SEQUENCE]}\n")
+                    done.append(tid)
 
         output_dir = DATA / model_name
         output_dir.mkdir(exist_ok=True)
         extract_embeddings(model_name, fasta_file, output_dir)
 
         @functools.cache
-        def load_esm(uniprot_id: str) -> torch.Tensor:
-            return torch.load(output_dir / f"{uniprot_id}.pt", weights_only=False)[
+        def load_esm(tid: str) -> torch.Tensor:
+            return torch.load(output_dir / f"{tid}.pt", weights_only=False)[
                 "representation"
             ][33]
 
         self.protein_features = torch.stack(
-            [load_esm(uniprot_id) for uniprot_id in data[TID]]
+            [load_esm(tid) for tid in data[TID]]
         )
 
     def __len__(self):
@@ -286,7 +286,7 @@ def prepare_datasets(
                 hodge_df = parallel_hodge_rank(train_data, inter_assay_weight)
                 train_data = train_data.merge(
                     hodge_df,
-                    on=["compound_structures.canonical_smiles", "UniprotID"],
+                    on=[SMILES, TID],
                     how="inner",
                 )
                 train_data.to_csv(hodge_file)
