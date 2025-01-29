@@ -60,7 +60,6 @@ def model_epoch(model, loader, optimizer=None, criterion=None, prediction_file=N
     if prediction_file is not None:
         logger.info(f"writing predictions to {prediction_file}")
         prediction_data.to_csv(prediction_file)
-    assert "assay_id" in prediction_data.columns
     mean_rank_corr = rank_corr(prediction_data)
 
     total_loss /= len(loader)
@@ -68,10 +67,15 @@ def model_epoch(model, loader, optimizer=None, criterion=None, prediction_file=N
     return total_loss, mean_rank_corr
 
 
+def rank_corr_pairs(prediction_data: pd.DataFrame) -> float:
+    # misclassification rate
+    return (prediction_data["prediction"] == prediction_data["target"]).mean()
+
+
 def rank_corr(prediction_data: pd.DataFrame) -> float:
     overall_tau = 0
     total_weight = 0
-    for _, group in prediction_data.groupby("assay_id"):
+    for _, group in prediction_data.groupby(ASSAY):
         if group["target"].nunique() == 1 or group["prediction"].nunique() == 1:
             continue
         assay_weight = binom(len(group), 2)

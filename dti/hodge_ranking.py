@@ -24,9 +24,7 @@ def _process_target_group_from_file(args):
     target = group_data[TID].iloc[0]
 
     if inter_assay_weight == 0:
-        group_data = group_data[
-            group_data.groupby(ASSAY)[ASSAY].transform("count") > 1
-        ]
+        group_data = group_data[group_data.groupby(ASSAY)[ASSAY].transform("count") > 1]
 
     cmpds = group_data[SMILES].unique()
     cmpd_to_idx = {cmpd: idx for idx, cmpd in enumerate(cmpds)}

@@ -86,6 +86,17 @@ def extract_embeddings(
                 torch.save(result, filename(entry_id))
 
 
+# def load_aqsoldb(
+# aqsoldb_path: Path = DATA / "raw" / "aqsoldb.csv") -> pd.DataFrame:
+# logger.info(f"Loading AqSolDb from {aqsoldb_path}")
+# data = pd.read_csv(aqsoldb_path, index_col=0)
+# data[ASSAY] = data["ID"].str[1:]
+# return data.rename(
+# columns={
+# "Solubility": ACT,
+# "SMILES": SMILES,
+
+
 def load_kinodata(
     kinodata_path: Path = DATA / "raw" / "activities-chembl33_v0.5.csv",
     activity_types: List[str] = ["pIC50"],
@@ -159,7 +170,7 @@ class ActivityDataset(Dataset):
             logger.info(
                 f"dropping {len(mask) - sum(mask)}/{len(mask)} data points w/o FP"
             )
-        kinodata = kinodata[mask]
+        self.kinodata = kinodata[mask]
         self.ligand_features = torch.tensor(
             np.stack([fp for fp in fps if fp is not None]), dtype=torch.float32
         )
@@ -207,6 +218,32 @@ class ActivityDataset(Dataset):
         )
 
 
+class PairDataset(ActivityDataset):
+    def __init__(
+        self,
+        kinodata: pd.DataFrame,
+        **kwargs,
+    ):
+        super().__init__(kinodata, **kwargs)
+        # for each assay id
+        #   generate idx pairs for all compounds
+        self.pairs = list()
+        for assay, group in self.kinodata.groupby(ASSAY):
+            self.pairs.extend(it.product(group.index, group.index))
+
+    def __len__(self):
+        return len(self.pairs)
+
+    def __getitem__(self, idx):
+        i, j = self.pairs[idx]
+        return (
+            self.protein_features[i],
+            torch.cat([self.ligand_features[i], self.ligand_features[j]], dim=1),
+            self.labels[i] - self.labels[j],
+            self.info[i],
+        )
+
+
 def split_data(
     data: pd.DataFrame,
     target_dir: Path = DATA / "processed",
@@ -224,9 +261,7 @@ def split_data(
     for index in range(k):
         split_dir = target_dir / f"{index}"
         split_dir.mkdir()
-        data[data[ASSAY].isin(partition[index])].to_csv(
-            split_dir / "test.csv"
-        )
+        data[data[ASSAY].isin(partition[index])].to_csv(split_dir / "test.csv")
         rest = data[~data[ASSAY].isin(partition[index])]
         if random_valset:
             logger.info("random validation set")
