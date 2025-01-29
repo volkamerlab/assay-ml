@@ -86,17 +86,6 @@ def extract_embeddings(
                 torch.save(result, filename(entry_id))
 
 
-# def load_aqsoldb(
-# aqsoldb_path: Path = DATA / "raw" / "aqsoldb.csv") -> pd.DataFrame:
-# logger.info(f"Loading AqSolDb from {aqsoldb_path}")
-# data = pd.read_csv(aqsoldb_path, index_col=0)
-# data[ASSAY] = data["ID"].str[1:]
-# return data.rename(
-# columns={
-# "Solubility": ACT,
-# "SMILES": SMILES,
-
-
 def load_kinodata(
     kinodata_path: Path = DATA / "raw" / "activities-chembl33_v0.5.csv",
     activity_types: List[str] = ["pIC50"],
@@ -105,7 +94,7 @@ def load_kinodata(
     data = pd.read_csv(kinodata_path, index_col=0)
     data = data[data["activities.standard_type"].isin(activity_types)]
     data = data[~data["compound_structures.canonical_smiles"].isna()]
-    data[ASSAY] = kinodata["assays.chembl_id"].str[6:].astype(int)
+    data[ASSAY] = data["assays.chembl_id"].str[6:].astype(int)
     return data.rename(
         columns={
             "activities.standard_value": ACT,
@@ -251,7 +240,6 @@ def split_data(
     random_valset: bool = False,
     col: str = ASSAY,
 ):
-    print(target_dir)
     if (target_dir / "0").exists():
         return target_dir
     target_dir.mkdir(exist_ok=True, parents=True)

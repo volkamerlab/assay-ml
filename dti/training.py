@@ -8,12 +8,45 @@ from scipy.special import binom
 
 import logging
 
+from .constants import ASSAY
+
 logger = logging.getLogger(__name__)
 
 device = lambda: "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def model_epoch(model, loader, optimizer=None, criterion=None, prediction_file=None):
+def rank_corr_pairs(prediction_data: pd.DataFrame) -> float:
+    # misclassification rate
+    return (prediction_data["prediction"] == prediction_data["target"]).mean()
+
+
+def rank_corr(prediction_data: pd.DataFrame) -> float:
+    overall_tau = 0
+    total_weight = 0
+    for _, group in prediction_data.groupby(ASSAY):
+        if group["target"].nunique() == 1 or group["prediction"].nunique() == 1:
+            continue
+        assay_weight = binom(len(group), 2)
+        tau = kendalltau(
+            group["prediction"], group["target"], nan_policy="raise", variant="c"
+        ).statistic
+        if np.isnan(tau):
+            continue
+        total_weight += assay_weight
+        overall_tau += assay_weight * tau
+    overall_tau /= total_weight
+
+    return overall_tau
+
+
+def model_epoch(
+    model,
+    loader,
+    optimizer=None,
+    criterion=None,
+    prediction_file=None,
+    rank_corr_fn=rank_corr,
+):
     if optimizer is not None:
         logger.debug("train model")
         criterion = nn.MSELoss() if criterion is None else criterion
@@ -60,32 +93,8 @@ def model_epoch(model, loader, optimizer=None, criterion=None, prediction_file=N
     if prediction_file is not None:
         logger.info(f"writing predictions to {prediction_file}")
         prediction_data.to_csv(prediction_file)
-    mean_rank_corr = rank_corr(prediction_data)
+    mean_rank_corr = rank_corr_fn(prediction_data)
 
     total_loss /= len(loader)
 
     return total_loss, mean_rank_corr
-
-
-def rank_corr_pairs(prediction_data: pd.DataFrame) -> float:
-    # misclassification rate
-    return (prediction_data["prediction"] == prediction_data["target"]).mean()
-
-
-def rank_corr(prediction_data: pd.DataFrame) -> float:
-    overall_tau = 0
-    total_weight = 0
-    for _, group in prediction_data.groupby(ASSAY):
-        if group["target"].nunique() == 1 or group["prediction"].nunique() == 1:
-            continue
-        assay_weight = binom(len(group), 2)
-        tau = kendalltau(
-            group["prediction"], group["target"], nan_policy="raise", variant="c"
-        ).statistic
-        if np.isnan(tau):
-            continue
-        total_weight += assay_weight
-        overall_tau += assay_weight * tau
-    overall_tau /= total_weight
-
-    return overall_tau

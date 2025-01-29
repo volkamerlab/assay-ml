@@ -8,13 +8,7 @@ import torch
 from .model import CombinedModel
 from .training import model_epoch
 
-DATA = Path(".") / "data"
-OUTPUT = DATA / "output"
-SMILES = "smiles"
-ACT = "activity_value"
-SEQUENCE = "sequence"
-TID = "tid"
-ASSAY = "assay_id"
+from .constants import *
 
 device = lambda: "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -102,7 +96,7 @@ def train_and_evaluate_model(
         logger.info(
             " ".join(
                 [
-                    f"[{target_name}]",
+                    f"[{run_name}]",
                     f"epoch={epoch + 1}/{opts['num_epochs']}",
                     f"train_loss={train_loss:.4f}",
                     f"val_loss={val_loss:.4f}",
