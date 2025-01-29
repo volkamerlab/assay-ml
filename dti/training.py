@@ -17,7 +17,7 @@ device = lambda: "cuda" if torch.cuda.is_available() else "cpu"
 
 def rank_corr_pairs(prediction_data: pd.DataFrame) -> float:
     # misclassification rate
-    return (prediction_data["prediction"] == prediction_data["target"]).mean()
+    return (np.sign(prediction_data["prediction"]) == np.sign(prediction_data["target"])).mean() * 2 - 1
 
 
 def rank_corr(prediction_data: pd.DataFrame) -> float:
@@ -45,7 +45,7 @@ def model_epoch(
     optimizer=None,
     criterion=None,
     prediction_file=None,
-    rank_corr_fn=rank_corr,
+    rank_corr_fn=rank_corr_pairs,
 ):
     if optimizer is not None:
         logger.debug("train model")
