@@ -57,3 +57,58 @@ class CombinedModel(nn.Module):
             combined_embedding = torch.cat([protein_embedding, ligand_embedding], dim=1)
         output = self.combined_mlp(combined_embedding)
         return output
+
+
+class PairModel(nn.Module):
+    def __init__(
+        self, protein_input_size, ligand_input_size, embedding_size
+    ):
+        super().__init__()
+
+        self.cosine_agg = cosine_agg
+
+        # Protein sequence transformer
+        self.protein_mlp = nn.Sequential(
+            nn.Linear(protein_input_size, 512),
+            nn.SiLU(),
+            nn.Linear(512, 512),
+            nn.SiLU(),
+            nn.Linear(512, embedding_size),
+        )
+
+        # Ligand MLP
+        self.ligand_mlp = nn.Sequential(
+            nn.Linear(ligand_input_size, 512),
+            nn.SiLU(),
+            nn.Linear(512, 512),
+            nn.SiLU(),
+            nn.Linear(512, embedding_size),
+        )
+
+        # Combined MLP
+        joint_embedding_size = embedding_size * 2
+        self.combined_mlp = nn.Sequential(
+            nn.Dropout(0.1),
+            nn.BatchNorm1d(joint_embedding_size),
+            nn.Linear(joint_embedding_size, 512),
+            nn.SiLU(),
+            nn.Dropout(0.1),
+            nn.Linear(512, 128),
+            nn.SiLU(),
+            nn.Dropout(0.1),
+            nn.Linear(128, 1),
+        )
+
+    def forward(self, protein, ligand_a, ligand_b):
+        protein_embedding = self.protein_mlp(protein)
+
+        ligand_embedding_a = self.ligand_mlp(ligand_a)
+        ligand_embedding_b = self.ligand_mlp(ligand_b)
+
+        combined_embedding_a = protein_embedding * ligand_embedding_a
+        combined_embedding_b = protein_embedding * ligand_embedding_b
+
+        combined_embedding = torch.cat([combined_embedding_a, combined_embedding_b], dim=1)
+        output = self.combined_mlp(combined_embedding)
+
+        return output
