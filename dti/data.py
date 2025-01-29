@@ -3,6 +3,7 @@ import functools
 import logging
 from pathlib import Path
 from multiprocessing import Pool
+import itertools as it
 
 import tqdm
 import pandas as pd
@@ -90,7 +91,7 @@ def load_kinodata(
     kinodata_path: Path = DATA / "raw" / "activities-chembl33_v0.5.csv",
     activity_types: List[str] = ["pIC50"],
 ) -> pd.DataFrame:
-    logger.info(f"Loading kinodata activities from {kinodata_path}")
+    logger.info(f"loading kinodata activities from {kinodata_path}")
     data = pd.read_csv(kinodata_path, index_col=0)
     data = data[data["activities.standard_type"].isin(activity_types)]
     data = data[~data["compound_structures.canonical_smiles"].isna()]
@@ -106,7 +107,7 @@ def load_kinodata(
 
 
 def load_landrum(landrum_path: Path = DATA / "raw" / "landrum.csv") -> pd.DataFrame:
-    logger.info(f"Loading landrum data from {landrum_path}")
+    logger.info(f"loading landrum data from {landrum_path}")
     data = pd.read_csv(landrum_path, index_col=0)
     data = data[~data["canonical_smiles"].isna()]
     return data.rename(
@@ -159,7 +160,8 @@ class ActivityDataset(Dataset):
             logger.info(
                 f"dropping {len(mask) - sum(mask)}/{len(mask)} data points w/o FP"
             )
-        self.kinodata = kinodata[mask]
+        self.kinodata = kinodata[mask].copy()
+        self.kinodata.reset_index(inplace=True)
         self.ligand_features = torch.tensor(
             np.stack([fp for fp in fps if fp is not None]), dtype=torch.float32
         )
@@ -219,6 +221,9 @@ class PairDataset(ActivityDataset):
         self.pairs = list()
         for assay, group in self.kinodata.groupby(ASSAY):
             self.pairs.extend(it.product(group.index, group.index))
+        self.info_cols = [col + "_a" for col in self.info_cols] + [
+            col + "_b" for col in self.info_cols
+        ]
 
     def __len__(self):
         return len(self.pairs)
@@ -227,9 +232,9 @@ class PairDataset(ActivityDataset):
         i, j = self.pairs[idx]
         return (
             self.protein_features[i],
-            torch.cat([self.ligand_features[i], self.ligand_features[j]], dim=1),
+            torch.cat([self.ligand_features[i], self.ligand_features[j]]),
             self.labels[i] - self.labels[j],
-            self.info[i],
+            torch.cat([self.info[i], self.info[j]])
         )
 
 
@@ -252,14 +257,14 @@ def split_data(
         data[data[ASSAY].isin(partition[index])].to_csv(split_dir / "test.csv")
         rest = data[~data[ASSAY].isin(partition[index])]
         if random_valset:
-            logger.info("random validation set")
+            logger.info(f"random validation set for split {index}")
             idcs = np.arange(len(rest))
             np.random.shuffle(idcs)
             split = len(rest) // 8
             rest.iloc[idcs[:split]].to_csv(split_dir / "val.csv")
             rest.iloc[idcs[split:]].to_csv(split_dir / "train.csv")
         else:
-            logger.info("assay-split validation set")
+            logger.info(f"assay-split validation set for split {index}")
             val_assays = partition[(index + 1) % k][: partition.shape[1] // 2]
             rest[rest[ASSAY].isin(val_assays)].to_csv(split_dir / "val.csv")
             rest[~rest[ASSAY].isin(val_assays)].to_csv(split_dir / "train.csv")

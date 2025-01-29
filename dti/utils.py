@@ -34,6 +34,8 @@ def init_logging(run_name: Union[str, None] = str(time.time())):
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
 
+    logger.info(f"logging run {run_name} to {log_file}")
+
 
 def write_header(run_name: str):
     write_info(
@@ -58,6 +60,7 @@ def write_info(run_name: str, fields: list):
 
 
 def train_and_evaluate_model(
+    model_cls,
     run_name,
     train_loader,
     val_loader,
@@ -80,7 +83,7 @@ def train_and_evaluate_model(
         | kwargs
     )
 
-    model = CombinedModel(
+    model = model_cls(
         opts["protein_dim"],
         opts["ligand_dim"],
         opts["embedding_size"],

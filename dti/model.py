@@ -60,7 +60,7 @@ class CombinedModel(nn.Module):
 
 
 class PairModel(nn.Module):
-    def __init__(self, protein_input_size, ligand_input_size, embedding_size):
+    def __init__(self, protein_input_size, ligand_input_size, embedding_size, **kwargs):
         super().__init__()
 
         self.ligand_input_size = ligand_input_size
@@ -97,10 +97,10 @@ class PairModel(nn.Module):
         )
 
     def forward(self, protein, ligands):
-        ligand_a = ligands[: self.ligand_input_size]
-        ligand_b = ligands[self.ligand_input_size :]
         protein_embedding = self.protein_mlp(protein)
 
+        ligand_a = ligands[:, : self.ligand_input_size]
+        ligand_b = ligands[:, self.ligand_input_size :]
         ligand_embedding_a = self.ligand_mlp(ligand_a)
         ligand_embedding_b = self.ligand_mlp(ligand_b)
 
