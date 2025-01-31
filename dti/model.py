@@ -14,35 +14,40 @@ class CombinedModel(nn.Module):
 
         self.cosine_agg = cosine_agg
 
-        # Protein sequence transformer
         self.protein_mlp = nn.Sequential(
             nn.Linear(protein_input_size, 512),
             nn.SiLU(),
             nn.Linear(512, 512),
             nn.SiLU(),
+            nn.Linear(512, 512),
+            nn.SiLU(),
+            nn.Linear(512, 512),
+            nn.SiLU(),
+            nn.Dropout(0.05),
             nn.Linear(512, embedding_size),
         )
 
-        # Ligand MLP
         self.ligand_mlp = nn.Sequential(
             nn.Linear(ligand_input_size, 512),
             nn.SiLU(),
             nn.Linear(512, 512),
             nn.SiLU(),
+            nn.Linear(512, 512),
+            nn.SiLU(),
+            nn.Linear(512, 512),
+            nn.SiLU(),
+            nn.Dropout(0.05),
             nn.Linear(512, embedding_size),
         )
 
-        # Combined MLP
         joint_embedding_size = embedding_size * (1 if cosine_agg else 2)
         self.combined_mlp = nn.Sequential(
-            nn.Dropout(0.1),
+            nn.Dropout(0.05),
             nn.BatchNorm1d(joint_embedding_size),
             nn.Linear(joint_embedding_size, 512),
             nn.SiLU(),
-            nn.Dropout(0.1),
             nn.Linear(512, 128),
             nn.SiLU(),
-            nn.Dropout(0.1),
             nn.Linear(128, 1),
         )
 
@@ -65,34 +70,39 @@ class PairModel(nn.Module):
 
         self.ligand_input_size = ligand_input_size
 
-        # Protein sequence transformer
         self.protein_mlp = nn.Sequential(
             nn.Linear(protein_input_size, 512),
             nn.SiLU(),
             nn.Linear(512, 512),
             nn.SiLU(),
+            nn.Linear(512, 512),
+            nn.SiLU(),
+            nn.Linear(512, 512),
+            nn.SiLU(),
+            nn.Dropout(0.05),
             nn.Linear(512, embedding_size),
         )
 
-        # Ligand MLP
         self.ligand_mlp = nn.Sequential(
             nn.Linear(ligand_input_size, 512),
             nn.SiLU(),
             nn.Linear(512, 512),
             nn.SiLU(),
+            nn.Linear(512, 512),
+            nn.SiLU(),
+            nn.Linear(512, 512),
+            nn.SiLU(),
+            nn.Dropout(0.05),
             nn.Linear(512, embedding_size),
         )
 
-        # Combined MLP
         self.combined_mlp = nn.Sequential(
-            nn.Dropout(0.1),
+            nn.Dropout(0.05),
             nn.BatchNorm1d(embedding_size),
             nn.Linear(embedding_size, 512),
             nn.SiLU(),
-            nn.Dropout(0.1),
             nn.Linear(512, 128),
             nn.SiLU(),
-            nn.Dropout(0.1),
             nn.Linear(128, 1),
         )
 
