@@ -20,7 +20,7 @@ from dti.data import (
 
 
 def main():
-    run_name = f"kinodata_pairs_rvs_" + uuid.uuid4().hex[:3]
+    run_name = f"kinodata_pairs_avs_" + uuid.uuid4().hex[:3]
     init_logging(run_name)
     logger = logging.getLogger("main")
     batch_size = 512
@@ -31,7 +31,7 @@ def main():
 
     data = load_kinodata()
     for index, train_data, val_data, test_data in prepare_datasets(
-        data, data_dir, tgt_name, 5, None, True
+        data, data_dir, tgt_name, 5, None, False
     ):
         info_cols = ["activities.activity_id", "assay_id"]
         val_dataset = PairDataset(val_data, target=tgt_name, info_cols=info_cols)
@@ -40,9 +40,7 @@ def main():
         train_data[tgt_name] = scaler.fit_transform(
             train_data[tgt_name].values.reshape(-1, 1)
         )
-        train_dataset = PairDataset(
-            train_data, target=tgt_name, info_cols=info_cols
-        )
+        train_dataset = PairDataset(train_data, target=tgt_name, info_cols=info_cols)
 
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
