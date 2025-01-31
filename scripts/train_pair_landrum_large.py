@@ -15,25 +15,25 @@ from dti.utils import (
 from dti.data import (
     PairDataset,
     prepare_datasets,
-    load_kinodata,
+    load_landrum,
 )
 
 
 def main():
-    run_name = f"kinodata_pairs_rvs_" + uuid.uuid4().hex[:3]
+    run_name = f"llandrum_pairs_rvs_" + uuid.uuid4().hex[:3]
     init_logging(run_name)
     logger = logging.getLogger("main")
     batch_size = 512
 
     write_header(run_name)
-    data_dir = DATA / "processed" / "kinodata"
+    data_dir = DATA / "processed" / "landrum_large"
     tgt_name = "scaled_ic50"
 
-    data = load_kinodata()
+    data = load_landrum(DATA / "raw" / "landrum_large.csv")
     for index, train_data, val_data, test_data in prepare_datasets(
         data, data_dir, tgt_name, 5, None, True
     ):
-        info_cols = ["activities.activity_id", "assay_id"]
+        info_cols = ["activity_id", "assay_id"]
         val_dataset = PairDataset(val_data, target=tgt_name, info_cols=info_cols)
         test_dataset = PairDataset(test_data, target=tgt_name, info_cols=info_cols)
         scaler = StandardScaler()

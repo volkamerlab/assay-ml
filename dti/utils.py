@@ -122,7 +122,7 @@ def train_and_evaluate_model(
         )
 
         if val_rank_corr > best_corr:
-            logger.info(f"[{target_name}] updating test set predictions")
+            logger.info(f"[{run_name}] updating test set predictions")
             best_corr = val_rank_corr
             torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")
             test_loss, test_rank_corr = model_epoch(
@@ -133,5 +133,5 @@ def train_and_evaluate_model(
                 / f"{target_name}_index{index}_preds.csv",
             )
             logger.info(
-                f"[{target_name}] test_loss={test_loss:.4f} test_rank_corr={test_rank_corr:.4f}"
+                f"[{run_name}] epoch={epoch + 1}/{opts['num_epochs']} test_loss={test_loss:.4f} test_rank_corr={test_rank_corr:.4f}"
             )

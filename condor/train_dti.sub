@@ -13,6 +13,7 @@ request_memory = 64G
 requirements = UidDomain == "cs.uni-saarland.de"
 +WantGPUHomeMounted = true
 queue script, weight from (
+    scripts/train_pair_landrum_large.py, -1
     scripts/train_pair_landrum.py, -1
     scripts/train_pair_kinodata.py, -1
 )

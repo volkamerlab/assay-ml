@@ -57,7 +57,7 @@ def main():
             logger,
             "pairs",
             index,
-            num_epochs=200,
+            num_epochs=100,
         )
 
     logger.info("pipeline completed")
