@@ -23,16 +23,16 @@ def main():
     inter_assay_weight = float(sys.argv[1])
     if inter_assay_weight < 0:
         inter_assay_weight = None
-    run_name = f"landrum_avs_lam{inter_assay_weight}_" + uuid.uuid4().hex[:3]
+    run_name = f"llandrum_avs_lam{inter_assay_weight}_" + uuid.uuid4().hex[:3]
     init_logging(run_name)
     logger = logging.getLogger("main")
     batch_size = 512
 
     write_header(run_name)
-    data_dir = DATA / "processed" / "landrum"
+    data_dir = DATA / "processed" / "landrum_large"
     tgt_name = "scaled_ic50"
 
-    data = load_landrum()
+    data = load_landrum(DATA / "raw" / "landrum_large.csv")
     for index, train_data, val_data, test_data in prepare_datasets(
         data, data_dir, tgt_name, 5, inter_assay_weight, False
     ):

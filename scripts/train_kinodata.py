@@ -10,6 +10,7 @@ from dti.data import (
     ActivityDataset,
     prepare_datasets,
     load_landrum,
+    load_kinodata,
 )
 from dti.utils import (
     DATA,
@@ -23,20 +24,20 @@ def main():
     inter_assay_weight = float(sys.argv[1])
     if inter_assay_weight < 0:
         inter_assay_weight = None
-    run_name = f"landrum_avs_lam{inter_assay_weight}_" + uuid.uuid4().hex[:3]
+    run_name = f"kinodata_avs_lam{inter_assay_weight}_" + uuid.uuid4().hex[:3]
     init_logging(run_name)
     logger = logging.getLogger("main")
     batch_size = 512
 
     write_header(run_name)
-    data_dir = DATA / "processed" / "landrum"
+    data_dir = DATA / "processed" / "kinodata"
     tgt_name = "scaled_ic50"
 
-    data = load_landrum()
+    data = load_kinodata()
     for index, train_data, val_data, test_data in prepare_datasets(
         data, data_dir, tgt_name, 5, inter_assay_weight, False
     ):
-        info_cols = ["activity_id", "assay_id"]
+        info_cols = ["activities.activity_id", "assay_id"]
         val_dataset = ActivityDataset(val_data, target=tgt_name, info_cols=info_cols)
         test_dataset = ActivityDataset(test_data, target=tgt_name, info_cols=info_cols)
         scaler = StandardScaler()
