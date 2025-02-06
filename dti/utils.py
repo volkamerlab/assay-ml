@@ -1,14 +1,12 @@
 from typing import Union
 import time
 import logging
-from pathlib import Path
 
 import torch
 
-from .model import CombinedModel
 from .training import model_epoch
 
-from .constants import *
+from .constants import OUTPUT
 
 device = lambda: "cuda" if torch.cuda.is_available() else "cpu"
 

@@ -17,7 +17,9 @@ device = lambda: "cuda" if torch.cuda.is_available() else "cpu"
 
 def rank_corr_pairs(prediction_data: pd.DataFrame) -> float:
     # misclassification rate
-    return (np.sign(prediction_data["prediction"]) == np.sign(prediction_data["target"])).mean() * 2 - 1
+    return (
+        np.sign(prediction_data["prediction"]) == np.sign(prediction_data["target"])
+    ).mean() * 2 - 1
 
 
 def rank_corr(prediction_data: pd.DataFrame) -> float:

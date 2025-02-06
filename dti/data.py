@@ -234,7 +234,7 @@ class PairDataset(ActivityDataset):
             self.protein_features[i],
             torch.cat([self.ligand_features[i], self.ligand_features[j]]),
             self.labels[i] - self.labels[j],
-            torch.cat([self.info[i], self.info[j]])
+            torch.cat([self.info[i], self.info[j]]),
         )
 
 

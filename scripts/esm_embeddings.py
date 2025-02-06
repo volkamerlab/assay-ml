@@ -35,7 +35,6 @@ def extract_embeddings(
 
     with torch.no_grad():
         for batch_idx, (labels, strs, toks) in enumerate(data_loader):
-
             print(f"Processing batch {batch_idx + 1} of {len(batches)}")
 
             if torch.cuda.is_available():
@@ -43,7 +42,6 @@ def extract_embeddings(
 
             out = model(toks, repr_layers=repr_layers, return_contacts=False)
 
-            logits = out["logits"].to(device="cpu")
             representations = {
                 layer: t.to(device="cpu") for layer, t in out["representations"].items()
             }

@@ -9,7 +9,6 @@ from dti.model import CombinedModel
 from dti.data import (
     ActivityDataset,
     prepare_datasets,
-    load_landrum,
     load_kinodata,
 )
 from dti.utils import (

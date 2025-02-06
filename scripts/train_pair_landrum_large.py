@@ -1,6 +1,5 @@
 import logging
 import uuid
-import sys
 
 from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
@@ -20,7 +19,7 @@ from dti.data import (
 
 
 def main():
-    run_name = f"llandrum_pairs_avs_" + uuid.uuid4().hex[:3]
+    run_name = "llandrum_pairs_avs_" + uuid.uuid4().hex[:3]
     init_logging(run_name)
     logger = logging.getLogger("main")
     batch_size = 512
