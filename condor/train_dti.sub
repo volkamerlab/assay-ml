@@ -1,7 +1,7 @@
 universe = docker
 docker_image = gjoschka/kinodata3d-b0:2.3.0-cuda12.1
 executable = run_training.sh
-arguments = $(script) $(weight)
+arguments = $(script) $(seed) $(dataset) $(method)
 output = logs/train_dti.$(ClusterId).$(ProcId).out
 error = logs/train_dti.$(ClusterId).$(ProcId).err
 log = logs/train_dti.$(ClusterId).$(ProcId).log
@@ -12,8 +12,6 @@ request_CPUs = 16
 request_memory = 64G
 requirements = UidDomain == "cs.uni-saarland.de"
 +WantGPUHomeMounted = true
-queue script, weight from (
-    scripts/train_pair_landrum_large.py, -1
-    scripts/train_pair_landrum.py, -1
-    scripts/train_pair_kinodata.py, -1
+queue script, seed, dataset, method from (
+    scripts/train.py, 0, kinodata, pair
 )
