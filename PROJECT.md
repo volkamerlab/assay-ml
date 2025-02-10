@@ -40,7 +40,7 @@ way.
 We can perform an experiment to figure out, how much information is
 contained in assay assignments alone:
 
-1.  Split the data via \[scaffold split, UMAP split, ....\]
+1.  Split the data via {scaffold split, UMAP split, ....}
 2.  Use the training set assay mean as a predictor
 3.  Evaluate test set performance
 
@@ -145,6 +145,21 @@ change to the absolute prediction model.
 
 *Hypothesis*: **Rank-based models can achieve a better performance in
 ordering compounds in unseen assays.**
+
+### Further points
+
+### Censored data and classification / ranking models
+
+Sometimes data is censored. Consider IC50 data, as an example: Often
+there is a maximal measured concentration. If there was no inhibition \>
+50% at that maximal concentration, no IC50 can be reasonably determined.
+Such information cannot really be handled in a principled way when doing
+absolute IC50 prediction. If we consider the model as a better/worse
+classification, we can still incorporate the available negative data.
+
+If we do not want to go for classification alone, we can also build a
+multi-objective model with a classification and a delta-regression
+target.
 
 ## Conclusions
 
