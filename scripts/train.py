@@ -108,6 +108,7 @@ def main():
             logger,
             method,
             index,
+            num_epochs=num_epochs,
             cosine_agg=True,
         )
 
