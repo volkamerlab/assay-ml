@@ -6,6 +6,45 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+class MolecularModel(nn.Module):
+    def __init__(self, molecule_input_size, embedding_size):
+        self.molecule_input_size = molecule_input_size
+        self.stack = nn.Sequential(
+            nn.Linear(molecule_input_size, embedding_size),
+            nn.SiLU(),
+            nn.Linear(embedding_size, embedding_size),
+            nn.SiLU(),
+            nn.Linear(embedding_size, embedding_size),
+            nn.SiLU(),
+            nn.Linear(embedding_size, embedding_size),
+            nn.SiLU(),
+            nn.Dropout(0.05),
+            nn.Linear(embedding_size, embedding_size),
+        )
+        self.readout = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(embedding_size, embedding_size),
+            nn.SiLU(),
+            nn.Linear(embedding_size, 1),
+        )
+
+    def forward(self, x):
+        x = self.stack(x)
+        return self.readout(x)
+
+
+class MolecularPairModel(MolecularModel):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def forward(self, x):
+        molecule_a = x[:, : self.molecule_input_size]
+        molecule_b = x[:, self.molecule_input_size :]
+        embedding_a = self.stack(molecule_a)
+        embedding_b = self.stack(molecule_b)
+        return self.readout(embedding_a - embedding_b)
+
+
 class CombinedModel(nn.Module):
     def __init__(
         self, protein_input_size, ligand_input_size, embedding_size, cosine_agg=False

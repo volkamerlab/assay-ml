@@ -17,7 +17,8 @@ from torch.utils.data import Dataset
 from esm import FastaBatchedDataset, pretrained
 from sklearn.preprocessing import StandardScaler
 
-from .utils import DATA, SMILES, ACT, TID, SEQUENCE, ASSAY, device
+from .constants import DATA, SMILES, ACT, TID, SEQUENCE, ASSAY
+from .utils import device
 from .hodge_ranking import parallel_hodge_rank
 
 logger = logging.getLogger(__name__)

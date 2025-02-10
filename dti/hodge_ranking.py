@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
-from .utils import DATA, ACT, SMILES, TID, ASSAY
+from .constants import DATA, ACT, SMILES, TID, ASSAY
 
 import logging
 
