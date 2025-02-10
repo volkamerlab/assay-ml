@@ -72,8 +72,8 @@ def main():
     for index, train_data, val_data, test_data in prepare_datasets(
         data, data_dir, tgt_name, 5, None, False
     ):
-        val_dataset = dataset_cls(val_data, target=tgt_name, info_cols=info_cols)
-        test_dataset = dataset_cls(test_data, target=tgt_name, info_cols=info_cols)
+        val_dataset = PairDataset(val_data, target=tgt_name, info_cols=info_cols)
+        test_dataset = PairDataset(test_data, target=tgt_name, info_cols=info_cols)
         scaler = StandardScaler()
         train_data[tgt_name] = scaler.fit_transform(
             train_data[tgt_name].values.reshape(-1, 1)

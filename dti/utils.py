@@ -6,7 +6,7 @@ import torch
 import numpy as np
 import random
 
-from .training import model_epoch
+from .training import model_epoch, rank_corr_pairs
 
 from .constants import OUTPUT
 
@@ -86,6 +86,7 @@ def train_and_evaluate_model(
             embedding_size=256,
             num_epochs=500,
             cosine_agg=False,
+            rank_corr_fn=rank_corr_pairs,
         )
         | kwargs
     )
@@ -100,8 +101,12 @@ def train_and_evaluate_model(
 
     best_corr = 0
     for epoch in range(opts["num_epochs"]):
-        train_loss, train_rank_corr = model_epoch(model, train_loader, optimizer)
-        val_loss, val_rank_corr = model_epoch(model, val_loader)
+        train_loss, train_rank_corr = model_epoch(
+            model, train_loader, optimizer, rank_corr_fn=rank_corr_pairs
+        )
+        val_loss, val_rank_corr = model_epoch(
+            model, val_loader, rank_corr_fn=rank_corr_pairs
+        )
 
         logger.info(
             " ".join(
