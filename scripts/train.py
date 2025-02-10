@@ -6,6 +6,7 @@ import random
 import numpy as np
 from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
+import torch
 
 from dti.model import PairModel, CombinedModel
 from dti.data import (
