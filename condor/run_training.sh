@@ -14,4 +14,5 @@ source venv/bin/activate
 #pip install -r requirements.txt
 #pip install -e .
 
-python $1 $2 $3
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
+python $1 $2 $3 $4

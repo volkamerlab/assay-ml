@@ -11,8 +11,10 @@ import torch
 from dti.model import PairModel, CombinedModel
 from dti.data import (
     ActivityDataset,
+    PairDataset,
     prepare_datasets,
     load_landrum,
+    load_kinodata,
 )
 from dti.utils import (
     init_logging,
@@ -57,7 +59,7 @@ def main():
             print(f"Unknown method: {method}", file=sys.stderr)
             sys.exit(1)
 
-    run_name = f"{dataset}_{method}" + uuid.uuid4().hex[:4]
+    run_name = f"{dataset}_{method}_" + uuid.uuid4().hex[:4]
     init_logging(run_name)
     logger = logging.getLogger(run_name)
 
