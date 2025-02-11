@@ -182,8 +182,8 @@ class PairModel(nn.Module):
 
         # ensure equivariance wrt. to tuple permutation
         combined_embedding_a = combined_embedding_a - combined_embedding_b
-        output_a = self.combined_mlp(combined_embedding)
+        output_a = self.combined_mlp(combined_embedding_a)
         combined_embedding_b = combined_embedding_b - combined_embedding_a
-        output_b = self.combined_mlp(combined_embedding)
+        output_b = self.combined_mlp(combined_embedding_b)
 
         return output_a - output_b
