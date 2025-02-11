@@ -4,7 +4,7 @@ import sys
 import random
 
 import numpy as np
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from sklearn.preprocessing import StandardScaler
 import torch
 
@@ -90,12 +90,15 @@ def main():
         g = torch.Generator()
         g.manual_seed(seed + index)
 
+        sampler = WeightedRandomSampler(train_dataset.weights, len(train_dataset))
+
         train_loader = DataLoader(
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
             worker_init_fn=seed_worker,
             generator=g,
+            sampler=sampler,
         )
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)

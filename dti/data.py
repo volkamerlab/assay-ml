@@ -198,6 +198,10 @@ class ActivityDataset(Dataset):
             [load_esm(uniprot_id) for uniprot_id in data[TID]]
         )
 
+    @property
+    def weights(self):
+        return torch.ones(len(self.labels))
+
     def __len__(self):
         return len(self.labels)
 
@@ -217,14 +221,24 @@ class PairDataset(ActivityDataset):
         **kwargs,
     ):
         super().__init__(kinodata, **kwargs)
-        # for each assay id
-        #   generate idx pairs for all compounds
         self.pairs = list()
+        weights = list()
         for assay, group in self.kinodata.groupby(ASSAY):
-            self.pairs.extend(it.product(group.index, group.index))
+            for i, ix0 in enumerate(group.index):
+                for j, ix1 in enumerate(group.index):
+                    if j > i:
+                        break
+                self.pairs.append(ix0, ix1)
+                # size of group * num of pairs in group
+                weights.append([1 / (len(group) + 1)])
+        self.weights = torch.tensor(weights, dtype=torch.double)
         self.info_cols = [col + "_a" for col in self.info_cols] + [
             col + "_b" for col in self.info_cols
         ]
+
+    @property
+    def weights(self):
+        return self.weights
 
     def __len__(self):
         return len(self.pairs)
