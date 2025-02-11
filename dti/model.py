@@ -42,7 +42,10 @@ class MolecularPairModel(MolecularModel):
         molecule_b = x[:, self.molecule_input_size :]
         embedding_a = self.stack(molecule_a)
         embedding_b = self.stack(molecule_b)
-        return self.readout(embedding_a - embedding_b)
+        # ensure equivariance wrt. to tuple permutation
+        delta_emb_a = self.readout(embedding_a - embedding_b)
+        delta_emb_b = self.readout(embedding_b - embedding_a)
+        return delta_emb_a - delta_emb_b
 
 
 class CombinedModel(nn.Module):
@@ -104,8 +107,12 @@ class CombinedModel(nn.Module):
                 combined_embedding_a = protein_embedding * ligand_embedding_a
                 combined_embedding_b = protein_embedding * ligand_embedding_b
             else:
-                combined_embedding_a = torch.cat([protein_embedding, ligand_embedding_a], dim=1)
-                combined_embedding_b = torch.cat([protein_embedding, ligand_embedding_b], dim=1)
+                combined_embedding_a = torch.cat(
+                    [protein_embedding, ligand_embedding_a], dim=1
+                )
+                combined_embedding_b = torch.cat(
+                    [protein_embedding, ligand_embedding_b], dim=1
+                )
             pred_a = self.combined_mlp(combined_embedding_a)
             pred_b = self.combined_mlp(combined_embedding_b)
             return pred_a - pred_b
@@ -173,7 +180,10 @@ class PairModel(nn.Module):
         combined_embedding_a = protein_embedding * ligand_embedding_a
         combined_embedding_b = protein_embedding * ligand_embedding_b
 
-        combined_embedding = combined_embedding_a - combined_embedding_b
-        output = self.combined_mlp(combined_embedding)
+        # ensure equivariance wrt. to tuple permutation
+        combined_embedding_a = combined_embedding_a - combined_embedding_b
+        output_a = self.combined_mlp(combined_embedding)
+        combined_embedding_b = combined_embedding_b - combined_embedding_a
+        output_b = self.combined_mlp(combined_embedding)
 
-        return output
+        return output_a - output_b
