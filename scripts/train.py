@@ -82,22 +82,22 @@ def main():
         train_dataset = dataset_cls(train_data, target=tgt_name, info_cols=info_cols)
 
         # https://pytorch.org/docs/stable/notes/randomness.html
-        def seed_worker(worker_id):
-            worker_seed = torch.initial_seed() % 2**32
-            np.random.seed(worker_seed)
-            random.seed(worker_seed)
+        # def seed_worker(worker_id):
+            # worker_seed = torch.initial_seed() % 2**32
+            # np.random.seed(worker_seed)
+            # random.seed(worker_seed)
 
-        g = torch.Generator()
-        g.manual_seed(seed + index)
+        # g = torch.Generator()
+        # g.manual_seed(seed + index)
 
         sampler = WeightedRandomSampler(train_dataset.weights, len(train_dataset))
 
         train_loader = DataLoader(
             train_dataset,
             batch_size=batch_size,
-            shuffle=True,
-            worker_init_fn=seed_worker,
-            generator=g,
+            # shuffle=True,
+            # worker_init_fn=seed_worker,
+            # generator=g,
             sampler=sampler,
         )
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
