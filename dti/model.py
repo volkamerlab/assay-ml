@@ -51,6 +51,7 @@ class CombinedModel(nn.Module):
     ):
         super(CombinedModel, self).__init__()
 
+        self.ligand_input_size = ligand_input_size
         self.cosine_agg = cosine_agg
 
         self.protein_mlp = nn.Sequential(
@@ -67,7 +68,7 @@ class CombinedModel(nn.Module):
         )
 
         self.ligand_mlp = nn.Sequential(
-            nn.Linear(ligand_input_size, 512),
+            nn.Linear(self.ligand_input_size, 512),
             nn.SiLU(),
             nn.Linear(512, 512),
             nn.SiLU(),
@@ -92,6 +93,22 @@ class CombinedModel(nn.Module):
 
     def forward(self, protein, ligand):
         protein_embedding = self.protein_mlp(protein)
+
+        if ligand.shape[1] == self.ligand_input_size * 2:
+            ligand_a = ligand[:, : self.ligand_input_size]
+            ligand_b = ligand[:, self.ligand_input_size :]
+            ligand_embedding_a = self.ligand_mlp(ligand_a)
+            ligand_embedding_b = self.ligand_mlp(ligand_b)
+
+            if self.cosine_agg:
+                combined_embedding_a = protein_embedding * ligand_embedding_a
+                combined_embedding_b = protein_embedding * ligand_embedding_b
+            else:
+                combined_embedding_a = torch.cat([protein_embedding, ligand_embedding_a], dim=1)
+                combined_embedding_b = torch.cat([protein_embedding, ligand_embedding_b], dim=1)
+            pred_a = self.combined_mlp(combined_embedding_a)
+            pred_b = self.combined_mlp(combined_embedding_b)
+            return pred_a - pred_b
 
         ligand_embedding = self.ligand_mlp(ligand)
 

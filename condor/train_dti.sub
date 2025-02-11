@@ -14,4 +14,9 @@ requirements = UidDomain == "cs.uni-saarland.de"
 +WantGPUHomeMounted = true
 queue script, seed, dataset, method from (
     scripts/train.py, 0, kinodata, ic50
+    scripts/train.py, 0, kinodata, pair
+    scripts/train.py, 0, landrum, ic50
+    scripts/train.py, 0, landrum, pair
+    scripts/train.py, 0, landrum_large, ic50
+    scripts/train.py, 0, landrum_large, pair
 )

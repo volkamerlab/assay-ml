@@ -97,7 +97,7 @@ def train_and_evaluate_model(
         opts["embedding_size"],
         cosine_agg=opts["cosine_agg"],
     ).to(device())
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=5e-5)
 
     best_corr = 0
     for epoch in range(opts["num_epochs"]):

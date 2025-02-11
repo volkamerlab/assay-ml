@@ -62,6 +62,7 @@ def main():
     run_name = f"{dataset}_{method}_" + uuid.uuid4().hex[:4]
     init_logging(run_name)
     logger = logging.getLogger(run_name)
+    logger.info(f"seed={seed} method={method} dataset={dataset}")
 
     batch_size = 512
 
