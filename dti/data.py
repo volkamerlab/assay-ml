@@ -3,7 +3,6 @@ import functools
 import logging
 from pathlib import Path
 from multiprocessing import Pool
-import itertools as it
 
 import tqdm
 import pandas as pd
@@ -224,17 +223,13 @@ class PairDataset(ActivityDataset):
         self.pairs = list()
         weights = list()
         for assay, group in self.kinodata.groupby(ASSAY):
-            for i, ix0 in enumerate(group.index):
-                for j, ix1 in enumerate(group.index):
-                    if j > i:
-                        break
-                self.pairs.append(ix0, ix1)
-                # size of group * num of pairs in group
-                weights.append([1 / (len(group) + 1)])
+            self.pairs.extend(it.product(group.index, group.index))
+            weights.append([1 / len(group)] * len(group) ** 2)
         self.weights = torch.tensor(weights, dtype=torch.double)
         self.info_cols = [col + "_a" for col in self.info_cols] + [
             col + "_b" for col in self.info_cols
         ]
+        assert len(self.weights) == len(self.pairs)
 
     @property
     def weights(self):
