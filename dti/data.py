@@ -177,7 +177,9 @@ class ActivityDataset(Dataset):
         self.ligand_features = torch.tensor(
             np.stack([fp for fp in fps if fp is not None]), dtype=torch.float32
         )
-        self.protein_features = self._compute_protein_features(self.kinodata, model_name)
+        self.protein_features = self._compute_protein_features(
+            self.kinodata, model_name
+        )
         self.labels = torch.tensor(self.kinodata[target].values, dtype=torch.float32)
         self.info_cols = info_cols
         self.info = torch.tensor(self.kinodata[info_cols].values)
@@ -220,7 +222,9 @@ class ActivityDataset(Dataset):
 
     def __getitem__(self, idx):
         return (
-            torch.ones(1) if self.protein_features is None else self.protein_features[idx],
+            torch.ones(1)
+            if self.protein_features is None
+            else self.protein_features[idx],
             self.ligand_features[idx],
             self.labels[idx],
             self.info[idx],
@@ -259,7 +263,9 @@ class PairDataset(ActivityDataset):
     def __getitem__(self, idx):
         i, j = self.pairs[idx]
         return (
-            torch.ones(1) if self.protein_features is None else self.protein_features[i],
+            torch.ones(1)
+            if self.protein_features is None
+            else self.protein_features[i],
             torch.cat([self.ligand_features[i], self.ligand_features[j]]),
             self.labels[i] - self.labels[j],
             torch.cat([self.info[i], self.info[j]]),
