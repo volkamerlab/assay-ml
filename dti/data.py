@@ -124,10 +124,9 @@ def load_landrum(landrum_path: Path = DATA / "raw" / "landrum.csv") -> pd.DataFr
 def load_atcc(path: Path = DATA / "raw" / "atcc.csv") -> pd.DataFrame:
     logger.info(f"loading NCI ATCC data from {path}")
     data = pd.read_csv(path, index_col=0)
-    data = data[~data["CENSORED"]]
     return data.rename(
         columns={
-            "AVERAGE": ACT,
+            "IC50": ACT,
             "SMILES": SMILES,
             "EXPID": ASSAY,
         }
@@ -178,10 +177,10 @@ class ActivityDataset(Dataset):
         self.ligand_features = torch.tensor(
             np.stack([fp for fp in fps if fp is not None]), dtype=torch.float32
         )
-        self.protein_features = self._compute_protein_features(kinodata, model_name)
-        self.labels = torch.tensor(kinodata[target].values, dtype=torch.float32)
+        self.protein_features = self._compute_protein_features(self.kinodata, model_name)
+        self.labels = torch.tensor(self.kinodata[target].values, dtype=torch.float32)
         self.info_cols = info_cols
-        self.info = torch.tensor(kinodata[info_cols].values)
+        self.info = torch.tensor(self.kinodata[info_cols].values)
 
     def _compute_protein_features(self, data: pd.DataFrame, model_name: str):
         if TID not in data.columns:
@@ -221,7 +220,7 @@ class ActivityDataset(Dataset):
 
     def __getitem__(self, idx):
         return (
-            None if self.protein_features is None else self.protein_features[idx],
+            torch.ones(1) if self.protein_features is None else self.protein_features[idx],
             self.ligand_features[idx],
             self.labels[idx],
             self.info[idx],
@@ -260,7 +259,7 @@ class PairDataset(ActivityDataset):
     def __getitem__(self, idx):
         i, j = self.pairs[idx]
         return (
-            self.protein_features[i],
+            torch.ones(1) if self.protein_features is None else self.protein_features[i],
             torch.cat([self.ligand_features[i], self.ligand_features[j]]),
             self.labels[i] - self.labels[j],
             torch.cat([self.info[i], self.info[j]]),

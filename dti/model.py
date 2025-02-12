@@ -7,12 +7,12 @@ logger = logging.getLogger(__name__)
 
 
 class MolecularModel(nn.Module):
-    def __init__(self, molecule_input_size, embedding_size):
+    def __init__(self, ligand_input_size, embedding_size, **kwargs):
         super().__init__()
 
-        self.molecule_input_size = molecule_input_size
+        self.molecule_input_size = ligand_input_size
         self.stack = nn.Sequential(
-            nn.Linear(molecule_input_size, embedding_size),
+            nn.Linear(self.molecule_input_size, embedding_size),
             nn.SiLU(),
             nn.Linear(embedding_size, embedding_size),
             nn.SiLU(),
@@ -33,12 +33,12 @@ class MolecularModel(nn.Module):
             nn.Linear(scaled_hidden_dim, 1),
         )
 
-    def forward(self, _, molecule):
+    def forward(self, _protein, molecule):
         # the  first argument (protein embeddings) is ignored
-        if molecule.shape[1] == self.molecule_input_size * 2:
+        if molecule.shape[1] == self.molecule_input_size:
             molecule = self.stack(molecule)
             return self.readout(molecule)
-        elif molecule.shape[1] == self.molecule_input_size:
+        elif molecule.shape[1] == self.molecule_input_size * 2:
             embedding_a = self.stack(molecule[:, : self.molecule_input_size])
             embedding_b = self.stack(molecule[:, self.molecule_input_size :])
             # ensure equivariance wrt. to tuple permutation

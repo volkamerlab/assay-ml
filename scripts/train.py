@@ -48,7 +48,7 @@ def main():
         case "atcc":
             model_cls = MolecularModel
             data = load_atcc()
-            info_cols = ["EXPID", "NSC"]
+            info_cols = ["NSC"]
         case _:
             print(f"Unknown dataset: {dataset}", file=sys.stderr)
             sys.exit(1)

@@ -92,9 +92,9 @@ def train_and_evaluate_model(
     )
 
     model = model_cls(
-        opts["protein_dim"],
-        opts["ligand_dim"],
-        opts["embedding_size"],
+        ligand_input_size=opts["ligand_dim"],
+        embedding_size=opts["embedding_size"],
+        protein_input_size=opts["protein_dim"],
         cosine_agg=opts["cosine_agg"],
     ).to(device())
     optimizer = torch.optim.Adam(model.parameters(), lr=5e-5)
