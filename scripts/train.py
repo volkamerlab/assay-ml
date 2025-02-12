@@ -8,13 +8,14 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from sklearn.preprocessing import StandardScaler
 import torch
 
-from dti.model import PairModel, CombinedModel
+from dti.model import CombinedModel, MolecularModel
 from dti.data import (
     ActivityDataset,
     PairDataset,
     prepare_datasets,
     load_landrum,
     load_kinodata,
+    load_atcc,
 )
 from dti.utils import (
     init_logging,
@@ -33,14 +34,21 @@ def main():
     dataset = sys.argv[2]
     match dataset:
         case "kinodata":
+            model_cls = CombinedModel
             data = load_kinodata()
             info_cols = ["activities.activity_id", "assay_id"]
         case "landrum":
+            model_cls = CombinedModel
             data = load_landrum()
             info_cols = ["activity_id", "assay_id"]
         case "landrum_large":
+            model_cls = CombinedModel
             data = load_landrum(DATA / "raw" / "landrum_large.csv")
             info_cols = ["activity_id", "assay_id"]
+        case "atcc":
+            model_cls = MolecularModel
+            data = load_atcc()
+            info_cols = ["EXPID", "NSC"]
         case _:
             print(f"Unknown dataset: {dataset}", file=sys.stderr)
             sys.exit(1)
@@ -48,11 +56,9 @@ def main():
     method = sys.argv[3]
     match method:
         case "pair":
-            model_cls = PairModel
             dataset_cls = PairDataset
             num_epochs = 100
         case "ic50":
-            model_cls = CombinedModel
             dataset_cls = ActivityDataset
             num_epochs = 500
         case _:
@@ -82,22 +88,21 @@ def main():
         train_dataset = dataset_cls(train_data, target=tgt_name, info_cols=info_cols)
 
         # https://pytorch.org/docs/stable/notes/randomness.html
-        # def seed_worker(worker_id):
-            # worker_seed = torch.initial_seed() % 2**32
-            # np.random.seed(worker_seed)
-            # random.seed(worker_seed)
+        def seed_worker(worker_id):
+            worker_seed = torch.initial_seed() % 2**32
+            np.random.seed(worker_seed)
+            random.seed(worker_seed)
 
-        # g = torch.Generator()
-        # g.manual_seed(seed + index)
+        g = torch.Generator()
+        g.manual_seed(seed + index)
 
-        sampler = WeightedRandomSampler(train_dataset.weights, len(train_dataset))
+        sampler = WeightedRandomSampler(
+            train_dataset.weights, len(train_dataset), generator=g
+        )
 
         train_loader = DataLoader(
             train_dataset,
             batch_size=batch_size,
-            # shuffle=True,
-            # worker_init_fn=seed_worker,
-            # generator=g,
             sampler=sampler,
         )
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
