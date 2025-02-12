@@ -121,6 +121,19 @@ def load_landrum(landrum_path: Path = DATA / "raw" / "landrum.csv") -> pd.DataFr
     )
 
 
+def load_atcc(path: Path = DATA / "raw" / "atcc.csv") -> pd.DataFrame:
+    logger.info(f"loading NCI ATCC data from {path}")
+    data = pd.read_csv(path, index_col=0)
+    data = data[~data["CENSORED"]]
+    return data.rename(
+        columns={
+            "AVERAGE": ACT,
+            "SMILES": SMILES,
+            "EXPID": ASSAY,
+        }
+    )
+
+
 def split_kfold_by(
     kinodata: pd.DataFrame, k: int, column: str, seed: int = 1
 ) -> np.ndarray:
@@ -165,12 +178,16 @@ class ActivityDataset(Dataset):
         self.ligand_features = torch.tensor(
             np.stack([fp for fp in fps if fp is not None]), dtype=torch.float32
         )
-        self._compute_protein_features(kinodata, model_name)
+        self.protein_features = self._compute_protein_features(kinodata, model_name)
         self.labels = torch.tensor(kinodata[target].values, dtype=torch.float32)
         self.info_cols = info_cols
         self.info = torch.tensor(kinodata[info_cols].values)
 
     def _compute_protein_features(self, data: pd.DataFrame, model_name: str):
+        if TID not in data.columns:
+            logger.info("no protein target in dataset")
+            return None
+
         logger.info(f"computing protein features: {model_name}")
         done = []
         fasta_file = DATA / "data.fasta"
@@ -193,9 +210,7 @@ class ActivityDataset(Dataset):
                 "representation"
             ][33]
 
-        self.protein_features = torch.stack(
-            [load_esm(uniprot_id) for uniprot_id in data[TID]]
-        )
+        return torch.stack([load_esm(uniprot_id) for uniprot_id in data[TID]])
 
     @property
     def weights(self):
@@ -206,7 +221,7 @@ class ActivityDataset(Dataset):
 
     def __getitem__(self, idx):
         return (
-            self.protein_features[idx],
+            None if self.protein_features is None else self.protein_features[idx],
             self.ligand_features[idx],
             self.labels[idx],
             self.info[idx],
