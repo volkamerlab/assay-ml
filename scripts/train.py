@@ -31,6 +31,20 @@ def main():
     seed = int(sys.argv[1])
     set_random_seeds(seed)
 
+    batch_size = 1024
+    method = sys.argv[3]
+    match method:
+        case "pair":
+            dataset_cls = PairDataset
+            num_epochs = 100
+        case "ic50":
+            dataset_cls = ActivityDataset
+            num_epochs = 500
+            batch_size *= 2
+        case _:
+            print(f"Unknown method: {method}", file=sys.stderr)
+            sys.exit(1)
+
     dataset = sys.argv[2]
     match dataset:
         case "kinodata":
@@ -48,21 +62,10 @@ def main():
         case "atcc":
             model_cls = MolecularModel
             data = load_atcc()
+            num_epochs *= 4
             info_cols = ["NSC"]
         case _:
             print(f"Unknown dataset: {dataset}", file=sys.stderr)
-            sys.exit(1)
-
-    method = sys.argv[3]
-    match method:
-        case "pair":
-            dataset_cls = PairDataset
-            num_epochs = 100
-        case "ic50":
-            dataset_cls = ActivityDataset
-            num_epochs = 500
-        case _:
-            print(f"Unknown method: {method}", file=sys.stderr)
             sys.exit(1)
 
     run_name = f"{dataset}_{method}_" + uuid.uuid4().hex[:4]
@@ -70,7 +73,6 @@ def main():
     logger = logging.getLogger(run_name)
     logger.info(f"seed={seed} method={method} dataset={dataset}")
 
-    batch_size = 512
 
     write_header(run_name)
     data_dir = DATA / "processed" / dataset
