@@ -42,9 +42,9 @@ class MolecularModel(nn.Module):
             embedding_a = self.stack(molecule[:, : self.molecule_input_size])
             embedding_b = self.stack(molecule[:, self.molecule_input_size :])
             # ensure equivariance wrt. to tuple permutation
-            delta_a = self.readout(embedding_a - embedding_b)
-            delta_b = self.readout(embedding_b - embedding_a)
-            return delta_a - delta_b
+            delta_ab = self.readout(embedding_a - embedding_b)
+            delta_ba = self.readout(embedding_b - embedding_a)
+            return delta_ab - delta_ba
         else:
             raise ValueError(f"Unexpected molecule shape {molecule.shape}")
 
@@ -116,8 +116,8 @@ class CombinedModel(nn.Module):
             else:
                 combined_emb_a = torch.cat([protein_emb, ligand_emb_a], dim=1)
                 combined_emb_b = torch.cat([protein_emb, ligand_emb_b], dim=1)
-            pred_a = self.combined_mlp(combined_emb_a)
-            pred_b = self.combined_mlp(combined_emb_b)
+            pred_ab = self.combined_mlp(combined_emb_a - combined_emb_b)
+            pred_ba = self.combined_mlp(combined_emb_b - combined_emb_a)
             return pred_a - pred_b
         elif ligand.shape[1] == self.ligand_input_size:
             ligand_emb = self.ligand_mlp(ligand)
