@@ -39,7 +39,6 @@ def main():
         case "ic50":
             dataset_cls = ActivityDataset
             num_epochs = 500
-            batch_size *= 2
         case _:
             print(f"Unknown method: {method}", file=sys.stderr)
             sys.exit(1)
