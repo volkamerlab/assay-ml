@@ -118,7 +118,7 @@ class CombinedModel(nn.Module):
                 combined_emb_b = torch.cat([protein_emb, ligand_emb_b], dim=1)
             pred_ab = self.combined_mlp(combined_emb_a - combined_emb_b)
             pred_ba = self.combined_mlp(combined_emb_b - combined_emb_a)
-            return pred_a - pred_b
+            return pred_ab - pred_ba
         elif ligand.shape[1] == self.ligand_input_size:
             ligand_emb = self.ligand_mlp(ligand)
 
