@@ -6,13 +6,29 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+class IndependentFeatureMapping(nn.Module):
+    def __init__(self, input_dim, k, sigma=1.0):
+        super().__init__()
+        self.k = k
+        self.input_dim = input_dim
+        self.c = nn.Parameter(torch.randn(input_dim, k) * sigma)
+
+    def forward(self, x):
+        v = 2 * torch.pi * x.unsqueeze(-1) * self.c
+        sin_v = torch.sin(v)
+        cos_v = torch.cos(v)
+        return torch.cat([sin_v, cos_v], dim=-1).flatten()
+
+
 class MolecularModel(nn.Module):
-    def __init__(self, ligand_input_size, embedding_size, **kwargs):
+    def __init__(self, ligand_input_size, embedding_size, k=5, sigma=1.0):
         super().__init__()
 
-        self.molecule_input_size = ligand_input_size
+        self.ifm = IndependentFeatureMapping(ligand_input_size, k, sigma)
+        transformed_input_size = ligand_input_size * 2 * k
+
         self.stack = nn.Sequential(
-            nn.Linear(self.molecule_input_size, embedding_size),
+            nn.Linear(transformed_input_size, embedding_size),
             nn.SiLU(),
             nn.Linear(embedding_size, embedding_size),
             nn.SiLU(),
@@ -23,6 +39,7 @@ class MolecularModel(nn.Module):
             nn.Dropout(0.05),
             nn.Linear(embedding_size, embedding_size),
         )
+
         scaled_hidden_dim = embedding_size // 2
         self.readout = nn.Sequential(
             nn.SiLU(),
@@ -34,19 +51,9 @@ class MolecularModel(nn.Module):
         )
 
     def forward(self, _protein, molecule):
-        # the  first argument (protein embeddings) is ignored
-        if molecule.shape[1] == self.molecule_input_size:
-            molecule = self.stack(molecule)
-            return self.readout(molecule)
-        elif molecule.shape[1] == self.molecule_input_size * 2:
-            embedding_a = self.stack(molecule[:, : self.molecule_input_size])
-            embedding_b = self.stack(molecule[:, self.molecule_input_size :])
-            # ensure equivariance wrt. to tuple permutation
-            delta_ab = self.readout(embedding_a - embedding_b)
-            delta_ba = self.readout(embedding_b - embedding_a)
-            return delta_ab - delta_ba
-        else:
-            raise ValueError(f"Unexpected molecule shape {molecule.shape}")
+        molecule = self.ifm(molecule)
+        molecule = self.stack(molecule)
+        return self.readout(molecule)
 
 
 class CombinedModel(nn.Module):
@@ -56,11 +63,14 @@ class CombinedModel(nn.Module):
         ligand_input_size,
         embedding_size,
         hidden_layer_size=512,
+        k=5,
+        sigma=1.0,
         cosine_agg=False,
     ):
         super().__init__()
 
-        self.ligand_input_size = ligand_input_size
+        self.ifm = IndependentFeatureMapping(ligand_input_size, k, sigma)
+        transformed_input_size = ligand_input_size * 2 * k
         self.cosine_agg = cosine_agg
 
         self.protein_mlp = nn.Sequential(
@@ -77,7 +87,7 @@ class CombinedModel(nn.Module):
         )
 
         self.ligand_mlp = nn.Sequential(
-            nn.Linear(self.ligand_input_size, hidden_layer_size),
+            nn.Linear(transformed_input_size, hidden_layer_size),
             nn.SiLU(),
             nn.Linear(hidden_layer_size, hidden_layer_size),
             nn.SiLU(),
@@ -103,30 +113,12 @@ class CombinedModel(nn.Module):
 
     def forward(self, protein, ligand):
         protein_emb = self.protein_mlp(protein)
+        ligand = self.ifm(ligand)
+        ligand_emb = self.ligand_mlp(ligand)
 
-        if ligand.shape[1] == self.ligand_input_size * 2:
-            ligand_a = ligand[:, : self.ligand_input_size]
-            ligand_b = ligand[:, self.ligand_input_size :]
-            ligand_emb_a = self.ligand_mlp(ligand_a)
-            ligand_emb_b = self.ligand_mlp(ligand_b)
-
-            if self.cosine_agg:
-                combined_emb_a = protein_emb * ligand_emb_a
-                combined_emb_b = protein_emb * ligand_emb_b
-            else:
-                combined_emb_a = torch.cat([protein_emb, ligand_emb_a], dim=1)
-                combined_emb_b = torch.cat([protein_emb, ligand_emb_b], dim=1)
-            pred_ab = self.combined_mlp(combined_emb_a - combined_emb_b)
-            pred_ba = self.combined_mlp(combined_emb_b - combined_emb_a)
-            return pred_ab - pred_ba
-        elif ligand.shape[1] == self.ligand_input_size:
-            ligand_emb = self.ligand_mlp(ligand)
-
-            if self.cosine_agg:
-                combined_emb = protein_emb * ligand_emb
-            else:
-                combined_emb = torch.cat([protein_emb, ligand_emb], dim=1)
-            output = self.combined_mlp(combined_emb)
-            return output
+        if self.cosine_agg:
+            combined_emb = protein_emb * ligand_emb
         else:
-            raise ValueError(f"Unexpected ligand shape {ligand.shape}")
+            combined_emb = torch.cat([protein_emb, ligand_emb], dim=1)
+
+        return self.combined_mlp(combined_emb)
