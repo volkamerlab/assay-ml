@@ -138,9 +138,9 @@ def train_and_evaluate_model(
         protein_input_size=opts["protein_dim"],
         cosine_agg=opts["cosine_agg"],
     ).to(device())
-    optimizer: torch.optim.Optimizer = torch.optim.Adam(model.parameters(), lr=5e-5)
+    optimizer: torch.optim.Optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     scheduler = ReduceLROnPlateau(
-        optimizer, mode="max", factor=0.5, patience=5, verbose=True
+        optimizer, mode="max", factor=0.5, patience=50, verbose=True
     )
 
     best_corr: float = 0.0
@@ -158,6 +158,7 @@ def train_and_evaluate_model(
         )
 
         scheduler.step(val_rank_corr)
+        logger.debug(f"learning rate={scheduler.get_last_lr():.1e}")
 
         logger.info(
             " ".join(
