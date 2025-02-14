@@ -1,8 +1,12 @@
+from typing import Type, Any, Dict
+
 import tqdm
 import pandas as pd
 import numpy as np
 import torch
 from torch import nn
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.utils.data import DataLoader
 from scipy.stats import kendalltau
 from scipy.special import binom
 
@@ -100,3 +104,107 @@ def model_epoch(
     total_loss /= len(loader)
 
     return total_loss, mean_rank_corr
+
+
+def train_and_evaluate_model(
+    model_cls: Type[nn.Module],
+    run_name: str,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    test_loader: DataLoader,
+    logger: Any,
+    target_name: str,
+    index: int,
+    **kwargs: Dict[str, Any],
+) -> None:
+    """Train and evaluate the model with learning rate adjustment and early stopping."""
+    logger.info(f"training model for target: {target_name}")
+    opts: Dict[str, Any] = (
+        dict(
+            protein_dim=1280,
+            ligand_dim=2048,
+            embedding_size=512,
+            num_epochs=500,
+            patience=100,
+            cosine_agg=False,
+            rank_corr_fn=rank_corr_pairs,
+        )
+        | kwargs
+    )
+
+    model: nn.Module = model_cls(
+        ligand_input_size=opts["ligand_dim"],
+        embedding_size=opts["embedding_size"],
+        protein_input_size=opts["protein_dim"],
+        cosine_agg=opts["cosine_agg"],
+    ).to(device())
+    optimizer: torch.optim.Optimizer = torch.optim.Adam(model.parameters(), lr=5e-5)
+    scheduler = ReduceLROnPlateau(
+        optimizer, mode="max", factor=0.5, patience=5, verbose=True
+    )
+
+    best_corr: float = 0.0
+    epochs_without_improvement: int = 0
+    for epoch in range(opts["num_epochs"]):
+        train_loss: float
+        train_rank_corr: float
+        train_loss, train_rank_corr = model_epoch(
+            model, train_loader, optimizer, rank_corr_fn=rank_corr_pairs
+        )
+        val_loss: float
+        val_rank_corr: float
+        val_loss, val_rank_corr = model_epoch(
+            model, val_loader, rank_corr_fn=rank_corr_pairs
+        )
+
+        scheduler.step(val_rank_corr)
+
+        logger.info(
+            " ".join(
+                [
+                    f"[{run_name}]",
+                    f"epoch={epoch + 1}/{opts['num_epochs']}",
+                    f"train_loss={train_loss:.4f}",
+                    f"val_loss={val_loss:.4f}",
+                    f"train_rank_corr={train_rank_corr:.4f}",
+                    f"val_rank_corr={val_rank_corr:.4f}",
+                ]
+            )
+        )
+        write_info(
+            run_name,
+            [
+                target_name,
+                index,
+                epoch,
+                train_loss,
+                val_loss,
+                train_rank_corr,
+                val_rank_corr,
+            ],
+        )
+
+        if val_rank_corr > best_corr:
+            logger.info(f"[{run_name}] updating test set predictions")
+            best_corr = val_rank_corr
+            epochs_without_improvement = 0
+            torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")
+            test_loss: float
+            test_rank_corr: float
+            test_loss, test_rank_corr = model_epoch(
+                model,
+                test_loader,
+                prediction_file=OUTPUT
+                / run_name
+                / f"{target_name}_index{index}_preds.csv",
+            )
+            logger.info(
+                f"[{run_name}] epoch={epoch + 1}/{opts['num_epochs']} test_loss={test_loss:.4f} test_rank_corr={test_rank_corr:.4f}"
+            )
+        else:
+            epochs_without_improvement += 1
+            if epochs_without_improvement >= opts["patience"]:
+                logger.info(
+                    f"[{run_name}] early stopping triggered after {epoch + 1} epochs."
+                )
+                break

@@ -17,13 +17,12 @@ from dti.data import (
     load_kinodata,
     load_atcc,
 )
+from dti.training import train_and_evaluate_model
 from dti.utils import (
     init_logging,
     set_random_seeds,
     write_header,
-    train_and_evaluate_model,
 )
-
 from dti.constants import DATA
 
 
@@ -31,7 +30,7 @@ def main():
     seed = int(sys.argv[1])
     set_random_seeds(seed)
 
-    batch_size = 1024
+    batch_size = 512
     method = sys.argv[3]
     match method:
         case "pair":
@@ -72,7 +71,6 @@ def main():
     init_logging(run_name)
     logger = logging.getLogger(run_name)
     logger.info(f"seed={seed} method={method} dataset={dataset}")
-
 
     write_header(run_name)
     data_dir = DATA / "processed" / dataset
