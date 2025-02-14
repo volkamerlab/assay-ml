@@ -158,7 +158,7 @@ def train_and_evaluate_model(
         )
 
         scheduler.step(val_rank_corr)
-        logger.debug(f"learning rate={scheduler.get_last_lr():.1e}")
+        logger.debug(f"learning rate={scheduler.get_last_lr()}")
 
         logger.info(
             " ".join(
