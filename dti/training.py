@@ -13,6 +13,7 @@ from scipy.special import binom
 import logging
 
 from .constants import ASSAY
+from .utils import write_info
 
 logger = logging.getLogger(__name__)
 
