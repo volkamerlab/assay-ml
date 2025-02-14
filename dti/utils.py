@@ -10,7 +10,7 @@ from .training import model_epoch, rank_corr_pairs
 
 from .constants import OUTPUT
 
-device = lambda: "cuda" if torch.cuda.is_available() else "cpu"
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def set_random_seeds(seed: int):

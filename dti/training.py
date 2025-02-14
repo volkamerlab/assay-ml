@@ -13,10 +13,9 @@ from scipy.special import binom
 import logging
 
 from .constants import ASSAY
+from .utils import write_info, device
 
 logger = logging.getLogger(__name__)
-
-device = lambda: "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def rank_corr_pairs(prediction_data: pd.DataFrame) -> float:
@@ -69,9 +68,9 @@ def model_epoch(
     all_info = list()
     for protein_features, ligand_features, labels, info in tqdm.tqdm(loader):
         protein_features, ligand_features, labels = (
-            protein_features.to(device()),
-            ligand_features.to(device()),
-            labels.to(device()),
+            protein_features.to(device),
+            ligand_features.to(device),
+            labels.to(device),
         )
         if optimizer is not None:
             optimizer.zero_grad()
@@ -137,8 +136,8 @@ def train_and_evaluate_model(
         embedding_size=opts["embedding_size"],
         protein_input_size=opts["protein_dim"],
         cosine_agg=opts["cosine_agg"],
-    ).to(device())
-    optimizer: torch.optim.Optimizer = torch.optim.Adam(model.parameters(), lr=5e-5)
+    ).to(device)
+    optimizer: torch.optim.Optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     scheduler = ReduceLROnPlateau(
         optimizer, mode="max", factor=0.5, patience=5, verbose=True
     )

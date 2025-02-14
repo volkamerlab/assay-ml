@@ -66,7 +66,7 @@ def extract_embeddings(
         for _, (labels, strs, toks) in tqdm.tqdm(
             enumerate(data_loader), total=len(batches)
         ):
-            toks = toks.to(device(), non_blocking=True)
+            toks = toks.to(device, non_blocking=True)
 
             out = model(toks, repr_layers=repr_layers, return_contacts=False)
 
