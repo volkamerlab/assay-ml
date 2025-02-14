@@ -6,8 +6,6 @@ import torch
 import numpy as np
 import random
 
-from .training import model_epoch, rank_corr_pairs
-
 from .constants import OUTPUT
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
