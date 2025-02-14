@@ -6,6 +6,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 class IndependentFeatureMapping(nn.Module):
     def __init__(self, input_dim, k=10, sigma=1.0):
         super(IndependentFeatureMapping, self).__init__()
@@ -25,11 +26,15 @@ class IndependentFeatureMapping(nn.Module):
 
 
 class MolecularModel(nn.Module):
-    def __init__(self, ligand_input_size, embedding_size, ifm_k=10, ifm_sigma=1.0, **kwargs):
+    def __init__(
+        self, ligand_input_size, embedding_size, ifm_k=10, ifm_sigma=1.0, **kwargs
+    ):
         super().__init__()
 
         self.molecule_input_size = ligand_input_size
-        self.ifm = IndependentFeatureMapping(ligand_input_size, k=ifm_k, sigma=ifm_sigma)
+        self.ifm = IndependentFeatureMapping(
+            ligand_input_size, k=ifm_k, sigma=ifm_sigma
+        )
 
         self.stack_input_size = ligand_input_size * 2 * ifm_k
 
@@ -63,14 +68,15 @@ class MolecularModel(nn.Module):
             molecule = self.stack(molecule)
             return self.readout(molecule)
         elif molecule.shape[1] == self.stack_input_size * 2:
-            embedding_a = self.stack(molecule[:, :self.stack_input_size])
-            embedding_b = self.stack(molecule[:, self.stack_input_size:])
+            embedding_a = self.stack(molecule[:, : self.stack_input_size])
+            embedding_b = self.stack(molecule[:, self.stack_input_size :])
             # ensure equivariance wrt. to tuple permutation
             delta_ab = self.readout(embedding_a - embedding_b)
             delta_ba = self.readout(embedding_b - embedding_a)
             return delta_ab - delta_ba
         else:
             raise ValueError(f"Unexpected molecule shape {molecule.shape}")
+
 
 class CombinedModel(nn.Module):
     def __init__(
@@ -88,7 +94,9 @@ class CombinedModel(nn.Module):
         self.ligand_input_size = ligand_input_size
         self.cosine_agg = cosine_agg
 
-        self.ligand_ifm = IndependentFeatureMapping(ligand_input_size, k=ifm_k, sigma=ifm_sigma)
+        self.ligand_ifm = IndependentFeatureMapping(
+            ligand_input_size, k=ifm_k, sigma=ifm_sigma
+        )
 
         self.ligand_mlp_input_size = ligand_input_size * 2 * ifm_k
 
@@ -136,8 +144,8 @@ class CombinedModel(nn.Module):
         ligand = self.ligand_ifm(ligand)
 
         if ligand.shape[1] == self.ligand_mlp_input_size * 2:
-            ligand_a = ligand[:, :self.ligand_mlp_input_size]
-            ligand_b = ligand[:, self.ligand_mlp_input_size:]
+            ligand_a = ligand[:, : self.ligand_mlp_input_size]
+            ligand_b = ligand[:, self.ligand_mlp_input_size :]
             ligand_emb_a = self.ligand_mlp(ligand_a)
             ligand_emb_b = self.ligand_mlp(ligand_b)
 
