@@ -41,19 +41,21 @@ class MolecularModel(nn.Module):
         self.stack = nn.Sequential(
             nn.Linear(self.stack_input_size, embedding_size),
             nn.SiLU(),
-            nn.Linear(embedding_size, embedding_size),
-            nn.SiLU(),
-            nn.Linear(embedding_size, embedding_size),
-            nn.SiLU(),
-            nn.Linear(embedding_size, embedding_size),
-            nn.SiLU(),
             nn.Dropout(0.05),
+            nn.Linear(embedding_size, embedding_size),
+            nn.SiLU(),
+            nn.Linear(embedding_size, embedding_size),
+            nn.SiLU(),
+            nn.Linear(embedding_size, embedding_size),
+            nn.SiLU(),
             nn.Linear(embedding_size, embedding_size),
         )
 
         scaled_hidden_dim = embedding_size // 2
         self.readout = nn.Sequential(
             nn.SiLU(),
+            nn.Dropout(0.05),
+            nn.BatchNorm1d(joint_embedding_size),
             nn.Linear(embedding_size, embedding_size),
             nn.SiLU(),
             nn.Linear(embedding_size, scaled_hidden_dim),
@@ -103,32 +105,33 @@ class CombinedModel(nn.Module):
         self.protein_mlp = nn.Sequential(
             nn.Linear(protein_input_size, hidden_layer_size),
             nn.SiLU(),
-            nn.Linear(hidden_layer_size, hidden_layer_size),
-            nn.SiLU(),
-            nn.Linear(hidden_layer_size, hidden_layer_size),
-            nn.SiLU(),
-            nn.Linear(hidden_layer_size, hidden_layer_size),
-            nn.SiLU(),
             nn.Dropout(0.05),
+            nn.Linear(hidden_layer_size, hidden_layer_size),
+            nn.SiLU(),
+            nn.Linear(hidden_layer_size, hidden_layer_size),
+            nn.SiLU(),
+            nn.Linear(hidden_layer_size, hidden_layer_size),
+            nn.SiLU(),
             nn.Linear(hidden_layer_size, embedding_size),
         )
 
         self.ligand_mlp = nn.Sequential(
             nn.Linear(self.ligand_mlp_input_size, hidden_layer_size),
             nn.SiLU(),
-            nn.Linear(hidden_layer_size, hidden_layer_size),
-            nn.SiLU(),
-            nn.Linear(hidden_layer_size, hidden_layer_size),
-            nn.SiLU(),
-            nn.Linear(hidden_layer_size, hidden_layer_size),
-            nn.SiLU(),
             nn.Dropout(0.05),
+            nn.Linear(hidden_layer_size, hidden_layer_size),
+            nn.SiLU(),
+            nn.Linear(hidden_layer_size, hidden_layer_size),
+            nn.SiLU(),
+            nn.Linear(hidden_layer_size, hidden_layer_size),
+            nn.SiLU(),
             nn.Linear(hidden_layer_size, embedding_size),
         )
 
         joint_embedding_size = embedding_size * (1 if cosine_agg else 2)
         scaled_hidden_dim = hidden_layer_size // 2
         self.combined_mlp = nn.Sequential(
+            nn.SiLU(),
             nn.Dropout(0.05),
             nn.BatchNorm1d(joint_embedding_size),
             nn.Linear(joint_embedding_size, hidden_layer_size),
