@@ -60,7 +60,7 @@ def main():
         case "atcc":
             model_cls = MolecularModel
             data = load_atcc()
-            num_epochs *= 4
+            num_epochs *= 10
             info_cols = ["NSC"]
         case _:
             print(f"Unknown dataset: {dataset}", file=sys.stderr)
