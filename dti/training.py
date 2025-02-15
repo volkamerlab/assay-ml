@@ -12,8 +12,8 @@ from scipy.special import binom
 
 import logging
 
-from .constants import ASSAY
 from .utils import write_info, device
+from .constants import ASSAY, OUTPUT
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +157,7 @@ def train_and_evaluate_model(
         )
 
         scheduler.step(val_rank_corr)
-        logger.debug(f"learning rate={scheduler.get_last_lr():.1e}")
+        logger.debug(f"learning rate={scheduler.get_last_lr()}")
 
         logger.info(
             " ".join(

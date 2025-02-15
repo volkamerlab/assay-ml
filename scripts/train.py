@@ -31,14 +31,14 @@ def main():
     set_random_seeds(seed)
 
     batch_size = 512
+    num_epochs = 50_000  # early stopping in place
     method = sys.argv[3]
     match method:
         case "pair":
             dataset_cls = PairDataset
-            num_epochs = 100
         case "ic50":
             dataset_cls = ActivityDataset
-            num_epochs = 500
+            # batch_size *= 2
         case _:
             print(f"Unknown method: {method}", file=sys.stderr)
             sys.exit(1)
@@ -60,7 +60,6 @@ def main():
         case "atcc":
             model_cls = MolecularModel
             data = load_atcc()
-            num_epochs *= 10
             info_cols = ["NSC"]
         case _:
             print(f"Unknown dataset: {dataset}", file=sys.stderr)
@@ -116,6 +115,7 @@ def main():
             logger,
             method,
             index,
+            embedding_size=512,
             num_epochs=num_epochs,
             cosine_agg=True,
         )
