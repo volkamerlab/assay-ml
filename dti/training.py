@@ -139,7 +139,7 @@ def train_and_evaluate_model(
     ).to(device)
     optimizer: torch.optim.Optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     scheduler = ReduceLROnPlateau(
-        optimizer, mode="max", factor=0.5, patience=50, verbose=True
+        optimizer, mode="max", factor=0.5, patience=20
     )
 
     best_corr: float = 0.0
@@ -165,7 +165,6 @@ def train_and_evaluate_model(
                     f"[{run_name}]",
                     f"epoch={epoch + 1}/{opts['num_epochs']}",
                     f"train_loss={train_loss:.4f}",
-                    f"val_loss={val_loss:.4f}",
                     f"train_rank_corr={train_rank_corr:.4f}",
                     f"val_rank_corr={val_rank_corr:.4f}",
                 ]
@@ -199,7 +198,7 @@ def train_and_evaluate_model(
                 / f"{target_name}_index{index}_preds.csv",
             )
             logger.info(
-                f"[{run_name}] epoch={epoch + 1}/{opts['num_epochs']} test_loss={test_loss:.4f} test_rank_corr={test_rank_corr:.4f}"
+                f"[{run_name}] epoch={epoch + 1} fold={index} test_rank_corr={test_rank_corr:.4f}"
             )
         else:
             epochs_without_improvement += 1
