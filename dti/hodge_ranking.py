@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
-from .constants import DATA, ACT, SMILES, TID, ASSAY
+from .constants import DATA, ACT, SMILES, TID, ASSAY, COMPOUND
 
 import logging
 
@@ -93,6 +93,42 @@ def parallel_hodge_rank(
     return hodge_df
 
 
+def assay_ranks(preds: pd.DataFrame):
+    cmpd_a = COMPOUND + "_a"
+    cmpd_b = COMPOUND + "_b"
+    unique_cmpds = np.unique(
+        np.concat(
+            [
+                preds[cmpd_a].values,
+                preds[cmpd_b].values,
+            ]
+        )
+    )
+    cmpd_to_idx = {cmpd: idx for idx, cmpd in enumerate(unique_cmpds)}
+    dim = len(unique_cmpds)
+
+    if dim <= 1:
+        return 0
+
+    y_bar = np.zeros((dim, dim))
+    weights = np.zeros((dim, dim))
+
+    for _, row in preds.iterrows():
+        c_i = cmpd_to_idx[row[cmpd_a]]
+        c_j = cmpd_to_idx[row[cmpd_b]]
+        pref = row["prediction"]
+        y_bar[c_i, c_j] += pref
+        y_bar[c_j, c_i] -= pref
+        weights[c_i, c_j] += 1
+
+    weights[np.diag_indices_from(weights)] = 0
+    weights += weights.T
+
+    scores = hodge_rank(y_bar, weights)
+
+    return pd.DataFrame({COMPOUND: unique_cmpds, "prediction": scores})
+
+
 def hodge_rank(
     y_bar: np.ndarray, w: np.ndarray, diag_stab: float = 0.0, scale_scores: bool = False
 ):
@@ -106,5 +142,5 @@ def hodge_rank(
             scores = StandardScaler().fit_transform(scores.reshape(-1, 1)).flatten()
         return scores
     except np.linalg.LinAlgError:
-        logger.warning("unstable SVD")
+        logger.warning(f"unstable SVD (diag_stab={diag_stab})")
         return hodge_rank(y_bar, w, diag_stab=diag_stab + 1e-5)

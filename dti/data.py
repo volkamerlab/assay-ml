@@ -6,6 +6,7 @@ from multiprocessing import Pool
 
 import pandas as pd
 import numpy as np
+import tqdm.auto as tqdm
 
 from rdkit import Chem
 from rdkit.Chem import rdFingerprintGenerator
@@ -15,7 +16,7 @@ from torch.utils.data import Dataset
 from esm import FastaBatchedDataset, pretrained
 from sklearn.preprocessing import StandardScaler
 
-from .constants import DATA, SMILES, ACT, TID, SEQUENCE, ASSAY
+from .constants import DATA, SMILES, ACT, TID, SEQUENCE, ASSAY, COMPOUND
 from .utils import device
 from .hodge_ranking import parallel_hodge_rank
 
@@ -95,6 +96,7 @@ def load_kinodata(
     data = data[data["activities.standard_type"].isin(activity_types)]
     data = data[~data["compound_structures.canonical_smiles"].isna()]
     data[ASSAY] = data["assays.chembl_id"].str[6:].astype(int)
+    data[COMPOUND] = data["molecule_dictionary.chembl_id"].str[6:].astype(int)
     return data.rename(
         columns={
             "activities.standard_value": ACT,
@@ -111,6 +113,7 @@ def load_landrum(landrum_path: Path = DATA / "raw" / "landrum.csv") -> pd.DataFr
     data = data[~data["canonical_smiles"].isna()]
     return data.rename(
         columns={
+            "molregno": COMPOUND,
             "pchembl_value": ACT,
             "canonical_smiles": SMILES,
             "component_sequence": SEQUENCE,
@@ -123,11 +126,13 @@ def load_landrum(landrum_path: Path = DATA / "raw" / "landrum.csv") -> pd.DataFr
 def load_atcc(path: Path = DATA / "raw" / "atcc.csv") -> pd.DataFrame:
     logger.info(f"loading NCI ATCC data from {path}")
     data = pd.read_csv(path, index_col=0)
+    assay_ids = {exp: i for i, exp in enumerate(data["EXPID"].unique())}
+    data[ASSAY] = data["EXPID"].map(assay_ids.get)
     return data.rename(
         columns={
+            "NSC": COMPOUND,
             "IC50": ACT,
             "SMILES": SMILES,
-            "EXPID": ASSAY,
         }
     )
 
@@ -181,6 +186,7 @@ class ActivityDataset(Dataset):
         )
         self.labels = torch.tensor(self.kinodata[target].values, dtype=torch.float32)
         self.info_cols = info_cols
+        logger.info(f"{info_cols}")
         self.info = torch.tensor(self.kinodata[info_cols].values)
 
     def _compute_protein_features(self, data: pd.DataFrame, model_name: str):

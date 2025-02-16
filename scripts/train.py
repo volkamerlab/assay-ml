@@ -8,7 +8,12 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from sklearn.preprocessing import StandardScaler
 import torch
 
-from dti.model import CombinedModel, MolecularModel
+from dti.model import (
+    CombinedModel,
+    MolecularModel,
+    PairCombinedModel,
+    PairMolecularModel,
+)
 from dti.data import (
     ActivityDataset,
     PairDataset,
@@ -17,58 +22,67 @@ from dti.data import (
     load_kinodata,
     load_atcc,
 )
-from dti.training import train_and_evaluate_model
+from dti.training import train_and_evaluate_model, AssayRankAccuracy
 from dti.utils import (
     init_logging,
     set_random_seeds,
     write_header,
 )
-from dti.constants import DATA
+from dti.constants import DATA, ASSAY, COMPOUND
+
+logger = logging.getLogger(__name__)
+
+
+def model_and_dataset(method: str, mol_only: bool) -> (type, type):
+    match method:
+        case "pair" if mol_only:
+            return PairMolecularModel, PairDataset
+        case "ic50" if mol_only:
+            return MolecularModel, ActivityDataset
+        case "pair":
+            return PairCombinedModel, PairDataset
+        case "ic50":
+            return CombinedModel, ActivityDataset
+        case _:
+            logger.error(f"Unknown method: {method}")
+            sys.exit(1)
 
 
 def main():
     seed = int(sys.argv[1])
-    set_random_seeds(seed)
-
-    batch_size = 512
-    num_epochs = 50_000  # early stopping in place
-    method = sys.argv[3]
-    match method:
-        case "pair":
-            dataset_cls = PairDataset
-        case "ic50":
-            dataset_cls = ActivityDataset
-            # batch_size *= 2
-        case _:
-            print(f"Unknown method: {method}", file=sys.stderr)
-            sys.exit(1)
-
     dataset = sys.argv[2]
-    match dataset:
-        case "kinodata":
-            model_cls = CombinedModel
-            data = load_kinodata()
-            info_cols = ["activities.activity_id", "assay_id"]
-        case "landrum":
-            model_cls = CombinedModel
-            data = load_landrum()
-            info_cols = ["activity_id", "assay_id"]
-        case "landrum_large":
-            model_cls = CombinedModel
-            data = load_landrum(DATA / "raw" / "landrum_large.csv")
-            info_cols = ["activity_id", "assay_id"]
-        case "atcc":
-            model_cls = MolecularModel
-            data = load_atcc()
-            info_cols = ["NSC"]
-        case _:
-            print(f"Unknown dataset: {dataset}", file=sys.stderr)
-            sys.exit(1)
+    method = sys.argv[3]
 
     run_name = f"{dataset}_{method}_" + uuid.uuid4().hex[:4]
     init_logging(run_name)
     logger = logging.getLogger(run_name)
     logger.info(f"seed={seed} method={method} dataset={dataset}")
+
+    set_random_seeds(seed)
+
+    batch_size = 512
+    num_epochs = 50_000  # early stopping in place
+    info_cols = [COMPOUND, ASSAY]
+
+    match dataset:
+        case "kinodata":
+            data = load_kinodata()
+            info_cols += ["activities.activity_id"]
+            model_cls, dataset_cls = model_and_dataset(method, False)
+        case "landrum":
+            data = load_landrum()
+            info_cols += ["activity_id"]
+            model_cls, dataset_cls = model_and_dataset(method, False)
+        case "landrum_large":
+            data = load_landrum(DATA / "raw" / "landrum_large.csv")
+            info_cols += ["activity_id"]
+            model_cls, dataset_cls = model_and_dataset(method, False)
+        case "atcc":
+            data = load_atcc()
+            model_cls, dataset_cls = model_and_dataset(method, True)
+        case _:
+            logger.error(f"Unknown dataset: {dataset}")
+            sys.exit(1)
 
     write_header(run_name)
     data_dir = DATA / "processed" / dataset
@@ -77,8 +91,8 @@ def main():
     for index, train_data, val_data, test_data in prepare_datasets(
         data, data_dir, tgt_name, 5, None, False
     ):
-        val_dataset = PairDataset(val_data, target=tgt_name, info_cols=info_cols)
-        test_dataset = PairDataset(test_data, target=tgt_name, info_cols=info_cols)
+        val_dataset = dataset_cls(val_data, target=tgt_name, info_cols=info_cols)
+        test_dataset = dataset_cls(test_data, target=tgt_name, info_cols=info_cols)
         scaler = StandardScaler()
         train_data[tgt_name] = scaler.fit_transform(
             train_data[tgt_name].values.reshape(-1, 1)
@@ -106,15 +120,17 @@ def main():
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
+        assay_rank = AssayRankAccuracy(data, method=="pair")
+
         train_and_evaluate_model(
             model_cls,
             run_name,
             train_loader,
             val_loader,
             test_loader,
-            logger,
             method,
             index,
+            rank_corr_fn=assay_rank,
             embedding_size=512,
             num_epochs=num_epochs,
             cosine_agg=True,
