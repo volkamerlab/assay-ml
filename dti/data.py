@@ -137,6 +137,17 @@ def load_atcc(path: Path = DATA / "raw" / "atcc.csv") -> pd.DataFrame:
     )
 
 
+def aggregate_multi_measurements(data: pd.DataFrame) -> pd.DataFrame:
+    keys = [COMPOUND, ASSAY]
+    if TID in data.columns:
+        keys += [TID]
+    non_numeric_cols = data.select_dtypes(exclude=["number"]).columns
+    return data.groupby(keys).agg(
+        {ACT: "mean", **{col: lambda x: x.iloc[0] for col in non_numeric_cols}}
+    ).reset_index()
+
+
+
 def split_kfold_by(
     kinodata: pd.DataFrame, k: int, column: str, seed: int = 1
 ) -> np.ndarray:
@@ -328,6 +339,7 @@ def prepare_datasets(
     Tuple[int, pd.DataFrame, Union[pd.DataFrame, None], pd.DataFrame, pd.DataFrame]
 ]:
     """Prepare train, validation, and test datasets."""
+    data = aggregate_multi_measurements(data)
     split_data(data, data_dir, k=k, random_valset=random_valset)
     for index in range(k):
         split_dir = data_dir / f"{index}"
