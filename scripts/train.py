@@ -67,15 +67,12 @@ def main():
     match dataset:
         case "kinodata":
             data = load_kinodata()
-            info_cols += ["activities.activity_id"]
             model_cls, dataset_cls = model_and_dataset(method, False)
         case "landrum":
             data = load_landrum()
-            info_cols += ["activity_id"]
             model_cls, dataset_cls = model_and_dataset(method, False)
         case "landrum_large":
             data = load_landrum(DATA / "raw" / "landrum_large.csv")
-            info_cols += ["activity_id"]
             model_cls, dataset_cls = model_and_dataset(method, False)
         case "atcc":
             data = load_atcc()
@@ -120,7 +117,7 @@ def main():
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-        assay_rank = AssayRankAccuracy(data, method=="pair")
+        assay_rank = AssayRankAccuracy(data, method == "pair")
 
         train_and_evaluate_model(
             model_cls,

@@ -39,7 +39,9 @@ class AssayRankAccuracy:
 
             if len(scores) > 1 and reference.nunique() > 1:
                 try:
-                    corr = spearmanr(scores["prediction"].values, reference.values).statistic
+                    corr = spearmanr(
+                        scores["prediction"].values, reference.values
+                    ).statistic
                 except ValueError:
                     logger.warning(f"inconsistent predictions for assay {assay}")
                     continue

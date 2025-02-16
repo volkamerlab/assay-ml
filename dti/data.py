@@ -142,10 +142,11 @@ def aggregate_multi_measurements(data: pd.DataFrame) -> pd.DataFrame:
     if TID in data.columns:
         keys += [TID]
     non_numeric_cols = data.select_dtypes(exclude=["number"]).columns
-    return data.groupby(keys).agg(
-        {ACT: "mean", **{col: lambda x: x.iloc[0] for col in non_numeric_cols}}
-    ).reset_index()
-
+    return (
+        data.groupby(keys, as_index=False)
+        .agg({ACT: "mean", **{col: lambda x: x.iloc[0] for col in non_numeric_cols}})
+        .reset_index()
+    )
 
 
 def split_kfold_by(
@@ -197,7 +198,7 @@ class ActivityDataset(Dataset):
         )
         self.labels = torch.tensor(self.kinodata[target].values, dtype=torch.float32)
         self.info_cols = info_cols
-        logger.info(f"{info_cols}")
+        logger.info(f"info cols: {info_cols}")
         self.info = torch.tensor(self.kinodata[info_cols].values)
 
     def _compute_protein_features(self, data: pd.DataFrame, model_name: str):
