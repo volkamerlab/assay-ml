@@ -37,11 +37,9 @@ class AssayRankAccuracy:
             scores = scores.set_index(COMPOUND)
             reference = self.reference_data.loc[assay, scores.index]
 
-            if len(scores) > 1:
-                corr_sum += (
-                    len(scores)
-                    * spearmanr(scores["prediction"], reference.values).statistic
-                )
+            if len(scores) > 1 and reference.nunique() > 1:
+                corr = spearmanr(scores["prediction"].values, reference.values).statistic
+                corr_sum += len(scores) * corr
                 count += len(scores)
 
         return corr_sum / count if count > 0 else np.nan
@@ -191,8 +189,8 @@ def train_and_evaluate_model(
         logger.debug(f"Learning rate: {scheduler.get_last_lr()}")
 
         logger.info(
-            f"[{run_name}] Epoch {epoch + 1}/{opts['num_epochs']} "
-            f"Train Loss: {train_loss:.4f} Val Loss: {val_loss:.4f} "
+            f"[{run_name}] Epoch {epoch + 1} "
+            f"Train Loss: {train_loss:.4f} "
             f"Val Rank Corr: {val_rank_corr:.4f}"
         )
 
@@ -206,7 +204,7 @@ def train_and_evaluate_model(
             epochs_without_improvement = 0
             torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")
             pred_file = OUTPUT / run_name / f"{target_name}_index{index}_preds.csv"
-            test_loss, test_rank_corr = evaluate_epoch(
+            _, test_rank_corr = evaluate_epoch(
                 model,
                 test_loader,
                 rank_corr_fn=opts["rank_corr_fn"],
@@ -214,7 +212,7 @@ def train_and_evaluate_model(
             )
             logger.info(
                 f"[{run_name}] Epoch {epoch + 1}/{opts['num_epochs']} "
-                f"Test Loss: {test_loss:.4f} Test Rank Corr: {test_rank_corr:.4f}"
+                f"Test Rank Corr: {test_rank_corr:.4f}"
             )
         else:
             epochs_without_improvement += 1
