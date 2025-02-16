@@ -38,7 +38,11 @@ class AssayRankAccuracy:
             reference = self.reference_data.loc[assay, scores.index]
 
             if len(scores) > 1 and reference.nunique() > 1:
-                corr = spearmanr(scores["prediction"].values, reference.values).statistic
+                try:
+                    corr = spearmanr(scores["prediction"].values, reference.values).statistic
+                except ValueError:
+                    logger.warning(f"inconsistent predictions for assay {assay}")
+                    continue
                 corr_sum += len(scores) * corr
                 count += len(scores)
 
@@ -149,17 +153,20 @@ def train_and_evaluate_model(
     **kwargs: Dict[str, Any],
 ) -> None:
     """Train and evaluate the model with learning rate adjustment and early stopping."""
-    logger.info(f"Training model for target: {target_name}")
-    opts = {
-        "protein_dim": 1280,
-        "ligand_dim": 2048,
-        "embedding_size": 512,
-        "num_epochs": 500,
-        "patience": 100,
-        "cosine_agg": False,
-        "rank_corr_fn": None,
-        **kwargs,
-    }
+    logger.info(f"training model for target: {target_name}")
+    opts: Dict[str, Any] = (
+        dict(
+            protein_dim=1280,
+            ligand_dim=2048,
+            embedding_size=512,
+            num_epochs=500,
+            patience_termination=100,
+            patience_lr=20,
+            cosine_agg=False,
+            rank_corr_fn=None,
+        )
+        | kwargs
+    )
 
     model = model_cls(
         ligand_input_size=opts["ligand_dim"],
@@ -170,10 +177,7 @@ def train_and_evaluate_model(
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     scheduler = ReduceLROnPlateau(
-        optimizer,
-        mode="max",
-        factor=0.5,
-        patience=50,
+        optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
     )
 
     best_corr = 0.0
@@ -189,7 +193,8 @@ def train_and_evaluate_model(
         logger.debug(f"Learning rate: {scheduler.get_last_lr()}")
 
         logger.info(
-            f"[{run_name}] Epoch {epoch + 1} "
+            f"[{run_name}] Epoch: {epoch + 1} "
+            f"Fold: {index} "
             f"Train Loss: {train_loss:.4f} "
             f"Val Rank Corr: {val_rank_corr:.4f}"
         )
@@ -211,12 +216,13 @@ def train_and_evaluate_model(
                 prediction_file=pred_file,
             )
             logger.info(
-                f"[{run_name}] Epoch {epoch + 1}/{opts['num_epochs']} "
+                f"[{run_name}] Epoch: {epoch + 1} "
+                f"Fold: {index} "
                 f"Test Rank Corr: {test_rank_corr:.4f}"
             )
         else:
             epochs_without_improvement += 1
-            if epochs_without_improvement >= opts["patience"]:
+            if epochs_without_improvement >= opts["patience_termination"]:
                 logger.info(
                     f"[{run_name}] Early stopping triggered after {epoch + 1} epochs."
                 )
