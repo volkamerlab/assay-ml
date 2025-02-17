@@ -8,13 +8,12 @@ from torch import nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from scipy.stats import spearmanr
-from scipy.special import binom
 
 import logging
 
 from .utils import write_info, device
 from .constants import ASSAY, OUTPUT, ACT, COMPOUND
-from .hodge_ranking import hodge_rank, assay_ranks
+from .hodge_ranking import assay_ranks
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +55,8 @@ class AssayRankAccuracy:
                     continue
                 corr_sum += len(scores) * corr
                 count += len(scores)
+
+        return corr_sum / count
 
 
 def train_epoch(model, loader, optimizer, criterion=nn.MSELoss()):

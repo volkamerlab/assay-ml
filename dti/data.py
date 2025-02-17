@@ -150,10 +150,10 @@ def aggregate_multi_measurements(data: pd.DataFrame) -> pd.DataFrame:
 
 
 def split_kfold_by(
-    kinodata: pd.DataFrame, k: int, column: str, seed: int = 1
+    data: pd.DataFrame, k: int, column: str, seed: int = 1
 ) -> np.ndarray:
-    """Return the k-fold partitioning of `kinodata[column]` in shape `(k, -1)`."""
-    values = kinodata[column].unique()
+    """Return the k-fold partitioning of `data[column]` in shape `(k, -1)`."""
+    values = data[column].unique()
     missing_modk = k - len(values) % k
     values = np.concatenate((values, [-1] * missing_modk))
     np.random.seed(seed)
@@ -173,33 +173,31 @@ def compute_fp(smi: str):
 class ActivityDataset(Dataset):
     def __init__(
         self,
-        kinodata: pd.DataFrame,
+        data: pd.DataFrame,
         target: str = ACT,
         info_cols: List[str] = [],
         model_name: str = "esm2_t33_650M_UR50D",
     ):
         super().__init__()
-        logger.info(f"creating dataset of size {len(kinodata)}")
+        logger.info(f"creating dataset of size {len(data)}")
         logger.info("computing fingerprints")
         with Pool(16) as p:
-            fps = p.map(compute_fp, kinodata[SMILES].values)
+            fps = p.map(compute_fp, data[SMILES].values)
         mask = [fp is not None for fp in fps]
         if len(mask) - sum(mask) > 0:
             logger.info(
                 f"dropping {len(mask) - sum(mask)}/{len(mask)} data points w/o FP"
             )
-        self.kinodata = kinodata[mask].copy()
-        self.kinodata.reset_index(inplace=True)
+        self.data = data[mask].copy()
+        self.data.reset_index(inplace=True)
         self.ligand_features = torch.tensor(
             np.stack([fp for fp in fps if fp is not None]), dtype=torch.float32
         )
-        self.protein_features = self._compute_protein_features(
-            self.kinodata, model_name
-        )
-        self.labels = torch.tensor(self.kinodata[target].values, dtype=torch.float32)
+        self.protein_features = self._compute_protein_features(self.data, model_name)
+        self.labels = torch.tensor(self.data[target].values, dtype=torch.float32)
         self.info_cols = info_cols
         logger.info(f"info cols: {info_cols}")
-        self.info = torch.tensor(self.kinodata[info_cols].values)
+        self.info = torch.tensor(self.data[info_cols].values)
 
     def _compute_protein_features(self, data: pd.DataFrame, model_name: str):
         if TID not in data.columns:
@@ -251,13 +249,13 @@ class ActivityDataset(Dataset):
 class PairDataset(ActivityDataset):
     def __init__(
         self,
-        kinodata: pd.DataFrame,
+        data: pd.DataFrame,
         **kwargs,
     ):
-        super().__init__(kinodata, **kwargs)
+        super().__init__(data, **kwargs)
         self.pairs = list()
         weights = list()
-        for assay, group in self.kinodata.groupby(ASSAY):
+        for assay, group in self.data.groupby(ASSAY):
             for i, ix0 in enumerate(group.index):
                 for j, ix1 in enumerate(group.index):
                     if j > i:
@@ -329,12 +327,50 @@ def normalize_activity(data: pd.DataFrame, target_col: str, scaler: StandardScal
     return data
 
 
+def load_split(
+    index: int,
+    data_dir: Path,
+    tgt_name: str,
+    inter_assay_weight: Union[float, None] = None,
+) -> Tuple[pd.DataFrame, Union[pd.DataFrame, None], pd.DataFrame, pd.DataFrame]:
+    split_dir = data_dir / f"{index}"
+    logger.info(f"reading dataset from {split_dir}")
+
+    val_data = pd.read_csv(split_dir / "val.csv", index_col=0)
+    train_data = pd.read_csv(split_dir / "train.csv", index_col=0)
+    test_data = pd.read_csv(split_dir / "test.csv", index_col=0)
+
+    scaler = StandardScaler()
+    train_data[tgt_name] = scaler.fit_transform(train_data[ACT].values.reshape(-1, 1))
+    test_data = normalize_activity(test_data, tgt_name, scaler)
+    val_data = normalize_activity(val_data, tgt_name, scaler)
+
+    if inter_assay_weight is not None:
+        hodge_file = (
+            split_dir / f"train_hodge_no_assay_norm_lam{inter_assay_weight:.2f}.csv"
+        )
+        if not hodge_file.exists():
+            logger.info("computing Hodge ranking")
+            hodge_df = parallel_hodge_rank(train_data, inter_assay_weight)
+            train_data = train_data.merge(
+                hodge_df,
+                on=["compound_structures.canonical_smiles", "UniprotID"],
+                how="inner",
+            )
+            train_data.to_csv(hodge_file)
+        else:
+            logger.info(f"cached Hodge ranking data at {hodge_file}")
+            train_data = pd.read_csv(hodge_file, index_col=0)
+
+    return train_data, val_data, test_data
+
+
 def prepare_datasets(
     data: pd.DataFrame,
     data_dir: Path,
     tgt_name: str,
     k: int,
-    inter_assay_weight: Union[float, None],
+    inter_assay_weight: Union[float, None] = None,
     random_valset: bool = False,
 ) -> Iterator[
     Tuple[int, pd.DataFrame, Union[pd.DataFrame, None], pd.DataFrame, pd.DataFrame]
@@ -343,35 +379,4 @@ def prepare_datasets(
     data = aggregate_multi_measurements(data)
     split_data(data, data_dir, k=k, random_valset=random_valset)
     for index in range(k):
-        split_dir = data_dir / f"{index}"
-        logger.info(f"reading dataset from {split_dir}")
-
-        val_data = pd.read_csv(split_dir / "val.csv", index_col=0)
-        train_data = pd.read_csv(split_dir / "train.csv", index_col=0)
-        test_data = pd.read_csv(split_dir / "test.csv", index_col=0)
-
-        scaler = StandardScaler()
-        train_data[tgt_name] = scaler.fit_transform(
-            train_data[ACT].values.reshape(-1, 1)
-        )
-        test_data = normalize_activity(test_data, tgt_name, scaler)
-        val_data = normalize_activity(val_data, tgt_name, scaler)
-
-        if inter_assay_weight is not None:
-            hodge_file = (
-                split_dir / f"train_hodge_no_assay_norm_lam{inter_assay_weight:.2f}.csv"
-            )
-            if not hodge_file.exists():
-                logger.info("computing Hodge ranking")
-                hodge_df = parallel_hodge_rank(train_data, inter_assay_weight)
-                train_data = train_data.merge(
-                    hodge_df,
-                    on=["compound_structures.canonical_smiles", "UniprotID"],
-                    how="inner",
-                )
-                train_data.to_csv(hodge_file)
-            else:
-                logger.info(f"cached Hodge ranking data at {hodge_file}")
-                train_data = pd.read_csv(hodge_file, index_col=0)
-
-        yield index, train_data, val_data, test_data
+        yield tuple([index] + list(load_split(index, data_dir)))
