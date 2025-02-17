@@ -1,5 +1,5 @@
 import torch
-from torch import nn
+from torch import nn, Tensor
 
 import logging
 
@@ -11,7 +11,8 @@ class MolecularModel(nn.Module):
         super().__init__()
 
         self.molecule_input_size = ligand_input_size
-        self.stack = nn.Sequential(
+        self.embedding_size = embedding_size
+        self.embed = nn.Sequential(
             nn.Linear(self.molecule_input_size, embedding_size),
             nn.SiLU(),
             nn.Linear(embedding_size, embedding_size),
@@ -36,7 +37,7 @@ class MolecularModel(nn.Module):
     def forward(self, _protein, molecule):
         # the  first argument (protein embeddings) is ignored
         assert molecule.shape[1] == self.molecule_input_size, molecule.shape
-        molecule = self.stack(molecule)
+        molecule = self.embed(molecule)
         return self.readout(molecule)
 
 
@@ -44,15 +45,16 @@ class PairMolecularModel(MolecularModel):
     def __init__(self, ligand_input_size, embedding_size, **kwargs):
         super().__init__(ligand_input_size, embedding_size, **kwargs)
 
-    def forward(self, _protein, molecule):
-        assert molecule.shape[1] == self.molecule_input_size * 2, molecule.shape
-
-        embedding_a = self.stack(molecule[:, : self.molecule_input_size])
-        embedding_b = self.stack(molecule[:, self.molecule_input_size :])
-        # ensure equivariance wrt. to tuple permutation
-        delta_ab = self.readout(embedding_a - embedding_b)
-        delta_ba = self.readout(embedding_b - embedding_a)
-        return delta_ab - delta_ba
+    def forward(self, _protein, molecule: Tensor):
+        x = self.embed(molecule)
+        if x.dim() == 2:  # full (b, b) pairs
+            n, d = molecule.size(0), self.embedding_size
+            diff_a = (x.view(n, 1, d) - x.view(1, n, d)).reshape(-1, d)  # (b, b, d)
+            diff_b = (x.view(1, n, d) - x.view(n, 1, d)).reshape(-1, d)  # (b, b, d)
+        elif x.dim() == 3:  # assume pre-defined pairs (k, 2, d)
+            diff_a = x[:, 0, :] - x[:, 1, :]  # (k, 2, d)
+            diff_b = x[:, 1, :] - x[:, 0, :]
+        return self.readout(diff_a) - self.readout(diff_b)
 
 
 class CombinedModel(nn.Module):

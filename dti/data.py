@@ -255,7 +255,7 @@ class PairDataset(ActivityDataset):
         super().__init__(data, **kwargs)
         self.pairs = list()
         weights = list()
-        for assay, group in self.data.groupby(ASSAY):
+        for _, group in self.data.groupby(ASSAY):
             for i, ix0 in enumerate(group.index):
                 for j, ix1 in enumerate(group.index):
                     if j > i:
@@ -281,7 +281,7 @@ class PairDataset(ActivityDataset):
             torch.ones(1)
             if self.protein_features is None
             else self.protein_features[i],
-            torch.cat([self.ligand_features[i], self.ligand_features[j]]),
+            torch.stack([self.ligand_features[i], self.ligand_features[j]]),
             self.labels[i] - self.labels[j],
             torch.cat([self.info[i], self.info[j]]),
         )

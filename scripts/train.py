@@ -8,6 +8,7 @@ from typing import Tuple
 import numpy as np
 import pandas as pd
 import torch
+from torch import nn
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from sklearn.preprocessing import StandardScaler
 from scipy.stats import kendalltau, spearmanr
@@ -27,7 +28,7 @@ from dti.data import (
     load_atcc,
     load_split,
 )
-from dti.training import train_and_evaluate_model, AssayRankAccuracy
+from dti.training import train_and_evaluate_model, AssayRankAccuracy, batch_pair_loss
 from dti.utils import (
     init_logging,
     set_random_seeds,
@@ -38,40 +39,44 @@ from dti.constants import DATA, ASSAY, COMPOUND
 logger = logging.getLogger(__name__)
 
 
-def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type]:
+def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type, type]:
     match method:
         case "pair" if mol_only:
-            return PairMolecularModel, PairDataset
+            return PairMolecularModel, PairDataset, PairDataset
+        case "pair_all" if mol_only:
+            return PairMolecularModel, ActivityDataset, PairDataset
         case "ic50" if mol_only:
-            return MolecularModel, ActivityDataset
+            return MolecularModel, ActivityDataset, ActivityDataset
         case "pair":
-            return PairCombinedModel, PairDataset
+            return PairCombinedModel, PairDataset, PairDataset
+        case "pair_all":
+            return PairCombinedModel, ActivityDataset, PairDataset
         case "ic50":
-            return CombinedModel, ActivityDataset
+            return CombinedModel, ActivityDataset, ActivityDataset
         case _:
             logger.error(f"Unknown method: {method}")
             sys.exit(1)
 
 
-def setup(method: str, dataset: str) -> Tuple[type, type, pd.DataFrame]:
+def setup(method: str, dataset: str) -> Tuple[type, type, type, pd.DataFrame]:
     match dataset:
         case "kinodata":
             data = load_kinodata()
-            model_cls, dataset_cls = model_and_dataset(method, False)
+            model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, False)
         case "landrum":
             data = load_landrum()
-            model_cls, dataset_cls = model_and_dataset(method, False)
+            model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, False)
         case "large_landrum":
             data = load_landrum(DATA / "raw" / "landrum_large.csv")
-            model_cls, dataset_cls = model_and_dataset(method, False)
+            model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, False)
         case "atcc":
             data = load_atcc()
-            model_cls, dataset_cls = model_and_dataset(method, True)
+            model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, True)
         case _:
             logger.error(f"Unknown dataset: {dataset}")
             sys.exit(1)
 
-    return model_cls, dataset_cls, data
+    return model_cls, dataset_cls, val_dataset_cls, data
 
 
 def run_split(
@@ -82,6 +87,7 @@ def run_split(
     run_name: str,
     model_cls: type,
     dataset_cls: type,
+    val_dataset_cls: type,
     data: pd.DataFrame,
 ):
     batch_size = 512
@@ -94,8 +100,8 @@ def run_split(
         prepare_datasets(data, data_dir, tgt_name, 5, random_valset=False)
 
     train_data, val_data, test_data = load_split(fold, data_dir, tgt_name)
-    val_dataset = dataset_cls(val_data, target=tgt_name, info_cols=info_cols)
-    test_dataset = dataset_cls(test_data, target=tgt_name, info_cols=info_cols)
+    val_dataset = val_dataset_cls(val_data, target=tgt_name, info_cols=info_cols)
+    test_dataset = val_dataset_cls(test_data, target=tgt_name, info_cols=info_cols)
 
     scaler = StandardScaler()
     train_data[tgt_name] = scaler.fit_transform(
@@ -114,12 +120,17 @@ def run_split(
     sampler = WeightedRandomSampler(
         train_dataset.weights, len(train_dataset), generator=g
     )
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler)
+    # 23 ** 2 ~ 512
+    train_batch = 23 if method == "pair_all" else batch_size
+    train_loader = DataLoader(train_dataset, batch_size=train_batch, sampler=sampler)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     rstat = partial(kendalltau, nan_policy="omit", variant="c")
-    assay_rank = AssayRankAccuracy(data, method == "pair", rank_statistic=rstat)
+    assay_rank = AssayRankAccuracy(
+        data, method in ["pair", "pair_all"], rank_statistic=rstat
+    )
+    training_loss = batch_pair_loss if method == "pair_all" else nn.MSELoss()
 
     train_and_evaluate_model(
         model_cls,
@@ -133,6 +144,7 @@ def run_split(
         embedding_size=512,
         num_epochs=num_epochs,
         cosine_agg=True,
+        training_loss=training_loss,
         patience_termination=1000 if method == "pair" else 100,
         patience_lr=100 if method == "pair" else 10,
     )
@@ -152,10 +164,20 @@ def main():
     logger.info(f"seed={seed} method={method} dataset={dataset} fold={fold}")
 
     set_random_seeds(seed)
-    model_cls, dataset_cls, data = setup(method, dataset)
+    model_cls, dataset_cls, val_dataset_cls, data = setup(method, dataset)
     write_header(run_name)
 
-    run_split(method, dataset, fold, seed, run_name, model_cls, dataset_cls, data)
+    run_split(
+        method,
+        dataset,
+        fold,
+        seed,
+        run_name,
+        model_cls,
+        dataset_cls,
+        val_dataset_cls,
+        data,
+    )
 
 
 if __name__ == "__main__":

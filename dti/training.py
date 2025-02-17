@@ -4,7 +4,7 @@ import tqdm
 import pandas as pd
 import numpy as np
 import torch
-from torch import nn
+from torch import nn, Tensor
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from scipy.stats import spearmanr
@@ -57,6 +57,14 @@ class AssayRankAccuracy:
                 count += len(scores)
 
         return corr_sum / count
+
+
+def batch_pair_loss(
+    predictions: Tensor, labels: Tensor, criterion=nn.MSELoss()
+) -> float:
+    n = len(labels)
+    target_delta = labels.view(n, 1) - labels.view(1, n)
+    return criterion(predictions, target_delta.flatten())
 
 
 def train_epoch(model, loader, optimizer, criterion=nn.MSELoss()):
@@ -155,6 +163,7 @@ def train_and_evaluate_model(
             patience_lr=20,
             cosine_agg=False,
             rank_corr_fn=None,
+            training_loss=nn.MSELoss(),
         )
         | kwargs
     )
@@ -175,7 +184,9 @@ def train_and_evaluate_model(
     epochs_without_improvement = 0
 
     for epoch in range(opts["num_epochs"]):
-        train_loss = train_epoch(model, train_loader, optimizer)
+        train_loss = train_epoch(
+            model, train_loader, optimizer, criterion=opts["training_loss"]
+        )
         val_loss, val_rank_corr = evaluate_epoch(
             model, val_loader, rank_corr_fn=opts["rank_corr_fn"]
         )
