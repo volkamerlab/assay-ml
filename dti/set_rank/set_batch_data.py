@@ -2,6 +2,7 @@ import numpy as np
 from dti.data import ActivityDataset
 from dti.constants import ASSAY
 import logging
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ class SetActivityDataset(ActivityDataset):
         self.groups_index = [self.random.shuffle(group) for group in self.groups_index]
         self.batches = []
         num_unused = 0
-        for group in self.groups_index:
+        for group in tqdm(self.groups_index, desc="Making batches..."):
             if len(group) < self.min_batch_size:
                 num_unused += len(group)
                 continue
