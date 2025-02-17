@@ -21,7 +21,6 @@ queue fold, script, seed, dataset, method from (
     0, scripts/train.py, 0, landrum, pair
     0, scripts/train.py, 0, large_landrum, ic50
     0, scripts/train.py, 0, large_landrum, pair
-
     1, scripts/train.py, 0, atcc, ic50
     1, scripts/train.py, 0, atcc, pair
     1, scripts/train.py, 0, kinodata, ic50
@@ -30,7 +29,6 @@ queue fold, script, seed, dataset, method from (
     1, scripts/train.py, 0, landrum, pair
     1, scripts/train.py, 0, large_landrum, ic50
     1, scripts/train.py, 0, large_landrum, pair
-
     2, scripts/train.py, 0, atcc, ic50
     2, scripts/train.py, 0, atcc, pair
     2, scripts/train.py, 0, kinodata, ic50
@@ -39,7 +37,6 @@ queue fold, script, seed, dataset, method from (
     2, scripts/train.py, 0, landrum, pair
     2, scripts/train.py, 0, large_landrum, ic50
     2, scripts/train.py, 0, large_landrum, pair
-
     3, scripts/train.py, 0, atcc, ic50
     3, scripts/train.py, 0, atcc, pair
     3, scripts/train.py, 0, kinodata, ic50
@@ -48,7 +45,6 @@ queue fold, script, seed, dataset, method from (
     3, scripts/train.py, 0, landrum, pair
     3, scripts/train.py, 0, large_landrum, ic50
     3, scripts/train.py, 0, large_landrum, pair
-
     4, scripts/train.py, 0, atcc, ic50
     4, scripts/train.py, 0, atcc, pair
     4, scripts/train.py, 0, kinodata, ic50
