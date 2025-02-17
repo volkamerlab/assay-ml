@@ -1,4 +1,4 @@
-from typing import Type, Any, Dict
+from typing import Type, Any, Dict, Callable
 
 import tqdm
 import pandas as pd
@@ -7,7 +7,7 @@ import torch
 from torch import nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
-from scipy.stats import kendalltau, spearmanr
+from scipy.stats import spearmanr
 from scipy.special import binom
 
 import logging
@@ -20,8 +20,14 @@ logger = logging.getLogger(__name__)
 
 
 class AssayRankAccuracy:
-    def __init__(self, reference_data: pd.DataFrame, pair_predictions: bool):
+    def __init__(
+        self,
+        reference_data: pd.DataFrame,
+        pair_predictions: bool,
+        rank_statistic: Callable = spearmanr,
+    ):
         self.pair_predictions = pair_predictions
+        self.rank_statistic = rank_statistic
         self.reference_data = reference_data.groupby([ASSAY, COMPOUND])[ACT].mean()
 
     def __call__(self, prediction_data: pd.DataFrame) -> float:
@@ -39,35 +45,17 @@ class AssayRankAccuracy:
 
             if len(scores) > 1 and reference.nunique() > 1:
                 try:
-                    corr = spearmanr(
-                        scores["prediction"].values, reference.values
-                    ).statistic
+                    prediction = scores["prediction"].values
+                    ground_truth = reference.values
+                    corr = self.rank_statistic(prediction, ground_truth).statistic
                 except ValueError:
-                    logger.warning(f"inconsistent predictions for assay {assay}")
+                    logger.warning(f"rank correlation failed (assay={assay})")
+                    continue
+                if np.isnan(corr):
+                    logger.warning(f"rank correlation is nan (assay={assay})")
                     continue
                 corr_sum += len(scores) * corr
                 count += len(scores)
-
-        return corr_sum / count if count > 0 else np.nan
-
-
-def rank_corr(prediction_data: pd.DataFrame) -> float:
-    overall_tau = 0
-    total_weight = 0
-    for _, group in prediction_data.groupby(ASSAY):
-        if group["target"].nunique() == 1 or group["prediction"].nunique() == 1:
-            continue
-        assay_weight = binom(len(group), 2)
-        tau = kendalltau(
-            group["prediction"], group["target"], nan_policy="raise", variant="c"
-        ).statistic
-        if np.isnan(tau):
-            continue
-        total_weight += assay_weight
-        overall_tau += assay_weight * tau
-    overall_tau /= total_weight
-
-    return overall_tau
 
 
 def train_epoch(model, loader, optimizer, criterion=nn.MSELoss()):

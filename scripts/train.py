@@ -2,11 +2,13 @@ import logging
 import uuid
 import sys
 import random
+from functools import partial
 
 import numpy as np
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from sklearn.preprocessing import StandardScaler
 import torch
+from scipy.stats import kendalltau
 
 from dti.model import (
     CombinedModel,
@@ -117,7 +119,8 @@ def main():
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-        assay_rank = AssayRankAccuracy(data, method == "pair")
+        rstat = partial(kendalltau, nan_policy="omit", variant="c")
+        assay_rank = AssayRankAccuracy(data, method == "pair", rank_statistic=rstat)
 
         train_and_evaluate_model(
             model_cls,
