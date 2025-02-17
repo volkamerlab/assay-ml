@@ -133,6 +133,8 @@ def run_split(
         embedding_size=512,
         num_epochs=num_epochs,
         cosine_agg=True,
+        patience_termination=1000 if method == "pair" else 100,
+        patience_lr=100 if method == "pair" else 10,
     )
 
     logger.info(f"{run_name} finished")
