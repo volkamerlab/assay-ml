@@ -57,12 +57,12 @@ def _process_target_group_from_file(args):
 
 
 def parallel_hodge_rank(
-    kinodata: pd.DataFrame, inter_assay_weight: float = 0, scale_scores: bool = False
+    data: pd.DataFrame, inter_assay_weight: float = 0, scale_scores: bool = False
 ) -> pd.DataFrame:
     logger.info(f"compute Hodge ranking (inter_assay_weight={inter_assay_weight})")
     all_scores = list()
 
-    groups = list(kinodata.groupby(TID))
+    groups = list(data.groupby(TID)) if TID in data.columns else data
 
     args = []
     for i, (_, tgt_data) in enumerate(groups):
