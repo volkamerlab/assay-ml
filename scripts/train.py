@@ -157,7 +157,7 @@ def main():
     method = sys.argv[3]
     fold = int(sys.argv[4])
 
-    run_name = f"{dataset_name}_{method}_{fold}_" + uuid.uuid4().hex[:4]
+    run_name = f"{dataset_name}_{fold}_{method}_" + uuid.uuid4().hex[:4]
     init_logging(run_name)
     logger = logging.getLogger(run_name)
     logger.info(f"seed={seed} method={method} dataset={dataset_name} fold={fold}")
