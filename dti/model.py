@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 class MolecularModel(nn.Module):
-    def __init__(self, ligand_input_size, embedding_size, **kwargs):
+    def __init__(self, ligand_input_size: int, embedding_size: int, **kwargs):
         super().__init__()
 
         self.molecule_input_size = ligand_input_size
@@ -42,7 +42,7 @@ class MolecularModel(nn.Module):
 
 
 class PairMolecularModel(MolecularModel):
-    def __init__(self, ligand_input_size, embedding_size, **kwargs):
+    def __init__(self, ligand_input_size: int, embedding_size: int, **kwargs):
         super().__init__(ligand_input_size, embedding_size, **kwargs)
 
     def forward(self, _protein, molecule: Tensor):
@@ -60,11 +60,11 @@ class PairMolecularModel(MolecularModel):
 class CombinedModel(nn.Module):
     def __init__(
         self,
-        protein_input_size,
-        ligand_input_size,
-        embedding_size,
-        hidden_layer_size=512,
-        cosine_agg=False,
+        protein_input_size: int,
+        ligand_input_size: int,
+        embedding_size: int,
+        hidden_layer_size: int = 512,
+        cosine_agg: bool = False,
     ):
         super().__init__()
 
@@ -123,32 +123,36 @@ class CombinedModel(nn.Module):
 class PairCombinedModel(CombinedModel):
     def __init__(
         self,
-        protein_input_size,
-        ligand_input_size,
-        embedding_size,
-        hidden_layer_size=512,
-        cosine_agg=False,
+        protein_input_size: int,
+        ligand_input_size: int,
+        embedding_size: int,
+        hidden_layer_size: int = 512,
+        cosine_agg: bool = False,
     ):
         super().__init__(
             protein_input_size,
             ligand_input_size,
             embedding_size,
-            hidden_layer_size=512,
+            hidden_layer_size=hidden_layer_size,
             cosine_agg=False,
         )
 
     def forward(self, protein, ligand):
-        protein_emb = self.protein_mlp(protein)
-        x = self.ligand_mlp(ligand)
-        if x.dim() == 2:  # all pairs
-            x = protein_emb * x
+        x_prot = self.protein_mlp(protein)
+        x_lig = self.ligand_mlp(ligand)
+        assert (
+            x_prot.size() == x_lig.size()
+        ), "Expected same size for protein and ligand embeddings"
+        if x_lig.dim() == 2:  # all pairs
+            x_lig = x_prot * x_lig
             n, d = ligand.size(0), self.embedding_size
-            diff_a = (x.view(n, 1, d) - x.view(1, n, d)).reshape(-1, d)  # (b, b, d)
-            diff_b = (x.view(1, n, d) - x.view(n, 1, d)).reshape(-1, d)  # (b, b, d)
-        elif x.dim() == 3:  # pre-defined pairs (k, 2, d)
-            x = x * protein_emb.unsqueeze(1)
-            xa = protein_emb * x[:, 0, :]
-            xb = protein_emb * x[:, 1, :]
+            # (b, b, d)
+            diff_a = (x_lig.view(n, 1, d) - x_lig.view(1, n, d)).reshape(-1, d)
+            diff_b = (x_lig.view(1, n, d) - x_lig.view(n, 1, d)).reshape(-1, d)
+        elif x_lig.dim() == 3:  # pre-defined pairs (k, 2, d)
+            x_lig = x_lig * x_prot.unsqueeze(1)
+            xa = x_prot * x_lig[:, 0, :]
+            xb = x_prot * x_lig[:, 1, :]
             diff_a = xa - xb
             diff_b = xb - xa
         else:
