@@ -3,7 +3,7 @@ import uuid
 import sys
 import random
 from functools import partial
-from typing import Tuple
+from typing import Tuple, Callable
 
 import numpy as np
 import pandas as pd
@@ -58,19 +58,19 @@ def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type, type]:
             sys.exit(1)
 
 
-def setup(method: str, dataset: str) -> Tuple[type, type, type, pd.DataFrame]:
+def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
     match dataset:
         case "kinodata":
-            data = load_kinodata()
+            data = load_kinodata
             model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, False)
         case "landrum":
-            data = load_landrum()
+            data = load_landrum
             model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, False)
         case "large_landrum":
-            data = load_landrum(DATA / "raw" / "landrum_large.csv")
+            data = partial(load_landrum, DATA / "raw" / "landrum_large.csv")
             model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, False)
         case "atcc":
-            data = load_atcc()
+            data = load_atcc
             model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, True)
         case _:
             logger.error(f"Unknown dataset: {dataset}")
@@ -80,21 +80,20 @@ def setup(method: str, dataset: str) -> Tuple[type, type, type, pd.DataFrame]:
 
 
 def run_split(
+    run_name: str,
     method: str,
-    dataset: str,
+    dataset_name: str,
     fold: int,
     seed: int,
-    run_name: str,
-    model_cls: type,
-    dataset_cls: type,
-    val_dataset_cls: type,
-    data: pd.DataFrame,
 ):
     batch_size = 512
     num_epochs = 50_000  # early stopping in place
     info_cols = [COMPOUND, ASSAY]
-    data_dir = DATA / "processed" / dataset
+    data_dir = DATA / "processed" / dataset_name
     tgt_name = "scaled_ic50"
+
+    model_cls, dataset_cls, val_dataset_cls, load_data = setup(method, dataset_name)
+    data = load_data()
 
     if not (data_dir / f"{fold}").exists():
         prepare_datasets(data, data_dir, tgt_name, 5, random_valset=False)
@@ -154,30 +153,19 @@ def run_split(
 
 def main():
     seed = int(sys.argv[1])
-    dataset = sys.argv[2]
+    dataset_name = sys.argv[2]
     method = sys.argv[3]
     fold = int(sys.argv[4])
 
-    run_name = f"{dataset}_{method}_{fold}_" + uuid.uuid4().hex[:4]
+    run_name = f"{dataset_name}_{method}_{fold}_" + uuid.uuid4().hex[:4]
     init_logging(run_name)
     logger = logging.getLogger(run_name)
-    logger.info(f"seed={seed} method={method} dataset={dataset} fold={fold}")
+    logger.info(f"seed={seed} method={method} dataset={dataset_name} fold={fold}")
 
     set_random_seeds(seed)
-    model_cls, dataset_cls, val_dataset_cls, data = setup(method, dataset)
     write_header(run_name)
 
-    run_split(
-        method,
-        dataset,
-        fold,
-        seed,
-        run_name,
-        model_cls,
-        dataset_cls,
-        val_dataset_cls,
-        data,
-    )
+    run_split(run_name, method, dataset_name, fold, seed)
 
 
 if __name__ == "__main__":

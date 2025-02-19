@@ -198,6 +198,7 @@ def train_and_evaluate_model(
             f"[{run_name}] Epoch: {epoch + 1} "
             f"Fold: {index} "
             f"Train Loss: {train_loss:.4f} "
+            f"Val Loss: {val_loss:.4f} "
             f"Val Rank Corr: {val_rank_corr:.4f}"
         )
 
