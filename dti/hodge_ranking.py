@@ -62,10 +62,10 @@ def parallel_hodge_rank(
     logger.info(f"compute Hodge ranking (inter_assay_weight={inter_assay_weight})")
     all_scores = list()
 
-    groups = list(data.groupby(TID)) if TID in data.columns else data
+    groups = [g for _, g in data.groupby(TID)] if TID in data.columns else [data]
 
     args = []
-    for i, (_, tgt_data) in enumerate(groups):
+    for tgt_data in groups:
         with tempfile.NamedTemporaryFile(delete_on_close=False, delete=False) as fp:
             tgt_data.to_csv(fp, index=False)
         args.append((fp.name, inter_assay_weight, scale_scores))
