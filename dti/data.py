@@ -72,7 +72,7 @@ def extract_embeddings(
             out = model(toks, repr_layers=repr_layers, return_contacts=False)
 
             representations = {
-                layer: t.to(device="cpu") for layer, t in out["representations"].items()
+                layer: t.to(device) for layer, t in out["representations"].items()
             }
 
             for i, label in enumerate(labels):
@@ -95,6 +95,8 @@ def load_kinodata(
     data = pd.read_csv(kinodata_path, index_col=0)
     data = data[data["activities.standard_type"].isin(activity_types)]
     data = data[~data["compound_structures.canonical_smiles"].isna()]
+
+    # strip CHEMBL prefixes
     data[ASSAY] = data["assays.chembl_id"].str[6:].astype(int)
     data[COMPOUND] = data["molecule_dictionary.chembl_id"].str[6:].astype(int)
     return data.rename(
@@ -177,11 +179,12 @@ class ActivityDataset(Dataset):
         target: str = ACT,
         info_cols: List[str] = [],
         model_name: str = "esm2_t33_650M_UR50D",
+        n_jobs: int = 16,
     ):
         super().__init__()
         logger.info(f"creating dataset of size {len(data)}")
         logger.info("computing fingerprints")
-        with Pool(16) as p:
+        with Pool(n_jobs) as p:
             fps = p.map(compute_fp, data[SMILES].values)
         mask = [fp is not None for fp in fps]
         if len(mask) - sum(mask) > 0:
@@ -236,10 +239,13 @@ class ActivityDataset(Dataset):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        return (
+        prot_feats = (
             torch.ones(1)
             if self.protein_features is None
-            else self.protein_features[idx],
+            else self.protein_features[idx]
+        )
+        return (
+            prot_feats,
             self.ligand_features[idx],
             self.labels[idx],
             self.info[idx],
@@ -277,10 +283,11 @@ class PairDataset(ActivityDataset):
 
     def __getitem__(self, idx):
         i, j = self.pairs[idx]
+        prot_feats = (
+            torch.ones(1) if self.protein_features is None else self.protein_features[i]
+        )
         return (
-            torch.ones(1)
-            if self.protein_features is None
-            else self.protein_features[i],
+            prot_feats,
             torch.stack([self.ligand_features[i], self.ligand_features[j]]),
             self.labels[i] - self.labels[j],
             torch.cat([self.info[i], self.info[j]]),
@@ -379,5 +386,3 @@ def prepare_datasets(
     """Prepare train, validation, and test datasets."""
     data = aggregate_multi_measurements(data)
     split_data(data, data_dir, k=k, random_valset=random_valset)
-    for index in range(k):
-        yield tuple([index] + list(load_split(index, data_dir)))

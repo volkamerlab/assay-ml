@@ -99,7 +99,7 @@ def run_split(
     if not (data_dir / f"{fold}").exists():
         prepare_datasets(data, data_dir, tgt_name, 5, random_valset=False)
 
-    train_data, val_data, test_data = toad_split(fold, data_dir, tgt_name)
+    train_data, val_data, test_data = load_split(fold, data_dir, tgt_name)
     val_dataset = val_dataset_cls(val_data, target=tgt_name, info_cols=info_cols)
     test_dataset = val_dataset_cls(test_data, target=tgt_name, info_cols=info_cols)
 
