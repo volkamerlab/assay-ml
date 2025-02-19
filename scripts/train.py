@@ -121,7 +121,7 @@ def run_split(
     )
     # 23 ** 2 ~ 512
     train_batch = 23 if method == "pair_all" else batch_size
-    train_loader = DataLoader(train_dataset, batch_size=train_batch, sampler=sampler)
+    train_loader = DataLoader(train_dataset, batch_size=train_batch, sampler=sampler, drop_last=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
