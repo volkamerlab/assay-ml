@@ -15,42 +15,62 @@ requirements = UidDomain == "cs.uni-saarland.de"
 queue fold, script, seed, dataset, method from (
     0, scripts/train.py, 0, atcc, ic50
     0, scripts/train.py, 0, atcc, pair
+    0, scripts/train.py, 0, atcc, pair_all
     0, scripts/train.py, 0, kinodata, ic50
     0, scripts/train.py, 0, kinodata, pair
+    0, scripts/train.py, 0, kinodata, pair_all
     0, scripts/train.py, 0, landrum, ic50
     0, scripts/train.py, 0, landrum, pair
+    0, scripts/train.py, 0, landrum, pair_all
     0, scripts/train.py, 0, large_landrum, ic50
     0, scripts/train.py, 0, large_landrum, pair
+    0, scripts/train.py, 0, large_landrum, pair_all
     1, scripts/train.py, 0, atcc, ic50
     1, scripts/train.py, 0, atcc, pair
+    1, scripts/train.py, 0, atcc, pair_all
     1, scripts/train.py, 0, kinodata, ic50
     1, scripts/train.py, 0, kinodata, pair
+    1, scripts/train.py, 0, kinodata, pair_all
     1, scripts/train.py, 0, landrum, ic50
     1, scripts/train.py, 0, landrum, pair
+    1, scripts/train.py, 0, landrum, pair_all
     1, scripts/train.py, 0, large_landrum, ic50
     1, scripts/train.py, 0, large_landrum, pair
+    1, scripts/train.py, 0, large_landrum, pair_all
     2, scripts/train.py, 0, atcc, ic50
     2, scripts/train.py, 0, atcc, pair
+    2, scripts/train.py, 0, atcc, pair_all
     2, scripts/train.py, 0, kinodata, ic50
     2, scripts/train.py, 0, kinodata, pair
+    2, scripts/train.py, 0, kinodata, pair_all
     2, scripts/train.py, 0, landrum, ic50
     2, scripts/train.py, 0, landrum, pair
+    2, scripts/train.py, 0, landrum, pair_all
     2, scripts/train.py, 0, large_landrum, ic50
     2, scripts/train.py, 0, large_landrum, pair
+    2, scripts/train.py, 0, large_landrum, pair_all
     3, scripts/train.py, 0, atcc, ic50
     3, scripts/train.py, 0, atcc, pair
+    3, scripts/train.py, 0, atcc, pair_all
     3, scripts/train.py, 0, kinodata, ic50
     3, scripts/train.py, 0, kinodata, pair
+    3, scripts/train.py, 0, kinodata, pair_all
     3, scripts/train.py, 0, landrum, ic50
     3, scripts/train.py, 0, landrum, pair
+    3, scripts/train.py, 0, landrum, pair_all
     3, scripts/train.py, 0, large_landrum, ic50
     3, scripts/train.py, 0, large_landrum, pair
+    3, scripts/train.py, 0, large_landrum, pair_all
     4, scripts/train.py, 0, atcc, ic50
     4, scripts/train.py, 0, atcc, pair
+    4, scripts/train.py, 0, atcc, pair_all
     4, scripts/train.py, 0, kinodata, ic50
     4, scripts/train.py, 0, kinodata, pair
+    4, scripts/train.py, 0, kinodata, pair_all
     4, scripts/train.py, 0, landrum, ic50
     4, scripts/train.py, 0, landrum, pair
+    4, scripts/train.py, 0, landrum, pair_all
     4, scripts/train.py, 0, large_landrum, ic50
     4, scripts/train.py, 0, large_landrum, pair
+    4, scripts/train.py, 0, large_landrum, pair_all
 )
