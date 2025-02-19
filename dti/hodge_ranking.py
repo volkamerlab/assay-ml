@@ -66,7 +66,7 @@ def parallel_hodge_rank(
 
     args = []
     for tgt_data in groups:
-        with tempfile.NamedTemporaryFile(delete_on_close=False, delete=False) as fp:
+        with tempfile.NamedTemporaryFile(delete=False) as fp:
             tgt_data.to_csv(fp, index=False)
         args.append((fp.name, inter_assay_weight, scale_scores))
 

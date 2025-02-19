@@ -139,7 +139,7 @@ def run_split(
     assay_rank = AssayRankAccuracy(
         data, method in ["pair", "pair_all"], rank_statistic=rstat
     )
-    training_loss = batch_pair_loss if method == "pair_all" else nn.MSELoss()
+    training_loss = batch_pair_loss if method == "pair_all" else nn.HuberLoss()
 
     train_and_evaluate_model(
         model_cls,
