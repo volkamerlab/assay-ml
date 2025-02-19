@@ -354,15 +354,16 @@ def load_split(
     val_data = normalize_activity(val_data, tgt_name, scaler)
 
     if inter_assay_weight is not None:
-        hodge_file = (
-            split_dir / f"train_hodge_no_assay_norm_lam{inter_assay_weight:.2f}.csv"
-        )
+        hodge_file = split_dir / f"train_hodge_lam{inter_assay_weight:.2f}.csv"
         if not hodge_file.exists():
             logger.info("computing Hodge ranking")
             hodge_df = parallel_hodge_rank(train_data, inter_assay_weight)
+            merge_keys = [SMILES]
+            if TID in train_data:
+                merge_keys.append(TID)
             train_data = train_data.merge(
                 hodge_df,
-                on=["compound_structures.canonical_smiles", "UniprotID"],
+                on=merge_keys,
                 how="inner",
             )
             train_data.to_csv(hodge_file)
@@ -376,13 +377,14 @@ def load_split(
 def prepare_datasets(
     data: pd.DataFrame,
     data_dir: Path,
-    tgt_name: str,
     k: int,
     inter_assay_weight: Union[float, None] = None,
     random_valset: bool = False,
+    aggregate: bool = True,
 ) -> Iterator[
     Tuple[int, pd.DataFrame, Union[pd.DataFrame, None], pd.DataFrame, pd.DataFrame]
 ]:
     """Prepare train, validation, and test datasets."""
-    data = aggregate_multi_measurements(data)
+    if aggregate:
+        data = aggregate_multi_measurements(data)
     split_data(data, data_dir, k=k, random_valset=random_valset)

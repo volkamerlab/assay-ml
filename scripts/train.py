@@ -6,12 +6,11 @@ from functools import partial
 from typing import Tuple, Callable
 
 import numpy as np
-import pandas as pd
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from sklearn.preprocessing import StandardScaler
-from scipy.stats import kendalltau, spearmanr
+from scipy.stats import kendalltau
 
 from dti.model import (
     CombinedModel,
@@ -40,6 +39,8 @@ logger = logging.getLogger(__name__)
 
 
 def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type, type]:
+    if method == "hodge":
+        method = "ic50"
     match method:
         case "pair" if mol_only:
             return PairMolecularModel, PairDataset, PairDataset
@@ -90,15 +91,20 @@ def run_split(
     num_epochs = 50_000  # early stopping in place
     info_cols = [COMPOUND, ASSAY]
     data_dir = DATA / "processed" / dataset_name
-    tgt_name = "scaled_ic50"
+    tgt_name = "hodge_score" if method == "hodge" else "scaled_ic50"
 
     model_cls, dataset_cls, val_dataset_cls, load_data = setup(method, dataset_name)
     data = load_data()
 
     if not (data_dir / f"{fold}").exists():
-        prepare_datasets(data, data_dir, tgt_name, 5, random_valset=False)
+        prepare_datasets(
+            data, data_dir, 5, random_valset=False, aggregate=method == "hodge"
+        )
 
-    train_data, val_data, test_data = load_split(fold, data_dir, tgt_name)
+    inter_assay_weight = 0.0 if method == "hodge" else None
+    train_data, val_data, test_data = load_split(
+        fold, data_dir, tgt_name, inter_assay_weight=inter_assay_weight
+    )
     val_dataset = val_dataset_cls(val_data, target=tgt_name, info_cols=info_cols)
     test_dataset = val_dataset_cls(test_data, target=tgt_name, info_cols=info_cols)
 
@@ -106,6 +112,8 @@ def run_split(
     train_data[tgt_name] = scaler.fit_transform(
         train_data[tgt_name].values.reshape(-1, 1)
     )
+    train_tgt = tgt_name if method != "hodge" else "hodge_score"
+    logger.info(f"training target: {train_tgt}")
     train_dataset = dataset_cls(train_data, target=tgt_name, info_cols=info_cols)
 
     def seed_worker(worker_id):
@@ -121,7 +129,9 @@ def run_split(
     )
     # 23 ** 2 ~ 512
     train_batch = 23 if method == "pair_all" else batch_size
-    train_loader = DataLoader(train_dataset, batch_size=train_batch, sampler=sampler, drop_last=True)
+    train_loader = DataLoader(
+        train_dataset, batch_size=train_batch, sampler=sampler, drop_last=True
+    )
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 

@@ -1,27 +1,25 @@
+import tempfile
 from concurrent.futures import ProcessPoolExecutor
 from collections import namedtuple
-import uuid
 
 import tqdm
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
-from .constants import DATA, ACT, SMILES, TID, ASSAY, COMPOUND
+from .constants import ACT, SMILES, TID, ASSAY, COMPOUND
 
 import logging
 
 logger = logging.getLogger(__name__)
 
-__all_scores = list()
-
-HodgeRank = namedtuple("HodgeRank", "TID smiles hodge_score".split())
+HodgeRank = namedtuple("HodgeRank", [TID, SMILES, "hodge_screen"])
 
 
 def _process_target_group_from_file(args):
     input_file, inter_assay_weight, scale_scores = args
     group_data: pd.DataFrame = pd.read_csv(input_file)
-    target = group_data[TID].iloc[0]
+    target = group_data[TID].iloc[0] if TID in group_data.columns else None
 
     if inter_assay_weight == 0:
         group_data = group_data[group_data.groupby(ASSAY)[ASSAY].transform("count") > 1]
@@ -60,21 +58,17 @@ def _process_target_group_from_file(args):
 
 def parallel_hodge_rank(
     kinodata: pd.DataFrame, inter_assay_weight: float = 0, scale_scores: bool = False
-):
+) -> pd.DataFrame:
     logger.info(f"compute Hodge ranking (inter_assay_weight={inter_assay_weight})")
-    global __all_scores
-    __all_scores = list()
+    all_scores = list()
 
     groups = list(kinodata.groupby(TID))
 
-    temp_dir = DATA / "hodge_temp_data" / uuid.uuid4().hex
-    temp_dir.mkdir(exist_ok=True, parents=True)
-
     args = []
     for i, (_, tgt_data) in enumerate(groups):
-        file_path = temp_dir / f"group_{i}.csv"
-        tgt_data.to_csv(file_path, index=False)
-        args.append((file_path, inter_assay_weight, scale_scores))
+        with tempfile.NamedTemporaryFile(delete_on_close=False, delete=False) as fp:
+            tgt_data.to_csv(fp, index=False)
+        args.append((fp.name, inter_assay_weight, scale_scores))
 
     with ProcessPoolExecutor(max_workers=32) as executor:
         results = list(
@@ -85,9 +79,9 @@ def parallel_hodge_rank(
         )
 
     for result in results:
-        __all_scores.extend(result)
+        all_scores.extend(result)
 
-    hodge_df = pd.DataFrame(__all_scores)
+    hodge_df = pd.DataFrame(all_scores)
     hodge_df = hodge_df.rename(columns={"smiles": SMILES})
 
     return hodge_df
