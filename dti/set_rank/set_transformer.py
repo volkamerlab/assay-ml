@@ -96,7 +96,7 @@ class InducedSetAttentionBlock(Module):
         return self.query_seed_attention(x, h)
 
 
-class SetTransfomer(Module):
+class SetTransformer(Module):
     def __init__(
         self,
         hidden_channels: int,
@@ -152,7 +152,7 @@ class SetTransfomer(Module):
         return activations[-1]
 
 
-class SelfConditionedSetTransformer(SetTransfomer):
+class SelfConditionedSetTransformer(SetTransformer):
     def _readout_ffn(self) -> Module:
         return Sequential(
             Linear(self.hidden_channels, self.hidden_channels // 2),
