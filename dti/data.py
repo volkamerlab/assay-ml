@@ -60,24 +60,26 @@ class ActivityDataset(Dataset):
 
         logger.info(f"computing protein features: {model_name}")
         done = []
-        fasta_file = DATA / "data.fasta"
-        if not fasta_file.exists():
-            with open(fasta_file, "w") as f:
-                for _, row in data.iterrows():
-                    uniprot = row["TID"]
-                    if uniprot in done:
-                        continue
-                    f.write(f">{uniprot}\n{row[SEQUENCE]}\n")
-                    done.append(uniprot)
-
         output_dir = DATA / model_name
         output_dir.mkdir(exist_ok=True)
+        emb_dir = lambda uniprot_id: output_dir / f"{uniprot_id}.pt"
+        fasta_file = DATA / "data.fasta"
+        with open(fasta_file, "w") as f:
+            for _, row in data.iterrows():
+                uniprot = row[TID]
+                if emb_dir(uniprot).exists():
+                    continue
+                if uniprot in done:
+                    continue
+                f.write(f">{uniprot}\n{row[SEQUENCE]}\n")
+                done.append(uniprot)
+
         extract_embeddings(model_name, fasta_file, output_dir)
 
         @functools.cache
         def load_esm(uniprot_id: str) -> torch.Tensor:
-            emb_path = output_dir / f"{uniprot_id}.pt"
-            return torch.load(emb_path, weights_only=False)["representation"][33]
+            emb = torch.load(emb_dir(uniprot_id), weights_only=False)
+            return emb["representation"][33].to(device)
 
         return torch.stack([load_esm(uniprot_id) for uniprot_id in data[TID]])
 

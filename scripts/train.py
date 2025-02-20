@@ -174,8 +174,8 @@ def run_split(
         num_epochs=num_epochs,
         cosine_agg=True,
         training_loss=training_loss,
-        patience_termination=100 if train_short else 1000,
-        patience_lr=10 if train_short else 100,
+        patience_termination=500 if train_short else 1000,
+        patience_lr=50 if train_short else 100,
     )
 
     logger.info(f"{run_name} finished")
