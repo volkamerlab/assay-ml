@@ -39,8 +39,6 @@ logger = logging.getLogger(__name__)
 
 
 def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type, type]:
-    if method == "hodge":
-        method = "ic50"
     match method:
         case "pair" if mol_only:
             return PairMolecularModel, PairDataset, PairDataset
@@ -159,8 +157,8 @@ def run_split(
         num_epochs=num_epochs,
         cosine_agg=True,
         training_loss=training_loss,
-        patience_termination=100 if train_short else 1000,
-        patience_lr=10 if train_short else 100,
+        patience_termination=500 if train_short else 1000,
+        patience_lr=50 if train_short else 100,
     )
 
     logger.info(f"{run_name} finished")
