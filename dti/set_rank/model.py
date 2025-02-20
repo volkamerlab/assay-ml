@@ -59,8 +59,8 @@ class SetRankModel(Module):
         Returns:
             Tensor: unnormalized ranking scores (N, 1)
         """
-        x_ligand = self.embed_ligand(ligand)
-        x_protein = self.embed_protein(protein)
+        x_ligand = self.embed_ligand(ligand.squeeze())
+        x_protein = self.embed_protein(protein.squeeze())
         x = self.combine_with_query(x_ligand, x_protein)
         h = self.set_transformer(x)
-        return self.ouput(h)
+        return self.ouput(h).squeeze()

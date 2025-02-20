@@ -81,7 +81,7 @@ def train_epoch(model, loader, optimizer, criterion=nn.MSELoss()):
         protein_features, ligand_features, labels = (
             protein_features.to(device),
             ligand_features.to(device),
-            labels.to(device),
+            labels.to(device).squeeze(),
         )
 
         optimizer.zero_grad()
@@ -117,7 +117,7 @@ def evaluate_epoch(
         protein_features, ligand_features, labels = (
             protein_features.to(device),
             ligand_features.to(device),
-            labels.to(device),
+            labels.to(device).squeeze(),
         )
 
         predictions = model(protein_features, ligand_features).squeeze()
