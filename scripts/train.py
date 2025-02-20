@@ -44,15 +44,15 @@ def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type, type]:
     match method:
         case "pair" if mol_only:
             return PairMolecularModel, PairDataset, PairDataset
-        case "pair_all" if mol_only:
-            return PairMolecularModel, ActivityDataset, PairDataset
-        case "ic50" if mol_only:
-            return MolecularModel, ActivityDataset, ActivityDataset
         case "pair":
             return PairCombinedModel, PairDataset, PairDataset
+        case "pair_all" if mol_only:
+            return PairMolecularModel, ActivityDataset, PairDataset
         case "pair_all":
             return PairCombinedModel, ActivityDataset, PairDataset
-        case "ic50":
+        case "hodge" | "ic50" if mol_only:
+            return MolecularModel, ActivityDataset, ActivityDataset
+        case "hodge" | "ic50":
             return CombinedModel, ActivityDataset, ActivityDataset
         case _:
             logger.error(f"Unknown method: {method}")
@@ -139,7 +139,12 @@ def run_split(
     assay_rank = AssayRankAccuracy(
         data, method in ["pair", "pair_all"], rank_statistic=rstat
     )
-    training_loss = batch_pair_loss if method == "pair_all" else nn.HuberLoss()
+    training_loss = (
+        partial(batch_pair_loss, criterion=nn.HuberLoss())
+        if method == "pair_all"
+        else nn.HuberLoss()
+    )
+    train_short = method in ["pair", "pair_all"]
 
     train_and_evaluate_model(
         model_cls,
@@ -154,8 +159,8 @@ def run_split(
         num_epochs=num_epochs,
         cosine_agg=True,
         training_loss=training_loss,
-        patience_termination=1000 if method == "pair" else 100,
-        patience_lr=100 if method == "pair" else 10,
+        patience_termination=100 if train_short else 1000,
+        patience_lr=10 if train_short else 100,
     )
 
     logger.info(f"{run_name} finished")
