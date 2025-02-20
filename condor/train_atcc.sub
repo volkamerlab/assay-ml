@@ -1,0 +1,36 @@
+universe = docker
+docker_image = gjoschka/kinodata3d-b0:2.3.0-cuda12.1
+executable = run_training.sh
+arguments = $(script) $(seed) $(dataset) $(method) $(fold)
+output = logs/train_dti.$(ClusterId).$(ProcId).out
+error = logs/train_dti.$(ClusterId).$(ProcId).err
+log = logs/train_dti.$(ClusterId).$(ProcId).log
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT
+request_GPUs = 1
+request_CPUs = 16
+request_memory = 64G
+requirements = UidDomain == "cs.uni-saarland.de"
++WantGPUHomeMounted = true
+queue fold, script, seed, dataset, method from (
+    0, scripts/train.py, 0, atcc, ic50
+    0, scripts/train.py, 0, atcc, pair
+    0, scripts/train.py, 0, atcc, pair_all
+    0, scripts/train.py, 0, atcc, hodge
+    1, scripts/train.py, 0, atcc, ic50
+    1, scripts/train.py, 0, atcc, pair
+    1, scripts/train.py, 0, atcc, pair_all
+    1, scripts/train.py, 0, atcc, hodge
+    2, scripts/train.py, 0, atcc, ic50
+    2, scripts/train.py, 0, atcc, pair
+    2, scripts/train.py, 0, atcc, pair_all
+    2, scripts/train.py, 0, atcc, hodge
+    3, scripts/train.py, 0, atcc, ic50
+    3, scripts/train.py, 0, atcc, pair
+    3, scripts/train.py, 0, atcc, pair_all
+    3, scripts/train.py, 0, atcc, hodge
+    4, scripts/train.py, 0, atcc, ic50
+    4, scripts/train.py, 0, atcc, pair
+    4, scripts/train.py, 0, atcc, pair_all
+    4, scripts/train.py, 0, atcc, hodge
+)
