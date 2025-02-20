@@ -203,8 +203,8 @@ class ActivityDataset(Dataset):
         self.info = torch.tensor(self.data[info_cols].values)
 
     def _compute_protein_features(self, data: pd.DataFrame, model_name: str):
-        if TID not in data.columns:
-            logger.info("no protein target in dataset")
+        if TID not in data.columns or data[TID].isna().any():
+            logger.info("missing protein target in dataset")
             return None
 
         logger.info(f"computing protein features: {model_name}")
