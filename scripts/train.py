@@ -62,21 +62,21 @@ def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type, type]:
 def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
     match dataset:
         case "kinodata":
-            data = load_kinodata
-            model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, False)
+            data, mol_only = load_kinodata, False
         case "landrum":
-            data = load_landrum
-            model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, False)
+            data, mol_only = load_landrum, False
         case "large_landrum":
-            data = partial(load_landrum, DATA / "raw" / "landrum_large.csv")
-            model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, False)
+            data_path = DATA / "raw" / "landrum_large.csv"
+            data, mol_only = partial(load_landrum, data_path), False
+        case "omnivore":
+            data, mol_only = partial(load_landrum, DATA / "raw" / "omnivore.csv"), False
         case "atcc":
-            data = load_atcc
-            model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, True)
+            data, mol_only = load_atcc, True
         case _:
             logger.error(f"Unknown dataset: {dataset}")
             sys.exit(1)
 
+    model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, mol_only)
     return model_cls, dataset_cls, val_dataset_cls, data
 
 
