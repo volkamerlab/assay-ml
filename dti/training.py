@@ -168,9 +168,9 @@ def train_and_evaluate_model(
         | kwargs
     )
 
-    logger.info('training options:')
+    logger.info("training options:")
     for k, v in opts.items():
-        logger.info(f' - {k}={v}')
+        logger.info(f" - {k}={v}")
 
     model = model_cls(
         ligand_input_size=opts["ligand_dim"],

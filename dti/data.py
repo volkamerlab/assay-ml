@@ -65,7 +65,7 @@ def extract_embeddings(
 
     with torch.no_grad():
         for _, (labels, strs, toks) in tqdm.tqdm(
-            enumerate(data_loader), total=len(batches)
+            enumerate(data_loader), total=len(batches), desc="embeddings..."
         ):
             toks = toks.to(device, non_blocking=True)
 
@@ -209,23 +209,25 @@ class ActivityDataset(Dataset):
 
         logger.info(f"computing protein features: {model_name}")
         done = []
-        fasta_file = DATA / "data.fasta"
-        if not fasta_file.exists():
-            with open(fasta_file, "w") as f:
-                for _, row in data.iterrows():
-                    uniprot = row["TID"]
-                    if uniprot in done:
-                        continue
-                    f.write(f">{uniprot}\n{row[SEQUENCE]}\n")
-                    done.append(uniprot)
-
         output_dir = DATA / model_name
         output_dir.mkdir(exist_ok=True)
+        emb_dir = lambda uniprot_id: output_dir / f"{uniprot_id}.pt"
+        fasta_file = DATA / "data.fasta"
+        with open(fasta_file, "w") as f:
+            for _, row in data.iterrows():
+                uniprot = row[TID]
+                if emb_dir(uniprot).exists():
+                    continue
+                if uniprot in done:
+                    continue
+                f.write(f">{uniprot}\n{row[SEQUENCE]}\n")
+                done.append(uniprot)
+
         extract_embeddings(model_name, fasta_file, output_dir)
 
         @functools.cache
         def load_esm(uniprot_id: str) -> torch.Tensor:
-            return torch.load(output_dir / f"{uniprot_id}.pt", weights_only=False)[
+            return torch.load(emb_dir(uniprot_id), weights_only=False)[
                 "representation"
             ][33]
 
