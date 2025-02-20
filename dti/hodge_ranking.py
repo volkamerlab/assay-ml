@@ -1,27 +1,25 @@
+import tempfile
 from concurrent.futures import ProcessPoolExecutor
 from collections import namedtuple
-import uuid
 
 import tqdm
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
-from .constants import DATA, ACT, SMILES, TID, ASSAY
+from .constants import ACT, SMILES, TID, ASSAY, COMPOUND
 
 import logging
 
 logger = logging.getLogger(__name__)
 
-__all_scores = list()
-
-HodgeRank = namedtuple("HodgeRank", "TID smiles hodge_score".split())
+HodgeRank = namedtuple("HodgeRank", [TID, SMILES, "hodge_screen"])
 
 
 def _process_target_group_from_file(args):
     input_file, inter_assay_weight, scale_scores = args
     group_data: pd.DataFrame = pd.read_csv(input_file)
-    target = group_data[TID].iloc[0]
+    target = group_data[TID].iloc[0] if TID in group_data.columns else None
 
     if inter_assay_weight == 0:
         group_data = group_data[group_data.groupby(ASSAY)[ASSAY].transform("count") > 1]
@@ -59,22 +57,18 @@ def _process_target_group_from_file(args):
 
 
 def parallel_hodge_rank(
-    kinodata: pd.DataFrame, inter_assay_weight: float = 0, scale_scores: bool = False
-):
+    data: pd.DataFrame, inter_assay_weight: float = 0, scale_scores: bool = False
+) -> pd.DataFrame:
     logger.info(f"compute Hodge ranking (inter_assay_weight={inter_assay_weight})")
-    global __all_scores
-    __all_scores = list()
+    all_scores = list()
 
-    groups = list(kinodata.groupby(TID))
-
-    temp_dir = DATA / "hodge_temp_data" / uuid.uuid4().hex
-    temp_dir.mkdir(exist_ok=True, parents=True)
+    groups = [g for _, g in data.groupby(TID)] if TID in data.columns else [data]
 
     args = []
-    for i, (_, tgt_data) in enumerate(groups):
-        file_path = temp_dir / f"group_{i}.csv"
-        tgt_data.to_csv(file_path, index=False)
-        args.append((file_path, inter_assay_weight, scale_scores))
+    for tgt_data in groups:
+        with tempfile.NamedTemporaryFile(delete=False) as fp:
+            tgt_data.to_csv(fp, index=False)
+        args.append((fp.name, inter_assay_weight, scale_scores))
 
     with ProcessPoolExecutor(max_workers=32) as executor:
         results = list(
@@ -85,12 +79,48 @@ def parallel_hodge_rank(
         )
 
     for result in results:
-        __all_scores.extend(result)
+        all_scores.extend(result)
 
-    hodge_df = pd.DataFrame(__all_scores)
+    hodge_df = pd.DataFrame(all_scores)
     hodge_df = hodge_df.rename(columns={"smiles": SMILES})
 
     return hodge_df
+
+
+def assay_ranks(preds: pd.DataFrame):
+    cmpd_a = COMPOUND + "_a"
+    cmpd_b = COMPOUND + "_b"
+    unique_cmpds = np.unique(
+        np.concat(
+            [
+                preds[cmpd_a].values,
+                preds[cmpd_b].values,
+            ]
+        )
+    )
+    cmpd_to_idx = {cmpd: idx for idx, cmpd in enumerate(unique_cmpds)}
+    dim = len(unique_cmpds)
+
+    if dim <= 1:
+        return 0
+
+    y_bar = np.zeros((dim, dim))
+    weights = np.zeros((dim, dim))
+
+    for _, row in preds.iterrows():
+        c_i = cmpd_to_idx[row[cmpd_a]]
+        c_j = cmpd_to_idx[row[cmpd_b]]
+        pref = row["prediction"]
+        y_bar[c_i, c_j] += pref
+        y_bar[c_j, c_i] -= pref
+        weights[c_i, c_j] += 1
+
+    weights[np.diag_indices_from(weights)] = 0
+    weights += weights.T
+
+    scores = hodge_rank(y_bar, weights)
+
+    return pd.DataFrame({COMPOUND: unique_cmpds, "prediction": scores})
 
 
 def hodge_rank(
@@ -106,5 +136,5 @@ def hodge_rank(
             scores = StandardScaler().fit_transform(scores.reshape(-1, 1)).flatten()
         return scores
     except np.linalg.LinAlgError:
-        logger.warning("unstable SVD")
+        logger.warning(f"unstable SVD (diag_stab={diag_stab})")
         return hodge_rank(y_bar, w, diag_stab=diag_stab + 1e-5)

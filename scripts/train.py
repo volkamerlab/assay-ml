@@ -2,13 +2,22 @@ import logging
 import uuid
 import sys
 import random
+from functools import partial
+from typing import Tuple, Callable
 
 import numpy as np
+import torch
+from torch import nn
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from sklearn.preprocessing import StandardScaler
-import torch
+from scipy.stats import kendalltau
 
-from dti.model import CombinedModel, MolecularModel
+from dti.model import (
+    CombinedModel,
+    MolecularModel,
+    PairCombinedModel,
+    PairMolecularModel,
+)
 from dti.data import (
     ActivityDataset,
     PairDataset,
@@ -16,112 +25,157 @@ from dti.data import (
     load_landrum,
     load_kinodata,
     load_atcc,
+    load_split,
 )
+from dti.training import train_and_evaluate_model, AssayRankAccuracy, batch_pair_loss
 from dti.utils import (
     init_logging,
     set_random_seeds,
     write_header,
-    train_and_evaluate_model,
 )
+from dti.constants import DATA, ASSAY, COMPOUND
 
-from dti.constants import DATA
+logger = logging.getLogger(__name__)
+
+
+def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type, type]:
+    if method == "hodge":
+        method = "ic50"
+    match method:
+        case "pair" if mol_only:
+            return PairMolecularModel, PairDataset, PairDataset
+        case "pair_all" if mol_only:
+            return PairMolecularModel, ActivityDataset, PairDataset
+        case "ic50" if mol_only:
+            return MolecularModel, ActivityDataset, ActivityDataset
+        case "pair":
+            return PairCombinedModel, PairDataset, PairDataset
+        case "pair_all":
+            return PairCombinedModel, ActivityDataset, PairDataset
+        case "ic50":
+            return CombinedModel, ActivityDataset, ActivityDataset
+        case _:
+            logger.error(f"Unknown method: {method}")
+            sys.exit(1)
+
+
+def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
+    match dataset:
+        case "kinodata":
+            data, mol_only = load_kinodata, False
+        case "landrum":
+            data, mol_only = load_landrum, False
+        case "large_landrum":
+            data_path = DATA / "raw" / "landrum_large.csv"
+            data, mol_only = partial(load_landrum, data_path), False
+        case "omnivore":
+            data, mol_only = partial(load_landrum, DATA / "raw" / "omnivore.csv"), False
+        case "atcc":
+            data, mol_only = load_atcc, True
+        case _:
+            logger.error(f"Unknown dataset: {dataset}")
+            sys.exit(1)
+
+    model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, mol_only)
+    return model_cls, dataset_cls, val_dataset_cls, data
+
+
+def run_split(
+    run_name: str,
+    method: str,
+    dataset_name: str,
+    fold: int,
+    seed: int,
+):
+    batch_size = 512
+    num_epochs = 50_000  # early stopping in place
+    info_cols = [COMPOUND, ASSAY]
+    data_dir = DATA / "processed" / dataset_name
+    tgt_name = "hodge_score" if method == "hodge" else "scaled_ic50"
+
+    model_cls, dataset_cls, val_dataset_cls, load_data = setup(method, dataset_name)
+    data = load_data()
+
+    if not (data_dir / f"{fold}").exists():
+        prepare_datasets(
+            data, data_dir, 5, random_valset=False, aggregate=method == "hodge"
+        )
+
+    inter_assay_weight = 0.0 if method == "hodge" else None
+    train_data, val_data, test_data = load_split(
+        fold, data_dir, tgt_name, inter_assay_weight=inter_assay_weight
+    )
+    val_dataset = val_dataset_cls(val_data, target=tgt_name, info_cols=info_cols)
+    test_dataset = val_dataset_cls(test_data, target=tgt_name, info_cols=info_cols)
+
+    scaler = StandardScaler()
+    train_data[tgt_name] = scaler.fit_transform(
+        train_data[tgt_name].values.reshape(-1, 1)
+    )
+    train_tgt = tgt_name if method != "hodge" else "hodge_score"
+    logger.info(f"training target: {train_tgt}")
+    train_dataset = dataset_cls(train_data, target=tgt_name, info_cols=info_cols)
+
+    def seed_worker(worker_id):
+        worker_seed = torch.initial_seed() % 2**32
+        np.random.seed(worker_seed)
+        random.seed(worker_seed)
+
+    g = torch.Generator()
+    g.manual_seed(seed + fold)
+
+    sampler = WeightedRandomSampler(
+        train_dataset.weights, len(train_dataset), generator=g
+    )
+    # 23 ** 2 ~ 512
+    train_batch = 23 if method == "pair_all" else batch_size
+    train_loader = DataLoader(
+        train_dataset, batch_size=train_batch, sampler=sampler, drop_last=True
+    )
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    rstat = partial(kendalltau, nan_policy="omit", variant="c")
+    assay_rank = AssayRankAccuracy(
+        data, method in ["pair", "pair_all"], rank_statistic=rstat
+    )
+    training_loss = batch_pair_loss if method == "pair_all" else nn.HuberLoss()
+
+    train_and_evaluate_model(
+        model_cls,
+        run_name,
+        train_loader,
+        val_loader,
+        test_loader,
+        method,
+        fold,
+        rank_corr_fn=assay_rank,
+        embedding_size=512,
+        num_epochs=num_epochs,
+        cosine_agg=True,
+        training_loss=training_loss,
+        patience_termination=1000 if method == "pair" else 100,
+        patience_lr=100 if method == "pair" else 10,
+    )
+
+    logger.info(f"{run_name} finished")
 
 
 def main():
     seed = int(sys.argv[1])
-    set_random_seeds(seed)
-
-    dataset = sys.argv[2]
-    match dataset:
-        case "kinodata":
-            model_cls = CombinedModel
-            data = load_kinodata()
-            info_cols = ["activities.activity_id", "assay_id"]
-        case "landrum":
-            model_cls = CombinedModel
-            data = load_landrum()
-            info_cols = ["activity_id", "assay_id"]
-        case "landrum_large":
-            model_cls = CombinedModel
-            data = load_landrum(DATA / "raw" / "landrum_large.csv")
-            info_cols = ["activity_id", "assay_id"]
-        case "atcc":
-            model_cls = MolecularModel
-            data = load_atcc()
-            info_cols = ["NSC"]
-        case _:
-            print(f"Unknown dataset: {dataset}", file=sys.stderr)
-            sys.exit(1)
-
+    dataset_name = sys.argv[2]
     method = sys.argv[3]
-    match method:
-        case "pair":
-            dataset_cls = PairDataset
-            num_epochs = 100
-        case "ic50":
-            dataset_cls = ActivityDataset
-            num_epochs = 500
-        case _:
-            print(f"Unknown method: {method}", file=sys.stderr)
-            sys.exit(1)
+    fold = int(sys.argv[4])
 
-    run_name = f"{dataset}_{method}_" + uuid.uuid4().hex[:4]
+    run_name = f"{dataset_name}_{fold}_{method}_" + uuid.uuid4().hex[:4]
     init_logging(run_name)
     logger = logging.getLogger(run_name)
-    logger.info(f"seed={seed} method={method} dataset={dataset}")
+    logger.info(f"seed={seed} method={method} dataset={dataset_name} fold={fold}")
 
-    batch_size = 512
-
+    set_random_seeds(seed)
     write_header(run_name)
-    data_dir = DATA / "processed" / dataset
-    tgt_name = "scaled_ic50"
 
-    for index, train_data, val_data, test_data in prepare_datasets(
-        data, data_dir, tgt_name, 5, None, False
-    ):
-        val_dataset = PairDataset(val_data, target=tgt_name, info_cols=info_cols)
-        test_dataset = PairDataset(test_data, target=tgt_name, info_cols=info_cols)
-        scaler = StandardScaler()
-        train_data[tgt_name] = scaler.fit_transform(
-            train_data[tgt_name].values.reshape(-1, 1)
-        )
-        train_dataset = dataset_cls(train_data, target=tgt_name, info_cols=info_cols)
-
-        # https://pytorch.org/docs/stable/notes/randomness.html
-        def seed_worker(worker_id):
-            worker_seed = torch.initial_seed() % 2**32
-            np.random.seed(worker_seed)
-            random.seed(worker_seed)
-
-        g = torch.Generator()
-        g.manual_seed(seed + index)
-
-        sampler = WeightedRandomSampler(
-            train_dataset.weights, len(train_dataset), generator=g
-        )
-
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=batch_size,
-            sampler=sampler,
-        )
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-        train_and_evaluate_model(
-            model_cls,
-            run_name,
-            train_loader,
-            val_loader,
-            test_loader,
-            logger,
-            method,
-            index,
-            num_epochs=num_epochs,
-            cosine_agg=True,
-        )
-
-    logger.info(f"{run_name} completed")
+    run_split(run_name, method, dataset_name, fold, seed)
 
 
 if __name__ == "__main__":

@@ -6,11 +6,9 @@ import torch
 import numpy as np
 import random
 
-from .training import model_epoch, rank_corr_pairs
-
 from .constants import OUTPUT
 
-device = lambda: "cuda" if torch.cuda.is_available() else "cpu"
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def set_random_seeds(seed: int):
@@ -64,86 +62,3 @@ def write_info(run_name: str, fields: list):
     (OUTPUT / run_name).mkdir(exist_ok=True, parents=True)
     with open(OUTPUT / run_name / "optimization.csv", "a") as f:
         f.write(",".join(map(str, fields)) + "\n")
-
-
-def train_and_evaluate_model(
-    model_cls,
-    run_name,
-    train_loader,
-    val_loader,
-    test_loader,
-    logger,
-    target_name,
-    index,
-    **kwargs,
-):
-    """Train and evaluate the model."""
-    logger.info(f"training model for target: {target_name}")
-    opts = (
-        dict(
-            protein_dim=1280,
-            ligand_dim=2048,
-            embedding_size=256,
-            num_epochs=500,
-            cosine_agg=False,
-            rank_corr_fn=rank_corr_pairs,
-        )
-        | kwargs
-    )
-
-    model = model_cls(
-        ligand_input_size=opts["ligand_dim"],
-        embedding_size=opts["embedding_size"],
-        protein_input_size=opts["protein_dim"],
-        cosine_agg=opts["cosine_agg"],
-    ).to(device())
-    optimizer = torch.optim.Adam(model.parameters(), lr=5e-5)
-
-    best_corr = 0
-    for epoch in range(opts["num_epochs"]):
-        train_loss, train_rank_corr = model_epoch(
-            model, train_loader, optimizer, rank_corr_fn=rank_corr_pairs
-        )
-        val_loss, val_rank_corr = model_epoch(
-            model, val_loader, rank_corr_fn=rank_corr_pairs
-        )
-
-        logger.info(
-            " ".join(
-                [
-                    f"[{run_name}]",
-                    f"epoch={epoch + 1}/{opts['num_epochs']}",
-                    f"train_loss={train_loss:.4f}",
-                    f"val_loss={val_loss:.4f}",
-                    f"train_rank_corr={train_rank_corr:.4f}",
-                    f"val_rank_corr={val_rank_corr:.4f}",
-                ]
-            )
-        )
-        write_info(
-            run_name,
-            [
-                target_name,
-                index,
-                epoch,
-                train_loss,
-                val_loss,
-                train_rank_corr,
-                val_rank_corr,
-            ],
-        )
-
-        if val_rank_corr > best_corr:
-            logger.info(f"[{run_name}] updating test set predictions")
-            best_corr = val_rank_corr
-            torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")
-            test_loss, test_rank_corr = model_epoch(
-                model,
-                test_loader,
-                prediction_file=OUTPUT
-                / run_name
-                / f"{target_name}_index{index}_preds.csv",
-            )
-            logger.info(
-                f"[{run_name}] epoch={epoch + 1}/{opts['num_epochs']} test_loss={test_loss:.4f} test_rank_corr={test_rank_corr:.4f}"
-            )

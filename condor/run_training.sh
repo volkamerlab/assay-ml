@@ -15,4 +15,4 @@ source venv/bin/activate
 #pip install -e .
 
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
-python $1 $2 $3 $4
+python $1 $2 $3 $4 $5

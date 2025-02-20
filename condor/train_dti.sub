@@ -1,7 +1,7 @@
 universe = docker
 docker_image = gjoschka/kinodata3d-b0:2.3.0-cuda12.1
 executable = run_training.sh
-arguments = $(script) $(seed) $(dataset) $(method)
+arguments = $(script) $(seed) $(dataset) $(method) $(fold)
 output = logs/train_dti.$(ClusterId).$(ProcId).out
 error = logs/train_dti.$(ClusterId).$(ProcId).err
 log = logs/train_dti.$(ClusterId).$(ProcId).log
@@ -12,13 +12,65 @@ request_CPUs = 16
 request_memory = 64G
 requirements = UidDomain == "cs.uni-saarland.de"
 +WantGPUHomeMounted = true
-queue script, seed, dataset, method from (
-    scripts/train.py, 0, atcc, ic50
-    scripts/train.py, 0,atcc, pair
-    scripts/train.py, 0, kinodata, ic50
-    scripts/train.py, 0, kinodata, pair
-    scripts/train.py, 0, landrum, ic50
-    scripts/train.py, 0, landrum, pair
-    scripts/train.py, 0, landrum_large, ic50
-    scripts/train.py, 0, landrum_large, pair
+queue fold, script, seed, dataset, method from (
+    0, scripts/train.py, 0, atcc, ic50
+    0, scripts/train.py, 0, atcc, pair
+    0, scripts/train.py, 0, atcc, pair_all
+    0, scripts/train.py, 0, kinodata, ic50
+    0, scripts/train.py, 0, kinodata, pair
+    0, scripts/train.py, 0, kinodata, pair_all
+    0, scripts/train.py, 0, landrum, ic50
+    0, scripts/train.py, 0, landrum, pair
+    0, scripts/train.py, 0, landrum, pair_all
+    0, scripts/train.py, 0, large_landrum, ic50
+    0, scripts/train.py, 0, large_landrum, pair
+    0, scripts/train.py, 0, large_landrum, pair_all
+    1, scripts/train.py, 0, atcc, ic50
+    1, scripts/train.py, 0, atcc, pair
+    1, scripts/train.py, 0, atcc, pair_all
+    1, scripts/train.py, 0, kinodata, ic50
+    1, scripts/train.py, 0, kinodata, pair
+    1, scripts/train.py, 0, kinodata, pair_all
+    1, scripts/train.py, 0, landrum, ic50
+    1, scripts/train.py, 0, landrum, pair
+    1, scripts/train.py, 0, landrum, pair_all
+    1, scripts/train.py, 0, large_landrum, ic50
+    1, scripts/train.py, 0, large_landrum, pair
+    1, scripts/train.py, 0, large_landrum, pair_all
+    2, scripts/train.py, 0, atcc, ic50
+    2, scripts/train.py, 0, atcc, pair
+    2, scripts/train.py, 0, atcc, pair_all
+    2, scripts/train.py, 0, kinodata, ic50
+    2, scripts/train.py, 0, kinodata, pair
+    2, scripts/train.py, 0, kinodata, pair_all
+    2, scripts/train.py, 0, landrum, ic50
+    2, scripts/train.py, 0, landrum, pair
+    2, scripts/train.py, 0, landrum, pair_all
+    2, scripts/train.py, 0, large_landrum, ic50
+    2, scripts/train.py, 0, large_landrum, pair
+    2, scripts/train.py, 0, large_landrum, pair_all
+    3, scripts/train.py, 0, atcc, ic50
+    3, scripts/train.py, 0, atcc, pair
+    3, scripts/train.py, 0, atcc, pair_all
+    3, scripts/train.py, 0, kinodata, ic50
+    3, scripts/train.py, 0, kinodata, pair
+    3, scripts/train.py, 0, kinodata, pair_all
+    3, scripts/train.py, 0, landrum, ic50
+    3, scripts/train.py, 0, landrum, pair
+    3, scripts/train.py, 0, landrum, pair_all
+    3, scripts/train.py, 0, large_landrum, ic50
+    3, scripts/train.py, 0, large_landrum, pair
+    3, scripts/train.py, 0, large_landrum, pair_all
+    4, scripts/train.py, 0, atcc, ic50
+    4, scripts/train.py, 0, atcc, pair
+    4, scripts/train.py, 0, atcc, pair_all
+    4, scripts/train.py, 0, kinodata, ic50
+    4, scripts/train.py, 0, kinodata, pair
+    4, scripts/train.py, 0, kinodata, pair_all
+    4, scripts/train.py, 0, landrum, ic50
+    4, scripts/train.py, 0, landrum, pair
+    4, scripts/train.py, 0, landrum, pair_all
+    4, scripts/train.py, 0, large_landrum, ic50
+    4, scripts/train.py, 0, large_landrum, pair
+    4, scripts/train.py, 0, large_landrum, pair_all
 )
