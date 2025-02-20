@@ -163,4 +163,7 @@ cython_debug/
 *.csv
 
 # vim/vim
+
+# condor
+condor/tmp*
 *.swp
