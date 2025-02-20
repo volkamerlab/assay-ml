@@ -227,9 +227,8 @@ class ActivityDataset(Dataset):
 
         @functools.cache
         def load_esm(uniprot_id: str) -> torch.Tensor:
-            return torch.load(emb_dir(uniprot_id), weights_only=False)[
-                "representation"
-            ][33]
+            emb = torch.load(emb_dir(uniprot_id), weights_only=False)
+            return emb["representation"][33].to(device)
 
         return torch.stack([load_esm(uniprot_id) for uniprot_id in data[TID]])
 
