@@ -48,7 +48,7 @@ class SetRankModel(Module):
     def combine_with_query(self, x: Tensor, query: Tensor) -> Tensor:
         return x * query
 
-    def forward(self, ligand: Tensor, protein: Tensor) -> Tensor:
+    def forward(self, protein: Tensor, ligand: Tensor) -> Tensor:
         """
         Only supports batch size 1 (ie 1 intra assay group of molecule)
 

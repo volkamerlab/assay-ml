@@ -87,6 +87,7 @@ def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
     model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, mol_only)
     return model_cls, dataset_cls, val_dataset_cls, data
 
+
 def train_batch(method: str, default: int) -> int:
     match method:
         case "pair_all":
@@ -95,6 +96,7 @@ def train_batch(method: str, default: int) -> int:
             return 1
         case _:
             return default
+
 
 def run_split(
     run_name: str,
@@ -124,10 +126,6 @@ def run_split(
     val_dataset = val_dataset_cls(val_data, target=tgt_name, info_cols=info_cols)
     test_dataset = val_dataset_cls(test_data, target=tgt_name, info_cols=info_cols)
 
-    scaler = StandardScaler()
-    train_data[tgt_name] = scaler.fit_transform(
-        train_data[tgt_name].values.reshape(-1, 1)
-    )
     train_tgt = tgt_name if method != "hodge" else "hodge_score"
     logger.info(f"training target: {train_tgt}")
     train_dataset = dataset_cls(train_data, target=tgt_name, info_cols=info_cols)
@@ -145,7 +143,10 @@ def run_split(
     )
     assert len(train_dataset) > 0
     train_loader = DataLoader(
-        train_dataset, batch_size=train_batch(method, batch_size), sampler=sampler, drop_last=True
+        train_dataset,
+        batch_size=train_batch(method, batch_size),
+        sampler=sampler,
+        drop_last=True,
     )
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
@@ -160,7 +161,6 @@ def run_split(
         else nn.HuberLoss()
     )
     train_short = method in ["pair", "pair_all"]
-
     train_and_evaluate_model(
         model_cls,
         run_name,
