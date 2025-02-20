@@ -5,7 +5,6 @@ from dti.set_rank.set_transformer import SetTransfomer, _mlp
 
 
 class SetRankModel(Module):
-
     def __init__(
         self,
         ligand_size: int,

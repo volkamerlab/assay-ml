@@ -23,137 +23,6 @@ from .hodge_ranking import parallel_hodge_rank
 logger = logging.getLogger(__name__)
 
 
-def extract_embeddings(
-    model_name: str,
-    fasta_file: Union[Path, str],
-    output_dir: Path,
-    tokens_per_batch: int = 4096,
-    seq_length: int = 5000,
-    repr_layers: List[int] = [33],
-):
-    # adapted from https://www.kaggle.com/code/viktorfairuschin/extracting-esm-2-embeddings-from-fasta-files
-
-    dataset = FastaBatchedDataset.from_file(fasta_file)
-    filename = lambda tid: output_dir / f"{tid}.pt"
-    data = [
-        (label, seq)
-        for label, seq in zip(dataset.sequence_labels, dataset.sequence_strs)
-        if not filename(label).exists()
-    ]
-    dataset.sequence_labels = [label for label, _ in data]
-    dataset.sequence_strs = [seq for _, seq in data]
-    if len(data) == 0:
-        return
-
-    logger.info("setting up ESM model")
-    model, alphabet = pretrained.load_model_and_alphabet(model_name)
-    model.eval()
-
-    if torch.cuda.is_available():
-        model = model.cuda()
-
-    logger.info(f"computing ESM embeddings for {len(data)} sequences")
-    batches = dataset.get_batch_indices(tokens_per_batch, extra_toks_per_seq=1)
-
-    data_loader = torch.utils.data.DataLoader(
-        dataset,
-        collate_fn=alphabet.get_batch_converter(seq_length),
-        batch_sampler=batches,
-    )
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    with torch.no_grad():
-        for _, (labels, strs, toks) in tqdm.tqdm(
-            enumerate(data_loader), total=len(batches)
-        ):
-            toks = toks.to(device(), non_blocking=True)
-
-            out = model(toks, repr_layers=repr_layers, return_contacts=False)
-
-            representations = {
-                layer: t.to(device="cpu") for layer, t in out["representations"].items()
-            }
-
-            for i, label in enumerate(labels):
-                entry_id = label.split()[0]
-                truncate_len = min(seq_length, len(strs[i]))
-                result = {"entry_id": entry_id}
-                result["representation"] = {
-                    layer: t[i, 1 : truncate_len + 1].mean(0).clone()
-                    for layer, t in representations.items()
-                }
-
-                torch.save(result, filename(entry_id))
-
-
-def load_kinodata(
-    kinodata_path: Path = DATA / "raw" / "activities-chembl33_v0.5.csv",
-    activity_types: List[str] = ["pIC50"],
-) -> pd.DataFrame:
-    logger.info(f"loading kinodata activities from {kinodata_path}")
-    data = pd.read_csv(kinodata_path, index_col=0)
-    data = data[data["activities.standard_type"].isin(activity_types)]
-    data = data[~data["compound_structures.canonical_smiles"].isna()]
-    data[ASSAY] = data["assays.chembl_id"].str[6:].astype(int)
-    return data.rename(
-        columns={
-            "activities.standard_value": ACT,
-            "compound_structures.canonical_smiles": SMILES,
-            "component_sequences.sequence": SEQUENCE,
-            "UniprotID": TID,
-        }
-    )
-
-
-def load_landrum(landrum_path: Path = DATA / "raw" / "landrum.csv") -> pd.DataFrame:
-    logger.info(f"loading landrum data from {landrum_path}")
-    data = pd.read_csv(landrum_path, index_col=0)
-    data = data[~data["canonical_smiles"].isna()]
-    return data.rename(
-        columns={
-            "pchembl_value": ACT,
-            "canonical_smiles": SMILES,
-            "component_sequence": SEQUENCE,
-            "tid": TID,
-            "assay_id": ASSAY,
-        }
-    )
-
-
-def load_atcc(path: Path = DATA / "raw" / "atcc.csv") -> pd.DataFrame:
-    logger.info(f"loading NCI ATCC data from {path}")
-    data = pd.read_csv(path, index_col=0)
-    return data.rename(
-        columns={
-            "IC50": ACT,
-            "SMILES": SMILES,
-            "EXPID": ASSAY,
-        }
-    )
-
-
-def split_kfold_by(
-    kinodata: pd.DataFrame, k: int, column: str, seed: int = 1
-) -> np.ndarray:
-    """Return the k-fold partitioning of `kinodata[column]` in shape `(k, -1)`."""
-    values = kinodata[column].unique()
-    missing_modk = k - len(values) % k
-    values = np.concatenate((values, [-1] * missing_modk))
-    np.random.seed(seed)
-    np.random.shuffle(values)
-    return values.reshape(k, -1)
-
-
-def compute_fp(smi: str):
-    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
-    try:
-        return mfpgen.GetFingerprintAsNumPy(Chem.MolFromSmiles(smi))
-    except TypeError:
-        logger.warn(f"No fp for SMILES={smi}")
-        return None
-
-
 class ActivityDataset(Dataset):
     def __init__(
         self,
@@ -272,6 +141,146 @@ class PairDataset(ActivityDataset):
         )
 
 
+class SetActivityDataset(ActivityDataset):
+    def __init__(
+        self,
+        data,
+        target=...,
+        info_cols=...,
+        model_name="esm2_t33_650M_UR50D",
+        min_batch_size: int | None = None,
+        max_batch_size: int | None = None,
+        random_seed: int = 0,
+    ):
+        super().__init__(data, target, info_cols, model_name)
+        self.min_batch_size = min_batch_size
+        self.max_batch_size = max_batch_size
+        self.random = np.random.default_rng(random_seed)
+        self.groups_index = []
+        for _, group in self.data.groupby(ASSAY):
+            self.groups_index.append(group.index)
+        self._make_batches()
+
+    def _make_batches(self):
+        self.groups_index = [self.random.shuffle(group) for group in self.groups_index]
+        self.batches = []
+        num_unused = 0
+        for group in tqdm(self.groups_index, desc="Making batches..."):
+            if len(group) < self.min_batch_size:
+                num_unused += len(group)
+                continue
+            batches = np.array_split(group, len(group) // self.max_batch_size)
+            self.batches.extend(batches[:-1])
+            if batches[-1].size >= self.min_batch_size:
+                self.batches.append(batches[-1])
+                continue
+            num_unused += batches[-1].shape[0]
+        self.random.shuffle(self.batches)
+        self.used = np.full(len(self.batches), False, dtype=bool)
+        logger.info(f"Number of unused examples: {num_unused} / {len(self.data)}")
+
+    def _get_next_batch(self, idx: int):
+        if np.all(self.used):
+            self._make_batches()
+        self.used[idx] = True
+        return self.batches[idx]
+
+    def __len__(self):
+        return len(self.batches)
+
+    def __getitem__(self, idx):
+        return (
+            self.ligand_features[batch_idcs := self._get_next_batch(idx)],
+            self.protein_features[batch_idcs],
+            self.labels[batch_idcs],
+        )
+
+
+def extract_embeddings(
+    model_name: str,
+    fasta_file: Union[Path, str],
+    output_dir: Path,
+    tokens_per_batch: int = 4096,
+    seq_length: int = 5000,
+    repr_layers: List[int] = [33],
+):
+    # adapted from https://www.kaggle.com/code/viktorfairuschin/extracting-esm-2-embeddings-from-fasta-files
+
+    dataset = FastaBatchedDataset.from_file(fasta_file)
+    filename = lambda tid: output_dir / f"{tid}.pt"
+    data = [
+        (label, seq)
+        for label, seq in zip(dataset.sequence_labels, dataset.sequence_strs)
+        if not filename(label).exists()
+    ]
+    dataset.sequence_labels = [label for label, _ in data]
+    dataset.sequence_strs = [seq for _, seq in data]
+    if len(data) == 0:
+        return
+
+    logger.info("setting up ESM model")
+    model, alphabet = pretrained.load_model_and_alphabet(model_name)
+    model.eval()
+
+    if torch.cuda.is_available():
+        model = model.cuda()
+
+    logger.info(f"computing ESM embeddings for {len(data)} sequences")
+    batches = dataset.get_batch_indices(tokens_per_batch, extra_toks_per_seq=1)
+
+    data_loader = torch.utils.data.DataLoader(
+        dataset,
+        collate_fn=alphabet.get_batch_converter(seq_length),
+        batch_sampler=batches,
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    with torch.no_grad():
+        for _, (labels, strs, toks) in tqdm.tqdm(
+            enumerate(data_loader), total=len(batches)
+        ):
+            toks = toks.to(device(), non_blocking=True)
+
+            out = model(toks, repr_layers=repr_layers, return_contacts=False)
+
+            representations = {
+                layer: t.to(device="cpu") for layer, t in out["representations"].items()
+            }
+
+            for i, label in enumerate(labels):
+                entry_id = label.split()[0]
+                truncate_len = min(seq_length, len(strs[i]))
+                result = {"entry_id": entry_id}
+                result["representation"] = {
+                    layer: t[i, 1 : truncate_len + 1].mean(0).clone()
+                    for layer, t in representations.items()
+                }
+
+                torch.save(result, filename(entry_id))
+
+
+def split_kfold_by(
+    kinodata: pd.DataFrame, k: int, column: str, seed: int = 1
+) -> np.ndarray:
+    """Return the k-fold partitioning of `kinodata[column]` in shape `(k, -1)`."""
+    values = kinodata[column].unique()
+    missing_modk = k - len(values) % k
+    values = np.concatenate((values, [-1] * missing_modk))
+    np.random.seed(seed)
+    np.random.shuffle(values)
+    return values.reshape(k, -1)
+
+
+def compute_fp(smi: str):
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
+    try:
+        return mfpgen.GetFingerprintAsNumPy(Chem.MolFromSmiles(smi))
+    except TypeError:
+        logger.warn(f"no fp for SMILES={smi}")
+        return None
+
+
 def split_data(
     data: pd.DataFrame,
     target_dir: Path = DATA / "processed",
@@ -306,12 +315,6 @@ def split_data(
     return target_dir
 
 
-def normalize_activity(data: pd.DataFrame, target_col: str, scaler: StandardScaler):
-    """Normalize activity data to a standard normal distribution."""
-    data[target_col] = scaler.transform(data[ACT].values.reshape(-1, 1))
-    return data
-
-
 def prepare_datasets(
     data: pd.DataFrame,
     data_dir: Path,
@@ -336,8 +339,8 @@ def prepare_datasets(
         train_data[tgt_name] = scaler.fit_transform(
             train_data[ACT].values.reshape(-1, 1)
         )
-        test_data = normalize_activity(test_data, tgt_name, scaler)
-        val_data = normalize_activity(val_data, tgt_name, scaler)
+        test_data[tgt_name] = scaler.transform(test_data[ACT].values.reshape(-1, 1))
+        val_data[tgt_name] = scaler.transform(val_data[ACT].values.reshape(-1, 1))
 
         if inter_assay_weight is not None:
             hodge_file = (
@@ -357,3 +360,49 @@ def prepare_datasets(
                 train_data = pd.read_csv(hodge_file, index_col=0)
 
         yield index, train_data, val_data, test_data
+
+
+def load_kinodata(
+    kinodata_path: Path = DATA / "raw" / "activities-chembl33_v0.5.csv",
+    activity_types: List[str] = ["pIC50"],
+) -> pd.DataFrame:
+    logger.info(f"loading kinodata activities from {kinodata_path}")
+    data = pd.read_csv(kinodata_path, index_col=0)
+    data = data[data["activities.standard_type"].isin(activity_types)]
+    data = data[~data["compound_structures.canonical_smiles"].isna()]
+    data[ASSAY] = data["assays.chembl_id"].str[6:].astype(int)
+    return data.rename(
+        columns={
+            "activities.standard_value": ACT,
+            "compound_structures.canonical_smiles": SMILES,
+            "component_sequences.sequence": SEQUENCE,
+            "UniprotID": TID,
+        }
+    )
+
+
+def load_landrum(landrum_path: Path = DATA / "raw" / "landrum.csv") -> pd.DataFrame:
+    logger.info(f"loading landrum data from {landrum_path}")
+    data = pd.read_csv(landrum_path, index_col=0)
+    data = data[~data["canonical_smiles"].isna()]
+    return data.rename(
+        columns={
+            "pchembl_value": ACT,
+            "canonical_smiles": SMILES,
+            "component_sequence": SEQUENCE,
+            "tid": TID,
+            "assay_id": ASSAY,
+        }
+    )
+
+
+def load_atcc(path: Path = DATA / "raw" / "atcc.csv") -> pd.DataFrame:
+    logger.info(f"loading NCI ATCC data from {path}")
+    data = pd.read_csv(path, index_col=0)
+    return data.rename(
+        columns={
+            "IC50": ACT,
+            "SMILES": SMILES,
+            "EXPID": ASSAY,
+        }
+    )

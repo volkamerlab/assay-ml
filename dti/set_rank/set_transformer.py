@@ -63,13 +63,11 @@ class MHABlock(Module):
 
 
 class SetAttentionBlock(MHABlock):
-
     def forward(self, x: Tensor, attn_mask: Tensor | None = None) -> Tensor:
         return super().forward(x, x, attn_mask)
 
 
 class InducedSetAttentionBlock(Module):
-
     def __init__(
         self,
         hidden_channels: int,
@@ -99,7 +97,6 @@ class InducedSetAttentionBlock(Module):
 
 
 class SetTransfomer(Module):
-
     def __init__(
         self,
         hidden_channels: int,
@@ -149,15 +146,13 @@ class SetTransfomer(Module):
     ) -> Tensor:
         if attn_mask is not None and self.layer_type == "induced":
             raise ValueError("Induced attention does not support attention mask")
-        activations = [x]
-        activations.extend([(x := block(x, attn_mask)) for block in self.blocks])
+        activations = [x] + [(x := block(x, attn_mask)) for block in self.blocks]
         if need_intermediate_activations:
             return activations
         return activations[-1]
 
 
 class SelfConditionedSetTransformer(SetTransfomer):
-
     def _readout_ffn(self) -> Module:
         return Sequential(
             Linear(self.hidden_channels, self.hidden_channels // 2),
