@@ -21,6 +21,7 @@ from dti.model import (
 from dti.data import (
     ActivityDataset,
     PairDataset,
+    SetActivityDataset,
     prepare_datasets,
     load_landrum,
     load_kinodata,
@@ -34,13 +35,12 @@ from dti.utils import (
     write_header,
 )
 from dti.constants import DATA, ASSAY, COMPOUND
+from dti.set_rank import SetRankModel
 
 logger = logging.getLogger(__name__)
 
 
 def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type, type]:
-    if method == "hodge":
-        method = "ic50"
     match method:
         case "pair" if mol_only:
             return PairMolecularModel, PairDataset, PairDataset
@@ -54,6 +54,14 @@ def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type, type]:
             return MolecularModel, ActivityDataset, ActivityDataset
         case "hodge" | "ic50":
             return CombinedModel, ActivityDataset, ActivityDataset
+        case "set" if mol_only:
+            raise NotImplementedError
+        case "set":
+            model = partial(
+                SetRankModel,
+                hidden_channels=512,
+            )
+            return model, SetActivityDataset, ActivityDataset
         case _:
             logger.error(f"Unknown method: {method}")
             sys.exit(1)
@@ -79,6 +87,14 @@ def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
     model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, mol_only)
     return model_cls, dataset_cls, val_dataset_cls, data
 
+def train_batch(method: str, default: int) -> int:
+    match method:
+        case "pair_all":
+            return np.sqrt(default).astype(int)
+        case "set":
+            return 1
+        case _:
+            return default
 
 def run_split(
     run_name: str,
@@ -127,10 +143,9 @@ def run_split(
     sampler = WeightedRandomSampler(
         train_dataset.weights, len(train_dataset), generator=g
     )
-    # 23 ** 2 ~ 512
-    train_batch = 23 if method == "pair_all" else batch_size
+    assert len(train_dataset) > 0
     train_loader = DataLoader(
-        train_dataset, batch_size=train_batch, sampler=sampler, drop_last=True
+        train_dataset, batch_size=train_batch(method, batch_size), sampler=sampler, drop_last=True
     )
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)

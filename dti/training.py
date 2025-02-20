@@ -75,7 +75,9 @@ def train_epoch(model, loader, optimizer, criterion=nn.MSELoss()):
 
     total_loss = 0
 
-    for protein_features, ligand_features, labels, _ in tqdm.tqdm(loader):
+    for protein_features, ligand_features, labels, _ in tqdm.tqdm(
+        loader, desc="training"
+    ):
         protein_features, ligand_features, labels = (
             protein_features.to(device),
             ligand_features.to(device),
@@ -109,7 +111,9 @@ def evaluate_epoch(
     total_loss = 0
     all_preds, all_labels, all_info = [], [], []
 
-    for protein_features, ligand_features, labels, info in tqdm.tqdm(loader):
+    for protein_features, ligand_features, labels, info in tqdm.tqdm(
+        loader, desc="evaluating"
+    ):
         protein_features, ligand_features, labels = (
             protein_features.to(device),
             ligand_features.to(device),
@@ -168,9 +172,9 @@ def train_and_evaluate_model(
         | kwargs
     )
 
-    logger.info('training options:')
+    logger.info("training options:")
     for k, v in opts.items():
-        logger.info(f' - {k}={v}')
+        logger.info(f" - {k}={v}")
 
     model = model_cls(
         ligand_input_size=opts["ligand_dim"],

@@ -1,31 +1,32 @@
 from torch import Tensor
 from torch.nn import Dropout, Linear, Module, ReLU, Sequential, BatchNorm1d
 
-from dti.set_rank.set_transformer import SetTransfomer, _mlp
+from dti.set_rank.set_transformer import SetTransformer, _mlp
 
 
 class SetRankModel(Module):
     def __init__(
         self,
-        ligand_size: int,
-        protein_size: int,
+        ligand_input_size: int,
+        protein_input_size: int,
         hidden_channels: int,
-        p_dropout: float = 0.1,
+        p_dropout: float = 0.05,
+        **kwargs,
     ):
         super().__init__()
         self.embed_ligand = _mlp(
-            input_size=ligand_size,
+            input_size=ligand_input_size,
             hidden_size=hidden_channels,
             output_size=hidden_channels,
             hidden_layers=1,
         )
         self.embed_protein = _mlp(
-            input_size=protein_size,
+            input_size=protein_input_size,
             hidden_size=hidden_channels,
             output_size=hidden_channels,
             hidden_layers=1,
         )
-        self.set_transformer = SetTransfomer(
+        self.set_transformer = SetTransformer(
             hidden_channels=hidden_channels,
             num_heads=8,
             ffn_hidden_layers=1,
@@ -52,8 +53,8 @@ class SetRankModel(Module):
         Only supports batch size 1 (ie 1 intra assay group of molecule)
 
         Args:
-            ligand (Tensor): shape (N, ligand_size)
-            protein (Tensor): shape (N, protein_size)
+            ligand (Tensor): shape (N, ligand_input_size)
+            protein (Tensor): shape (N, protein_input_size)
 
         Returns:
             Tensor: unnormalized ranking scores (N, 1)

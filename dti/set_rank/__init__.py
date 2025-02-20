@@ -1,1 +1,1 @@
-from .set_transformer import SetTransformer
+from .model import SetRankModel

@@ -152,8 +152,8 @@ class SetActivityDataset(ActivityDataset):
         target=...,
         info_cols=...,
         model_name="esm2_t33_650M_UR50D",
-        min_batch_size: int | None = None,
-        max_batch_size: int | None = None,
+        min_batch_size: int = 3,
+        max_batch_size: int = 1024,
         random_seed: int = 0,
     ):
         super().__init__(data, target, info_cols, model_name)
@@ -172,10 +172,13 @@ class SetActivityDataset(ActivityDataset):
         self.batches = []
         num_unused = 0
         for group in tqdm.tqdm(self.groups_index, desc="Making batches..."):
-            if self.min_batch_size is None or len(group) < self.min_batch_size:
+            if len(group) < self.min_batch_size:
                 num_unused += len(group)
                 continue
-            batches = np.array_split(group, len(group) // self.max_batch_size)
+            if len(group) > self.max_batch_size:
+                batches = np.array_split(group, len(group) // self.max_batch_size)
+            else:
+                batches = [group]
             self.batches.extend(batches[:-1])
             if batches[-1].size >= self.min_batch_size:
                 self.batches.append(batches[-1])
@@ -191,6 +194,10 @@ class SetActivityDataset(ActivityDataset):
         self.used[idx] = True
         return self.batches[idx]
 
+    @property
+    def weights(self):
+        return torch.ones(len(self))
+
     def __len__(self):
         return len(self.batches)
 
@@ -199,6 +206,7 @@ class SetActivityDataset(ActivityDataset):
             self.ligand_features[batch_idcs := self._get_next_batch(idx)],
             self.protein_features[batch_idcs],
             self.labels[batch_idcs],
+            self.info[batch_idcs],
         )
 
 
@@ -256,7 +264,7 @@ def extract_embeddings(
 
     with torch.no_grad():
         for _, (labels, strs, toks) in tqdm.tqdm(
-            enumerate(data_loader), total=len(batches)
+            enumerate(data_loader), total=len(batches), desc="extract embeddings"
         ):
             toks = toks.to(device, non_blocking=True)
 
