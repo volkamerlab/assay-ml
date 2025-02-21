@@ -67,7 +67,9 @@ def batch_pair_loss(
     return criterion(predictions, target_delta.flatten())
 
 
-def train_epoch(model, loader, optimizer, criterion=nn.MSELoss()):
+def train_epoch(
+    model, loader, optimizer, criterion=nn.MSELoss(), normalize_training_batches=False
+):
     """Train the model for one epoch."""
     logger.debug("Training model")
     model.train()
@@ -83,6 +85,8 @@ def train_epoch(model, loader, optimizer, criterion=nn.MSELoss()):
             ligand_features.to(device),
             labels.to(device).squeeze(),
         )
+        if normalize_training_batches:
+            labels = (labels - labels.mean()) / labels.std()
 
         optimizer.zero_grad()
         predictions = model(protein_features, ligand_features).squeeze()
@@ -153,6 +157,7 @@ def train_and_evaluate_model(
     test_loader: DataLoader,
     target_name: str,
     index: int,
+    normalize_training_batches: bool = False,
     **kwargs: Dict[str, Any],
 ) -> None:
     """Train and evaluate the model with learning rate adjustment and early stopping."""
@@ -193,7 +198,11 @@ def train_and_evaluate_model(
 
     for epoch in range(opts["num_epochs"]):
         train_loss = train_epoch(
-            model, train_loader, optimizer, criterion=opts["training_loss"]
+            model,
+            train_loader,
+            optimizer,
+            criterion=opts["training_loss"],
+            normalize_training_batches=normalize_training_batches,
         )
         val_loss, val_rank_corr = evaluate_epoch(
             model, val_loader, rank_corr_fn=opts["rank_corr_fn"]

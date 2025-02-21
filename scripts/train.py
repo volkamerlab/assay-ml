@@ -180,6 +180,7 @@ def run_split(
         training_loss=training_loss,
         patience_termination=500 if train_short else 1000,
         patience_lr=50 if train_short else 100,
+        normalize_training_batches=method in ["set"],
     )
 
     logger.info(f"{run_name} finished")
