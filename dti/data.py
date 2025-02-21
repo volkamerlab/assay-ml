@@ -204,8 +204,8 @@ class SetActivityDataset(ActivityDataset):
 
     def __getitem__(self, idx):
         return (
-            self.ligand_features[batch_idcs := self._get_next_batch(idx)],
-            self.protein_features[batch_idcs],
+            self.protein_features[batch_idcs := self._get_next_batch(idx)],
+            self.ligand_features[batch_idcs],
             self.labels[batch_idcs],
             self.info[batch_idcs],
         )
