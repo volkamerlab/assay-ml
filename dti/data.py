@@ -203,8 +203,14 @@ class SetActivityDataset(ActivityDataset):
         return len(self.batches)
 
     def __getitem__(self, idx):
+        batch_idcs = self._get_next_batch(idx)
+        prot_feats = (
+            torch.ones(1)
+            if self.protein_features is None
+            else self.protein_features[batch_idcs]
+        )
         return (
-            self.protein_features[batch_idcs := self._get_next_batch(idx)],
+            prot_feats,
             self.ligand_features[batch_idcs],
             self.labels[batch_idcs],
             self.info[batch_idcs],

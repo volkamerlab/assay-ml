@@ -35,7 +35,7 @@ from dti.utils import (
     write_header,
 )
 from dti.constants import DATA, ASSAY, COMPOUND
-from dti.set_rank import SetRankModel
+from dti.set_rank import SetRankModel, MoleculeSetRank
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,11 @@ def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type, type]:
         case "hodge" | "ic50":
             return CombinedModel, ActivityDataset, ActivityDataset
         case "set" if mol_only:
-            raise NotImplementedError
+            model = partial(
+                MoleculeSetRank,
+                hidden_channels=512,
+            )
+            return model, SetActivityDataset, ActivityDataset
         case "set":
             model = partial(
                 SetRankModel,

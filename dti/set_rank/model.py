@@ -4,11 +4,10 @@ from torch.nn import Dropout, Linear, Module, ReLU, Sequential, BatchNorm1d
 from dti.set_rank.set_transformer import SetTransformer, _mlp
 
 
-class SetRankModel(Module):
+class MoleculeSetRank(Module):
     def __init__(
         self,
         ligand_input_size: int,
-        protein_input_size: int,
         hidden_channels: int,
         p_dropout: float = 0.05,
         **kwargs,
@@ -16,12 +15,6 @@ class SetRankModel(Module):
         super().__init__()
         self.embed_ligand = _mlp(
             input_size=ligand_input_size,
-            hidden_size=hidden_channels,
-            output_size=hidden_channels,
-            hidden_layers=1,
-        )
-        self.embed_protein = _mlp(
-            input_size=protein_input_size,
             hidden_size=hidden_channels,
             output_size=hidden_channels,
             hidden_layers=1,
@@ -43,6 +36,39 @@ class SetRankModel(Module):
             BatchNorm1d(hidden_channels),
             Dropout(p_dropout),
             Linear(hidden_channels, 1),
+        )
+
+    def forward(self, _protein: Tensor, ligand: Tensor) -> Tensor:
+        """
+        Only supports batch size 1 (ie 1 intra assay group of molecule)
+
+        Args:
+            ligand (Tensor): shape (N, ligand_input_size)
+            protein (Tensor): shape (N, protein_input_size)
+
+        Returns:
+            Tensor: unnormalized ranking scores (N, 1)
+        """
+        x_ligand = self.embed_ligand(ligand.squeeze())
+        h = self.set_transformer(x_ligand)
+        return self.ouput(h).squeeze()
+
+
+class SetRankModel(MoleculeSetRank):
+    def __init__(
+        self,
+        ligand_input_size: int,
+        protein_input_size: int,
+        hidden_channels: int,
+        p_dropout: float = 0.05,
+        **kwargs,
+    ):
+        super().__init__(ligand_input_size, hidden_channels, p_dropout)
+        self.embed_protein = _mlp(
+            input_size=protein_input_size,
+            hidden_size=hidden_channels,
+            output_size=hidden_channels,
+            hidden_layers=1,
         )
 
     def combine_with_query(self, x: Tensor, query: Tensor) -> Tensor:

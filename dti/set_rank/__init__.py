@@ -1,1 +1,1 @@
-from .model import SetRankModel
+from .model import SetRankModel, MoleculeSetRank
