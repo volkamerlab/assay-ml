@@ -174,13 +174,13 @@ class MoleculeSetRank(Module):
             input_size=ligand_input_size,
             hidden_size=hidden_channels,
             output_size=hidden_channels,
-            hidden_layers=1,
+            hidden_layers=4,
         )
         self.set_transformer = SetTransformer(
             hidden_channels=hidden_channels,
             num_heads=8,
-            ffn_hidden_layers=1,
-            num_blocks=3,
+            ffn_hidden_layers=2,
+            num_blocks=4,
             dropout=0.0,
         )
         self.ouput = Sequential(
@@ -191,7 +191,6 @@ class MoleculeSetRank(Module):
             Linear(hidden_channels, hidden_channels),
             ReLU(),
             BatchNorm1d(hidden_channels),
-            Dropout(p_dropout),
             Linear(hidden_channels, 1),
         )
 

@@ -73,8 +73,56 @@ def batch_pair_loss(
     return criterion(predictions, target_delta.flatten())
 
 
+def train_multi_batch_epoch(
+    model,
+    loader,
+    optimizer,
+    count,
+    criterion=nn.MSELoss(),
+    normalize_training_batches=True,
+):
+    """Train the model for one epoch."""
+    logger.debug("Training model")
+    model.train()
+    torch.set_grad_enabled(True)
+
+    total_loss = 0
+    seen_samples = 0
+    batch_loss = 0
+
+    for protein_features, ligand_features, labels, _ in tqdm.tqdm(
+        loader, desc="training"
+    ):
+        protein_features, ligand_features, labels = (
+            protein_features.to(device),
+            ligand_features.to(device),
+            labels.to(device).squeeze(),
+        )
+        if normalize_training_batches:
+            labels = (labels - labels.mean()) / labels.std()
+
+        predictions = model(protein_features, ligand_features).squeeze()
+        batch_loss += criterion(predictions, labels)
+        seen_samples += len(labels)
+
+        if seen_samples >= count:
+            optimizer.zero_grad()
+            batch_loss.backward()
+            optimizer.step()
+
+            total_loss += batch_loss.item() / seen_samples
+            seen_samples = 0
+            batch_loss = 0
+
+    return total_loss
+
+
 def train_epoch(
-    model, loader, optimizer, criterion=nn.MSELoss(), normalize_training_batches=False
+    model,
+    loader,
+    optimizer,
+    criterion=nn.MSELoss(),
+    normalize_training_batches=False,
 ):
     """Train the model for one epoch."""
     logger.debug("Training model")
@@ -163,7 +211,6 @@ def train_and_evaluate_model(
     test_loader: DataLoader,
     target_name: str,
     index: int,
-    normalize_training_batches: bool = False,
     **kwargs: Dict[str, Any],
 ) -> None:
     """Train and evaluate the model with learning rate adjustment and early stopping."""
@@ -179,6 +226,8 @@ def train_and_evaluate_model(
             rank_corr_fn=None,
             training_loss=nn.MSELoss(),
             cosine_agg=True,
+            normalize_training_batches=False,
+            lr=1e-4,
         )
         | kwargs
     )
@@ -194,7 +243,7 @@ def train_and_evaluate_model(
         cosine_agg=opts["cosine_agg"],
     ).to(device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=opts["lr"])
     scheduler = ReduceLROnPlateau(
         optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
     )
@@ -203,13 +252,24 @@ def train_and_evaluate_model(
     epochs_without_improvement = 0
 
     for epoch in range(opts["num_epochs"]):
-        train_loss = train_epoch(
-            model,
-            train_loader,
-            optimizer,
-            criterion=opts["training_loss"],
-            normalize_training_batches=normalize_training_batches,
-        )
+        if opts.get("multi_batch", False):
+            batch_size = opts.get("batch_size", 512)
+            train_loss = train_multi_batch_epoch(
+                model,
+                train_loader,
+                optimizer,
+                batch_size,
+                criterion=opts["training_loss"],
+                normalize_training_batches=opts["normalize_training_batches"],
+            )
+        else:
+            train_loss = train_epoch(
+                model,
+                train_loader,
+                optimizer,
+                criterion=opts["training_loss"],
+                normalize_training_batches=opts["normalize_training_batches"],
+            )
         val_loss, val_rank_corr = evaluate_epoch(
             model, val_loader, rank_corr_fn=opts["rank_corr_fn"]
         )

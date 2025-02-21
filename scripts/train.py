@@ -187,6 +187,8 @@ def run_split(
         test_loader,
         method,
         fold,
+        multi_batch=True,
+        batch_size=batch_size,
         rank_corr_fn=assay_rank,
         embedding_size=512,
         num_epochs=num_epochs,
@@ -195,7 +197,7 @@ def run_split(
         patience_termination=500 if train_short else 1000,
         patience_lr=50 if train_short else 100,
         normalize_training_batches=method in ["set", "setall"],
-        lr=2e-5 if method in ["set", "setall"] else 1e-4,
+        lr=1e-4,
     )
 
     logger.info(f"{run_name} finished")
