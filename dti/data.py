@@ -15,10 +15,7 @@ import torch
 from torch.utils.data import Dataset
 from esm import FastaBatchedDataset, pretrained
 from sklearn.preprocessing import StandardScaler
-from torch import Tensor
-from torch.nn import Dropout, Linear, Module, ReLU, Sequential, BatchNorm1d
 
-from .set_rank.set_transformer import SetTransformer, _mlp
 from .constants import DATA, SMILES, ACT, TID, SEQUENCE, ASSAY, COMPOUND
 from .utils import device
 from .hodge_ranking import parallel_hodge_rank
