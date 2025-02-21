@@ -17,6 +17,8 @@ from dti.model import (
     MolecularModel,
     PairCombinedModel,
     PairMolecularModel,
+    SetRankModel,
+    MoleculeSetRank,
 )
 from dti.data import (
     ActivityDataset,
@@ -35,7 +37,6 @@ from dti.utils import (
     write_header,
 )
 from dti.constants import DATA, ASSAY, COMPOUND
-from dti.set_rank import SetRankModel, MoleculeSetRank
 
 logger = logging.getLogger(__name__)
 
