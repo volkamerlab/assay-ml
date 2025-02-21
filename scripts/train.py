@@ -66,6 +66,18 @@ def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type, type]:
                 hidden_channels=512,
             )
             return model, SetActivityDataset, ActivityDataset
+        case "setall" if mol_only:
+            model = partial(
+                MoleculeSetRank,
+                hidden_channels=512,
+            )
+            return model, ActivityDataset, ActivityDataset
+        case "setall":
+            model = partial(
+                SetRankModel,
+                hidden_channels=512,
+            )
+            return model, ActivityDataset, ActivityDataset
         case _:
             logger.error(f"Unknown method: {method}")
             sys.exit(1)
@@ -95,7 +107,7 @@ def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
 def train_batch(method: str, default: int) -> int:
     match method:
         case "pair_all":
-            return np.sqrt(default).astype(int)
+            return int(np.sqrt(default))
         case "set":
             return 1
         case _:
@@ -145,10 +157,12 @@ def run_split(
     sampler = WeightedRandomSampler(
         train_dataset.weights, len(train_dataset), generator=g
     )
+    tb = train_batch(method, batch_size)
+    assert isinstance(tb, int) and tb > 0, (tb, type(tb))
     assert len(train_dataset) > 0
     train_loader = DataLoader(
         train_dataset,
-        batch_size=train_batch(method, batch_size),
+        batch_size=tb,
         sampler=sampler,
         drop_last=True,
     )
@@ -161,7 +175,7 @@ def run_split(
     )
     training_loss = (
         partial(batch_pair_loss, criterion=nn.HuberLoss())
-        if method in ["pair_all", "set"]
+        if method in ["pair_all", "set", "setall"]
         else nn.HuberLoss()
     )
     train_short = method in ["pair", "pair_all"]
@@ -180,7 +194,8 @@ def run_split(
         training_loss=training_loss,
         patience_termination=500 if train_short else 1000,
         patience_lr=50 if train_short else 100,
-        normalize_training_batches=method in ["set"],
+        normalize_training_batches=method in ["set", "setall"],
+        lr=2e-5 if method in ["set", "setall"] else 1e-4,
     )
 
     logger.info(f"{run_name} finished")
