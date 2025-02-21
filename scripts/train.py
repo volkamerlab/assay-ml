@@ -161,7 +161,7 @@ def run_split(
     )
     training_loss = (
         partial(batch_pair_loss, criterion=nn.HuberLoss())
-        if method == "pair_all"
+        if method in ["pair_all", "set"]
         else nn.HuberLoss()
     )
     train_short = method in ["pair", "pair_all"]

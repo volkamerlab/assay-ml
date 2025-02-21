@@ -58,12 +58,18 @@ class AssayRankAccuracy:
 
         return corr_sum / count
 
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}({self.rank_statistic})"
+
 
 def batch_pair_loss(
     predictions: Tensor, labels: Tensor, criterion=nn.MSELoss()
 ) -> float:
     n = len(labels)
     target_delta = labels.view(n, 1) - labels.view(1, n)
+    if predictions.shape == (n,):
+        predictions = predictions.view(n, 1) - predictions.view(1, n)
+        predictions = predictions.flatten()
     return criterion(predictions, target_delta.flatten())
 
 
