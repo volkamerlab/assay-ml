@@ -29,7 +29,12 @@ from dti.data import (
     load_atcc,
     load_split,
 )
-from dti.training import train_and_evaluate_model, AssayRankAccuracy, batch_pair_loss
+from dti.training import (
+    train_and_evaluate_model,
+    AssayRankAccuracy,
+    batch_pair_loss,
+    normBCE,
+)
 from dti.utils import (
     init_logging,
     set_random_seeds,
@@ -160,21 +165,22 @@ def run_split(
     tb = train_batch(method, batch_size)
     assert isinstance(tb, int) and tb > 0, (tb, type(tb))
     assert len(train_dataset) > 0
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=tb,
-        sampler=sampler,
-        drop_last=True,
+    train_dl_kwargs = (
+        dict() if method in ["set", "setall"] else dict(sampler=sampler, drop_last=True)
     )
+    train_loader = DataLoader(train_dataset, batch_size=tb, **train_dl_kwargs)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    rstat = partial(kendalltau, nan_policy="omit", variant="c")
+    rstat = partial(kendalltau, nan_policy="raise", variant="c")
     assay_rank = AssayRankAccuracy(
         data, method in ["pair", "pair_all"], rank_statistic=rstat
     )
     training_loss = (
-        partial(batch_pair_loss, criterion=nn.HuberLoss())
+        partial(
+            batch_pair_loss,
+            criterion=normBCE if method in ["set", "setall"] else nn.HuberLoss(),
+        )
         if method in ["pair_all", "set", "setall"]
         else nn.HuberLoss()
     )
@@ -196,7 +202,7 @@ def run_split(
         training_loss=training_loss,
         patience_termination=500 if train_short else 1000,
         patience_lr=50 if train_short else 100,
-        normalize_training_batches=method in ["set", "setall"],
+        normalize_training_batches=False,  # method in ["set", "setall"],
         lr=1e-4,
     )
 
@@ -221,4 +227,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logger.error(e)

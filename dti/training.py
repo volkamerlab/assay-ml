@@ -47,7 +47,7 @@ class AssayRankAccuracy:
                     prediction = scores["prediction"].values
                     ground_truth = reference.values
                     corr = self.rank_statistic(prediction, ground_truth).statistic
-                except ValueError:
+                except ValueError as e:
                     logger.warning(f"rank correlation failed (assay={assay})")
                     continue
                 if np.isnan(corr):
@@ -60,6 +60,11 @@ class AssayRankAccuracy:
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.rank_statistic})"
+
+
+def normBCE(pred_deltas: Tensor, true_deltas: Tensor):
+    thres = nn.Sigmoid()
+    return nn.BCELoss()(thres(pred_deltas), thres(true_deltas))
 
 
 def batch_pair_loss(
@@ -102,15 +107,16 @@ def train_multi_batch_epoch(
             labels = (labels - labels.mean()) / labels.std()
 
         predictions = model(protein_features, ligand_features).squeeze()
-        batch_loss += criterion(predictions, labels)
-        seen_samples += len(labels)
+        assay_size = len(labels)
+        batch_loss += criterion(predictions, labels) * (assay_size / count)
+        seen_samples += assay_size
 
         if seen_samples >= count:
             optimizer.zero_grad()
             batch_loss.backward()
             optimizer.step()
 
-            total_loss += batch_loss.item() / seen_samples
+            total_loss += batch_loss.item()
             seen_samples = 0
             batch_loss = 0
 
