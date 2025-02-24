@@ -1,5 +1,5 @@
 #!/bin/bash
-output_dir=~/hodge-dti/data/output/
+output_dir=data/output/
 output_files=$(find $output_dir -name output.log | sort)
 
 printf "%-32s %-6s %-5s %-10s %-10s\n" "Run    " "Epoch" "Fold" "Test Corr" "State"
