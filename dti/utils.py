@@ -1,7 +1,9 @@
 from typing import Union
+import subprocess
 import time
 import logging
-import sys
+import tarfile
+from pathlib import Path
 
 import torch
 import numpy as np
@@ -11,6 +13,8 @@ from .constants import OUTPUT
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+logger = logging.getLogger(__name__)
+
 
 def set_random_seeds(seed: int):
     torch.manual_seed(seed)
@@ -19,22 +23,40 @@ def set_random_seeds(seed: int):
     np.random.seed(seed)
 
 
-class LoggerWriter:
-    # https://stackoverflow.com/questions/19425736/how-to-redirect-stdout-and-stderr-to-logger-in-python
-    def __init__(self, level):
-        self.level = level
+def output_dir(run_name: str) -> Path:
+    out_dir = OUTPUT / run_name
+    out_dir.mkdir(exist_ok=True, parents=True)
+    return out_dir
 
-    def write(self, message):
-        if message != '\n':
-            self.level(message)
 
-    def flush(self):
-        self.level(sys.stderr)
+def get_tracked_files():
+    try:
+        result = subprocess.run(
+            ["git", "ls-files"], capture_output=True, text=True, check=True
+        )
+        files = result.stdout.strip().split("\n")
+        return [Path(f) for f in files if f]
+    except subprocess.CalledProcessError:
+        print("Error: Not a valid Git repository or issue running 'git ls-files'")
+        return []
+
+
+def save_code_snapshot(run_name):
+    archive_name = output_dir(run_name) / "code.tar.gz"
+    python_files = get_tracked_files()
+    if not python_files:
+        logger.warn("No tracked Python files found.")
+        return
+
+    with tarfile.open(archive_name, "w:gz") as tar:
+        for py_file in python_files:
+            tar.add(py_file, arcname=py_file)
+
+    logger.info(f"code archive created: {archive_name}")
 
 
 def init_logging(run_name: Union[str, None] = str(time.time())):
-    (OUTPUT / run_name).mkdir(exist_ok=True, parents=True)
-    log_file = OUTPUT / run_name / "output.log"
+    log_file = output_dir(run_name) / "output.log"
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
 
@@ -52,9 +74,6 @@ def init_logging(run_name: Union[str, None] = str(time.time())):
 
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
-
-    # sys.stdout = LoggerWriter(logger.debug)
-    # sys.stderr = LoggerWriter(logger.warning)
 
     logger.info(f"logging run {run_name} to {log_file}")
 
@@ -76,6 +95,5 @@ def write_header(run_name: str):
 
 def write_info(run_name: str, fields: list):
     """Write optimization data to a CSV file."""
-    (OUTPUT / run_name).mkdir(exist_ok=True, parents=True)
-    with open(OUTPUT / run_name / "optimization.csv", "a") as f:
+    with open(output_dir(run_name) / "optimization.csv", "a") as f:
         f.write(",".join(map(str, fields)) + "\n")

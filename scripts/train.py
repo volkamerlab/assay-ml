@@ -4,6 +4,7 @@ import sys
 import random
 from functools import partial
 from typing import Tuple, Callable
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -40,6 +41,7 @@ from dti.utils import (
     init_logging,
     set_random_seeds,
     write_header,
+    save_code_snapshot,
 )
 from dti.constants import DATA, ASSAY, COMPOUND
 
@@ -220,6 +222,7 @@ def main():
     init_logging(run_name)
     logger = logging.getLogger(run_name)
     logger.info(f"seed={seed} method={method} dataset={dataset_name} fold={fold}")
+    save_code_snapshot(run_name)
 
     set_random_seeds(seed)
     write_header(run_name)
