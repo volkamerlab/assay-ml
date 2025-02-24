@@ -172,7 +172,7 @@ class SetActivityDataset(ActivityDataset):
     def _make_batches(self):
         self.batches = []
         num_unused = 0
-        for group in tqdm.tqdm(self.groups_index, desc="Making batches..."):
+        for group in self.groups_index:
             if len(group) < self.min_batch_size:
                 num_unused += len(group)
                 continue

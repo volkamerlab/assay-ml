@@ -10,7 +10,6 @@ import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, WeightedRandomSampler
-from sklearn.preprocessing import StandardScaler
 from scipy.stats import kendalltau, spearmanr
 
 from dti.model import (
@@ -35,6 +34,7 @@ from dti.training import (
     train_and_evaluate_model,
     AssayRankAccuracy,
     batch_pair_loss,
+    corr_loss,
     normBCE,
 )
 from dti.utils import (
@@ -175,18 +175,20 @@ def run_split(
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    rstat = partial(kendalltau, nan_policy="raise", variant="c")
+    rstat = partial(spearmanr, nan_policy="raise") #, variant="c")
     assay_rank = AssayRankAccuracy(
         data, method in ["pair", "pair_all"], rank_statistic=rstat
     )
-    training_loss = (
-        partial(
-            batch_pair_loss,
-            criterion=normBCE if method in ["set", "setall"] else nn.HuberLoss(),
-        )
-        if method in ["pair_all", "set", "setall"]
-        else nn.HuberLoss()
-    )
+    if method in ["set", "setall"]:
+        training_loss = corr_loss
+        # partial(
+        #     batch_pair_loss,
+        #     criterion=normBCE if method in ["set", "setall"] else nn.HuberLoss(),
+        # )
+    elif method in ["pairall"]:
+        training_loss = partial(batch_pair_loss, criterion=nn.HuberLoss())
+    else:
+        training_loss = nn.HuberLoss()
     train_short = method in ["pair", "pair_all"]
     train_and_evaluate_model(
         model_cls,

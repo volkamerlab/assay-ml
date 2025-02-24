@@ -78,6 +78,14 @@ def batch_pair_loss(
     return criterion(predictions, target_delta.flatten())
 
 
+def corr_loss(x: Tensor, y: Tensor) -> float:
+    vx = x - torch.mean(x)
+    vy = y - torch.mean(y)
+    return -torch.sum(vx * vy) / (
+        torch.sqrt(torch.sum(vx**2)) * torch.sqrt(torch.sum(vy**2))
+    )
+
+
 def train_multi_batch_epoch(
     model,
     loader,
@@ -94,6 +102,7 @@ def train_multi_batch_epoch(
     total_loss = 0
     seen_samples = 0
     batch_loss = 0
+    steps = 0
 
     for protein_features, ligand_features, labels, _ in tqdm.tqdm(
         loader, desc="training"
@@ -108,10 +117,16 @@ def train_multi_batch_epoch(
 
         predictions = model(protein_features, ligand_features).squeeze()
         assay_size = len(labels)
-        batch_loss += criterion(predictions, labels) * (assay_size / count)
+        batch_loss += (
+            torch.logit(
+                torch.clamp(0.5 + criterion(predictions, labels) / 2, 1e-10, 1 - 1e-10)
+            )
+            * assay_size
+        )
         seen_samples += assay_size
 
         if seen_samples >= count:
+            batch_loss /= seen_samples
             optimizer.zero_grad()
             batch_loss.backward()
             optimizer.step()
@@ -119,8 +134,9 @@ def train_multi_batch_epoch(
             total_loss += batch_loss.item()
             seen_samples = 0
             batch_loss = 0
+            steps += 1
 
-    return total_loss
+    return total_loss / steps
 
 
 def train_epoch(
