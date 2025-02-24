@@ -1,4 +1,5 @@
 import logging
+import traceback
 import uuid
 import sys
 import random
@@ -236,4 +237,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
+        for line in traceback.format_exc().split("\n"):
+            logger.error(line)
         logger.error(e)
