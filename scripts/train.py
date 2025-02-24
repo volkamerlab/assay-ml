@@ -9,7 +9,8 @@ import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, WeightedRandomSampler
-from scipy.stats import kendalltau
+from sklearn.preprocessing import StandardScaler
+from scipy.stats import kendalltau, spearmanr
 
 from dti.model import (
     CombinedModel,
@@ -200,7 +201,7 @@ def run_split(
         num_epochs=num_epochs,
         cosine_agg=True,
         training_loss=training_loss,
-        patience_termination=500 if train_short else 1000,
+        patience_termination=200 if train_short else 1000,
         patience_lr=50 if train_short else 100,
         normalize_training_batches=False,  # method in ["set", "setall"],
         lr=1e-4,

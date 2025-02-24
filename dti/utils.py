@@ -1,6 +1,7 @@
 from typing import Union
 import time
 import logging
+import sys
 
 import torch
 import numpy as np
@@ -16,6 +17,19 @@ def set_random_seeds(seed: int):
     torch.use_deterministic_algorithms(True)
     random.seed(seed)
     np.random.seed(seed)
+
+
+class LoggerWriter:
+    # https://stackoverflow.com/questions/19425736/how-to-redirect-stdout-and-stderr-to-logger-in-python
+    def __init__(self, level):
+        self.level = level
+
+    def write(self, message):
+        if message != '\n':
+            self.level(message)
+
+    def flush(self):
+        self.level(sys.stderr)
 
 
 def init_logging(run_name: Union[str, None] = str(time.time())):
@@ -38,6 +52,9 @@ def init_logging(run_name: Union[str, None] = str(time.time())):
 
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
+
+    # sys.stdout = LoggerWriter(logger.debug)
+    # sys.stderr = LoggerWriter(logger.warning)
 
     logger.info(f"logging run {run_name} to {log_file}")
 

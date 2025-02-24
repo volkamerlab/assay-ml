@@ -48,7 +48,7 @@ class AssayRankAccuracy:
                     ground_truth = reference.values
                     corr = self.rank_statistic(prediction, ground_truth).statistic
                 except ValueError as e:
-                    logger.warning(f"rank correlation failed (assay={assay})")
+                    logger.warning(f"rank correlation failed (assay={assay}): {e}")
                     continue
                 if np.isnan(corr):
                     logger.warning(f"rank correlation is nan (assay={assay})")

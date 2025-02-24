@@ -13,24 +13,6 @@ request_memory = 64G
 requirements = UidDomain == "cs.uni-saarland.de"
 +WantGPUHomeMounted = true
 queue fold, script, seed, dataset, method from (
-    0, scripts/train.py, 0, landrum, ic50
-    0, scripts/train.py, 0, landrum, pair
     0, scripts/train.py, 0, landrum, pair_all
-    0, scripts/train.py, 0, landrum, hodge
-    1, scripts/train.py, 0, landrum, ic50
-    1, scripts/train.py, 0, landrum, pair
     1, scripts/train.py, 0, landrum, pair_all
-    1, scripts/train.py, 0, landrum, hodge
-    2, scripts/train.py, 0, landrum, ic50
-    2, scripts/train.py, 0, landrum, pair
-    2, scripts/train.py, 0, landrum, pair_all
-    2, scripts/train.py, 0, landrum, hodge
-    3, scripts/train.py, 0, landrum, ic50
-    3, scripts/train.py, 0, landrum, pair
-    3, scripts/train.py, 0, landrum, pair_all
-    3, scripts/train.py, 0, landrum, hodge
-    4, scripts/train.py, 0, landrum, ic50
-    4, scripts/train.py, 0, landrum, pair
-    4, scripts/train.py, 0, landrum, pair_all
-    4, scripts/train.py, 0, landrum, hodge
 )

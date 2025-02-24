@@ -13,24 +13,9 @@ request_memory = 64G
 requirements = UidDomain == "cs.uni-saarland.de"
 +WantGPUHomeMounted = true
 queue fold, script, seed, dataset, method from (
-    0, scripts/train.py, 0, kinodata, ic50
-    0, scripts/train.py, 0, kinodata, pair
-    0, scripts/train.py, 0, kinodata, pair_all
-    0, scripts/train.py, 0, kinodata, hodge
-    1, scripts/train.py, 0, kinodata, ic50
-    1, scripts/train.py, 0, kinodata, pair
-    1, scripts/train.py, 0, kinodata, pair_all
-    1, scripts/train.py, 0, kinodata, hodge
-    2, scripts/train.py, 0, kinodata, ic50
-    2, scripts/train.py, 0, kinodata, pair
-    2, scripts/train.py, 0, kinodata, pair_all
-    2, scripts/train.py, 0, kinodata, hodge
-    3, scripts/train.py, 0, kinodata, ic50
-    3, scripts/train.py, 0, kinodata, pair
-    3, scripts/train.py, 0, kinodata, pair_all
-    3, scripts/train.py, 0, kinodata, hodge
-    4, scripts/train.py, 0, kinodata, ic50
-    4, scripts/train.py, 0, kinodata, pair
-    4, scripts/train.py, 0, kinodata, pair_all
-    4, scripts/train.py, 0, kinodata, hodge
+    0, scripts/train.py, 0, kinodata, set
+    1, scripts/train.py, 0, kinodata, set
+    2, scripts/train.py, 0, kinodata, set
+    3, scripts/train.py, 0, kinodata, set
+    4, scripts/train.py, 0, kinodata, set
 )
