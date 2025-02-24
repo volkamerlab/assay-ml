@@ -180,13 +180,15 @@ def run_split(
     assay_rank = AssayRankAccuracy(
         data, method in ["pair", "pair_all"], rank_statistic=rstat
     )
+    multi_batch = False
     if method in ["set", "setall"]:
         training_loss = corr_loss
+        multi_batch = True
         # partial(
         #     batch_pair_loss,
         #     criterion=normBCE if method in ["set", "setall"] else nn.HuberLoss(),
         # )
-    elif method in ["pairall"]:
+    elif method in ["pair_all"]:
         training_loss = partial(batch_pair_loss, criterion=nn.HuberLoss())
     else:
         training_loss = nn.HuberLoss()
@@ -199,7 +201,7 @@ def run_split(
         test_loader,
         method,
         fold,
-        multi_batch=True,
+        multi_batch=multi_batch,
         batch_size=batch_size,
         rank_corr_fn=assay_rank,
         embedding_size=512,
