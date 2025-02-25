@@ -4,6 +4,7 @@ import time
 import logging
 import tarfile
 from pathlib import Path
+from enum import StrEnum, auto
 
 import torch
 import numpy as np
@@ -14,6 +15,41 @@ from .constants import OUTPUT
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 logger = logging.getLogger(__name__)
+
+
+class Method(StrEnum):
+    IC50 = auto()
+    HODGE = auto()
+    PAIRS = auto()
+    ALLPAIRS = auto()
+    SETS = auto()
+    ALLSETS = auto()
+
+    @staticmethod
+    def from_string(m: str):
+        match m.upper().replace("_", ""):
+            case "IC50":
+                return Method.IC50
+            case "HODGE":
+                return Method.HODGE
+            case "ALLPAIRS" | "PAIRALL":
+                return Method.ALLPAIRS
+            case "PAIR" | "PAIRS":
+                return Method.PAIRS
+            case "SET" | "SETS":
+                return Method.SETS
+            case "SETALL" | "ALLSETS":
+                return Method.ALLSETS
+            case _:
+                raise ValueError(f"Unknown method '{m}'")
+
+    @property
+    def on_sets(self) -> bool:
+        return self in [Method.SETS, Method.ALLSETS]
+
+    @property
+    def on_pairs(self) -> bool:
+        return self in [Method.PAIRS, Method.ALLPAIRS]
 
 
 def set_random_seeds(seed: int):
