@@ -5,13 +5,12 @@ import sys
 import random
 from functools import partial
 from typing import Tuple, Callable
-from pathlib import Path
 
 import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, WeightedRandomSampler
-from scipy.stats import kendalltau, spearmanr
+from scipy.stats import spearmanr
 
 from dti.model import (
     CombinedModel,
@@ -23,8 +22,8 @@ from dti.model import (
 )
 from dti.data import (
     ActivityDataset,
-    PairDataset,
     SetActivityDataset,
+    PairDataset,
     prepare_datasets,
     load_landrum,
     load_kinodata,
@@ -32,13 +31,13 @@ from dti.data import (
     load_split,
 )
 from dti.training import (
-    train_and_evaluate_model,
     AssayRankAccuracy,
+    train_and_evaluate_model,
     batch_pair_loss,
     corr_loss,
-    normBCE,
 )
 from dti.utils import (
+    Method,
     init_logging,
     set_random_seeds,
     write_header,
@@ -47,49 +46,6 @@ from dti.utils import (
 from dti.constants import DATA, ASSAY, COMPOUND
 
 logger = logging.getLogger(__name__)
-
-
-def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type, type]:
-    match method:
-        case "pair" if mol_only:
-            return PairMolecularModel, PairDataset, PairDataset
-        case "pair":
-            return PairCombinedModel, PairDataset, PairDataset
-        case "pair_all" if mol_only:
-            return PairMolecularModel, ActivityDataset, PairDataset
-        case "pair_all":
-            return PairCombinedModel, ActivityDataset, PairDataset
-        case "hodge" | "ic50" if mol_only:
-            return MolecularModel, ActivityDataset, ActivityDataset
-        case "hodge" | "ic50":
-            return CombinedModel, ActivityDataset, ActivityDataset
-        case "set" if mol_only:
-            model = partial(
-                MoleculeSetRank,
-                hidden_channels=512,
-            )
-            return model, SetActivityDataset, ActivityDataset
-        case "set":
-            model = partial(
-                SetRankModel,
-                hidden_channels=512,
-            )
-            return model, SetActivityDataset, ActivityDataset
-        case "setall" if mol_only:
-            model = partial(
-                MoleculeSetRank,
-                hidden_channels=512,
-            )
-            return model, ActivityDataset, ActivityDataset
-        case "setall":
-            model = partial(
-                SetRankModel,
-                hidden_channels=512,
-            )
-            return model, ActivityDataset, ActivityDataset
-        case _:
-            logger.error(f"Unknown method: {method}")
-            sys.exit(1)
 
 
 def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
@@ -113,11 +69,54 @@ def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
     return model_cls, dataset_cls, val_dataset_cls, data
 
 
+def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type, type]:
+    match method:
+        case Method.PAIRS if mol_only:
+            return PairMolecularModel, PairDataset, PairDataset
+        case Method.PAIRS:
+            return PairCombinedModel, PairDataset, PairDataset
+        case Method.ALLPAIRS if mol_only:
+            return PairMolecularModel, ActivityDataset, PairDataset
+        case Method.ALLPAIRS:
+            return PairCombinedModel, ActivityDataset, PairDataset
+        case Method.HODGE | Method.IC50 if mol_only:
+            return MolecularModel, ActivityDataset, ActivityDataset
+        case Method.HODGE | Method.IC50:
+            return CombinedModel, ActivityDataset, ActivityDataset
+        case Method.SETS if mol_only:
+            model = partial(
+                MoleculeSetRank,
+                hidden_channels=512,
+            )
+            return model, SetActivityDataset, ActivityDataset
+        case Method.SETS:
+            model = partial(
+                SetRankModel,
+                hidden_channels=512,
+            )
+            return model, SetActivityDataset, ActivityDataset
+        case Method.ALLSETS if mol_only:
+            model = partial(
+                MoleculeSetRank,
+                hidden_channels=512,
+            )
+            return model, ActivityDataset, ActivityDataset
+        case Method.ALLSETS:
+            model = partial(
+                SetRankModel,
+                hidden_channels=512,
+            )
+            return model, ActivityDataset, ActivityDataset
+        case _:
+            logger.error(f"Unknown method: {method}")
+            sys.exit(1)
+
+
 def train_batch(method: str, default: int) -> int:
     match method:
-        case "pair_all":
+        case Method.ALLPAIRS:
             return int(np.sqrt(default))
-        case "set":
+        case Method.SETS:
             return 1
         case _:
             return default
@@ -134,24 +133,24 @@ def run_split(
     num_epochs = 50_000  # early stopping in place
     info_cols = [COMPOUND, ASSAY]
     data_dir = DATA / "processed" / dataset_name
-    tgt_name = "hodge_score" if method == "hodge" else "scaled_ic50"
+    tgt_name = "hodge_score" if method == Method.HODGE else "scaled_ic50"
 
     model_cls, dataset_cls, val_dataset_cls, load_data = setup(method, dataset_name)
     data = load_data()
 
     if not (data_dir / f"{fold}").exists():
         prepare_datasets(
-            data, data_dir, 5, random_valset=False, aggregate=method == "hodge"
+            data, data_dir, 5, random_valset=False, aggregate=method == Method.HODGE
         )
 
-    inter_assay_weight = 0.0 if method == "hodge" else None
+    inter_assay_weight = 0.0 if method == Method.HODGE else None
     train_data, val_data, test_data = load_split(
         fold, data_dir, tgt_name, inter_assay_weight=inter_assay_weight
     )
     val_dataset = val_dataset_cls(val_data, target=tgt_name, info_cols=info_cols)
     test_dataset = val_dataset_cls(test_data, target=tgt_name, info_cols=info_cols)
 
-    train_tgt = tgt_name if method != "hodge" else "hodge_score"
+    train_tgt = "hodge_score" if method == Method.HODGE else tgt_name
     logger.info(f"training target: {train_tgt}")
     train_dataset = dataset_cls(train_data, target=tgt_name, info_cols=info_cols)
 
@@ -170,29 +169,23 @@ def run_split(
     assert isinstance(tb, int) and tb > 0, (tb, type(tb))
     assert len(train_dataset) > 0
     train_dl_kwargs = (
-        dict() if method in ["set", "setall"] else dict(sampler=sampler, drop_last=True)
+        dict() if method.on_sets else dict(sampler=sampler, drop_last=True)
     )
     train_loader = DataLoader(train_dataset, batch_size=tb, **train_dl_kwargs)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    rstat = partial(spearmanr, nan_policy="raise") #, variant="c")
-    assay_rank = AssayRankAccuracy(
-        data, method in ["pair", "pair_all"], rank_statistic=rstat
-    )
+    rstat = partial(spearmanr, nan_policy="raise")  # , variant="c")
+    assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
     multi_batch = False
-    if method in ["set", "setall"]:
+    if method.on_sets:
         training_loss = corr_loss
         multi_batch = True
-        # partial(
-        #     batch_pair_loss,
-        #     criterion=normBCE if method in ["set", "setall"] else nn.HuberLoss(),
-        # )
-    elif method in ["pair_all"]:
+    elif method == Method.ALLPAIRS:
         training_loss = partial(batch_pair_loss, criterion=nn.HuberLoss())
     else:
         training_loss = nn.HuberLoss()
-    train_short = method in ["set", "setall", "pair", "pair_all"]
+    train_short = method.on_sets or method.on_pairs
     train_and_evaluate_model(
         model_cls,
         run_name,
@@ -210,7 +203,7 @@ def run_split(
         training_loss=training_loss,
         patience_termination=200 if train_short else 1000,
         patience_lr=50 if train_short else 100,
-        normalize_training_batches=False,  # method in ["set", "setall"],
+        normalize_training_batches=False,  # method in [Method.SETS, Method.ALLSETS],
         lr=1e-4,
     )
 
@@ -220,7 +213,7 @@ def run_split(
 def main():
     seed = int(sys.argv[1])
     dataset_name = sys.argv[2]
-    method = sys.argv[3]
+    method = Method.from_string(sys.argv[3])
     fold = int(sys.argv[4])
 
     run_name = f"{dataset_name}_{fold}_{method}_" + uuid.uuid4().hex[:4]
