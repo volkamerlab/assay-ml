@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from scipy.stats import spearmanr
 
 import logging
+import traceback
 
 from .utils import write_info, device
 from .constants import ASSAY, OUTPUT, ACT, COMPOUND
@@ -48,6 +49,8 @@ class AssayRankAccuracy:
                     ground_truth = reference.values
                     corr = self.rank_statistic(prediction, ground_truth).statistic
                 except ValueError as e:
+                    for line in traceback.format_exc().split("\n"):
+                        logger.warning(line)
                     logger.warning(f"rank correlation failed (assay={assay}): {e}")
                     continue
                 if np.isnan(corr):
@@ -81,9 +84,12 @@ def batch_pair_loss(
 def corr_loss(x: Tensor, y: Tensor) -> float:
     vx = x - torch.mean(x)
     vy = y - torch.mean(y)
-    return -torch.sum(vx * vy) / (
-        torch.sqrt(torch.sum(vx**2)) * torch.sqrt(torch.sum(vy**2))
-    )
+    var_x = torch.var(x)
+    var_y = torch.var(y)
+    if var_x.abs() < 1e-10 or var_y < 1e-10:
+        return torch.tensor(0.0)
+    else:
+        return -torch.sum(vx * vy) / (var_x * var_y)
 
 
 def train_multi_batch_epoch(
@@ -93,6 +99,7 @@ def train_multi_batch_epoch(
     count,
     criterion=nn.MSELoss(),
     normalize_training_batches=True,
+    fisher_transform=True,
 ):
     """Train the model for one epoch."""
     logger.debug("Training model")
@@ -117,12 +124,10 @@ def train_multi_batch_epoch(
 
         predictions = model(protein_features, ligand_features).squeeze()
         assay_size = len(labels)
-        batch_loss += (
-            torch.logit(
-                torch.clamp(0.5 + criterion(predictions, labels) / 2, 1e-10, 1 - 1e-10)
-            )
-            * assay_size
-        )
+        loss = criterion(predictions, labels)
+        if fisher_transform:
+            loss = torch.logit(torch.clamp(0.5 + loss / 2, 1e-10, 1 - 1e-10))
+        batch_loss += loss * assay_size
         seen_samples += assay_size
 
         if seen_samples >= count:
@@ -165,7 +170,10 @@ def train_epoch(
             labels = (labels - labels.mean()) / labels.std()
 
         optimizer.zero_grad()
+        assert not protein_features.isnan().any()
+        assert not ligand_features.isnan().any()
         predictions = model(protein_features, ligand_features).squeeze()
+        assert not predictions.isnan().any(), predictions
         loss = criterion(predictions, labels)
         loss.backward()
         optimizer.step()
@@ -200,7 +208,10 @@ def evaluate_epoch(
             labels.to(device).squeeze(),
         )
 
+        assert not protein_features.isnan().any()
+        assert not ligand_features.isnan().any()
         predictions = model(protein_features, ligand_features).squeeze()
+        assert not predictions.isnan().any()
         loss = criterion(predictions, labels)
 
         total_loss += loss.item()

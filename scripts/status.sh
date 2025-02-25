@@ -1,8 +1,15 @@
 #!/bin/bash
-output_dir=data/output/
+output_dir=data/hpc-data/
+remote_dir=/home/michael.backenkoehler/hodge-dti/data/output/
+remote=michael.backenkoehler@conduit.cs.uni-saarland.de:$remote_dir
+
+echo "sync files"
+rsync -av --exclude='*.pt' $remote $output_dir > /dev/null
+
 output_files=$(find $output_dir -name output.log | sort)
 
-printf "%-32s %-6s %-5s %-10s %-10s\n" "Run    " "Epoch" "Fold" "Test Corr" "State"
+printf "\n%-32s %-6s %-5s %-10s %-10s\n" "Run    " "Epoch" "Fold" "Test Corr" "State"
+
 
 upcoming=""
 old_fold="-1"
