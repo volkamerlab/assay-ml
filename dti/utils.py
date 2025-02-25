@@ -4,7 +4,7 @@ import time
 import logging
 import tarfile
 from pathlib import Path
-from enum import StrEnum, auto
+from enum import Enum
 
 import torch
 import numpy as np
@@ -17,13 +17,13 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 logger = logging.getLogger(__name__)
 
 
-class Method(StrEnum):
-    IC50 = auto()
-    HODGE = auto()
-    PAIRS = auto()
-    ALLPAIRS = auto()
-    SETS = auto()
-    ALLSETS = auto()
+class Method(Enum):
+    IC50 = "ic50"
+    HODGE = "hodge"
+    PAIRS = "pairs"
+    ALLPAIRS = "allpairs"
+    SETS = "sets"
+    ALLSETS = "allsets"
 
     @staticmethod
     def from_string(m: str):
