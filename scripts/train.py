@@ -169,7 +169,7 @@ def run_split(
     assert isinstance(tb, int) and tb > 0, (tb, type(tb))
     assert len(train_dataset) > 0
     train_dl_kwargs = (
-        dict() if method.on_sets else dict(sampler=sampler, drop_last=True)
+        dict(shuffle=True) if method.on_sets else dict(sampler=sampler, drop_last=True)
     )
     train_loader = DataLoader(train_dataset, batch_size=tb, **train_dl_kwargs)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)

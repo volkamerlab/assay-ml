@@ -54,6 +54,9 @@ class Method(Enum):
     def __str__(self):
         return self.name.lower()
 
+    def __repr__(self):
+        return self.name.lower()
+
 
 def set_random_seeds(seed: int):
     torch.manual_seed(seed)

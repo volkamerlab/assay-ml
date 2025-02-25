@@ -119,6 +119,8 @@ def train_multi_batch_epoch(
             ligand_features.to(device),
             labels.to(device).squeeze(),
         )
+        if labels.std() < 1e-10:
+            continue
         if normalize_training_batches:
             labels = (labels - labels.mean()) / labels.std()
 
@@ -166,6 +168,8 @@ def train_epoch(
             ligand_features.to(device),
             labels.to(device).squeeze(),
         )
+        if labels.std() < 1e-10:
+            logger.warning("low label variance - skipping batch")
         if normalize_training_batches:
             labels = (labels - labels.mean()) / labels.std()
 
