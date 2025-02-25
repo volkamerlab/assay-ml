@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 
 def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
-    match dataset:
+    match dataset.lower():
         case "kinodata":
             data, mol_only = load_kinodata, False
         case "landrum":

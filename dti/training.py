@@ -84,12 +84,10 @@ def batch_pair_loss(
 def corr_loss(x: Tensor, y: Tensor) -> float:
     vx = x - torch.mean(x)
     vy = y - torch.mean(y)
-    var_x = torch.var(x)
-    var_y = torch.var(y)
-    if var_x.abs() < 1e-10 or var_y < 1e-10:
-        return torch.tensor(0.0)
-    else:
-        return -torch.sum(vx * vy) / (var_x * var_y)
+    denom = torch.sqrt(torch.sum(vx**2)) * torch.sqrt(torch.sum(vy**2))
+    if denom <= 0.0:
+        raise ValueError('zero variance in batch')
+    return -torch.sum(vx * vy) / denom
 
 
 def train_multi_batch_epoch(

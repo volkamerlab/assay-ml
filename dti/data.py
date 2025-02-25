@@ -187,7 +187,7 @@ class SetActivityDataset(ActivityDataset):
             num_unused += batches[-1].shape[0]
         self.random.shuffle(self.batches)
         self.used = np.full(len(self.batches), False, dtype=bool)
-        logger.info(f"Number of unused examples: {num_unused} / {len(self.data)}")
+        logger.debug(f"Number of unused examples: {num_unused} / {len(self.data)}")
 
     def _get_next_batch(self, idx: int):
         if np.all(self.used):
