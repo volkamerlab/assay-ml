@@ -51,6 +51,9 @@ class Method(Enum):
     def on_pairs(self) -> bool:
         return self in [Method.PAIRS, Method.ALLPAIRS]
 
+    def __str__(self):
+        return self.name.lower()
+
 
 def set_random_seeds(seed: int):
     torch.manual_seed(seed)
