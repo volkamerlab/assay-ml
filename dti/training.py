@@ -128,7 +128,7 @@ def train_multi_batch_epoch(
         assay_size = len(labels)
         loss = criterion(predictions, labels)
         if fisher_transform:
-            loss = torch.logit(torch.clamp(0.5 + loss / 2, 1e-10, 1 - 1e-10))
+            loss = torch.logit(torch.clamp(0.5 + loss / 2, 1e-7, 1 - 1e-7))
         batch_loss += loss * assay_size
         seen_samples += assay_size
 
