@@ -27,7 +27,7 @@ from dti.data import (
     prepare_datasets,
     load_landrum,
     load_kinodata,
-    load_atcc,
+    load_nci,
     load_split,
 )
 from dti.training import (
@@ -40,7 +40,6 @@ from dti.utils import (
     Method,
     init_logging,
     set_random_seeds,
-    write_header,
     save_code_snapshot,
 )
 from dti.constants import DATA, ASSAY, COMPOUND
@@ -59,8 +58,11 @@ def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
             data, mol_only = partial(load_landrum, data_path), False
         case "omnivore":
             data, mol_only = partial(load_landrum, DATA / "raw" / "omnivore.csv"), False
-        case "atcc":
-            data, mol_only = load_atcc, True
+        case "atcc" | "ovcar":
+            data, mol_only = (
+                partial(load_nci, DATA / "raw" / f"{dataset.lower()}.csv"),
+                True,
+            )
         case _:
             logger.error(f"Unknown dataset: {dataset}")
             sys.exit(1)
@@ -133,24 +135,33 @@ def run_split(
     num_epochs = 50_000  # early stopping in place
     info_cols = [COMPOUND, ASSAY]
     data_dir = DATA / "processed" / dataset_name
-    tgt_name = "hodge_score" if method == Method.HODGE else "scaled_ic50"
+    train_tgt = tgt_name = "scaled_ic50"
+    aggregate = False
+    inter_assay_weight = None
+
+    if method == Method.HODGE:
+        aggregate = True
+        inter_assay_weight = 0.0
+        train_tgt = "hodge_score"
 
     model_cls, dataset_cls, val_dataset_cls, load_data = setup(method, dataset_name)
     data = load_data()
 
     if not (data_dir / f"{fold}").exists():
         prepare_datasets(
-            data, data_dir, 5, random_valset=False, aggregate=method == Method.HODGE
+            data,
+            data_dir,
+            5,
+            random_valset=False,
+            aggregate=aggregate,
         )
 
-    inter_assay_weight = 0.0 if method == Method.HODGE else None
     train_data, val_data, test_data = load_split(
         fold, data_dir, tgt_name, inter_assay_weight=inter_assay_weight
     )
     val_dataset = val_dataset_cls(val_data, target=tgt_name, info_cols=info_cols)
     test_dataset = val_dataset_cls(test_data, target=tgt_name, info_cols=info_cols)
 
-    train_tgt = "hodge_score" if method == Method.HODGE else tgt_name
     logger.info(f"training target: {train_tgt}")
     train_dataset = dataset_cls(train_data, target=tgt_name, info_cols=info_cols)
 
@@ -172,8 +183,8 @@ def run_split(
         dict(shuffle=True) if method.on_sets else dict(sampler=sampler, drop_last=True)
     )
     train_loader = DataLoader(train_dataset, batch_size=tb, **train_dl_kwargs)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
 
     rstat = partial(spearmanr, nan_policy="raise")  # , variant="c")
     assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
@@ -203,7 +214,7 @@ def run_split(
         training_loss=training_loss,
         patience_termination=200 if train_short else 1000,
         patience_lr=50 if train_short else 100,
-        normalize_training_batches=False,  # method in [Method.SETS, Method.ALLSETS],
+        normalize_training_batches=False,  # method.on_sets,
         lr=1e-4,
     )
 
@@ -212,7 +223,7 @@ def run_split(
 
 def main():
     seed = int(sys.argv[1])
-    dataset_name = sys.argv[2]
+    dataset_name = sys.argv[2].lower()
     method = Method.from_string(sys.argv[3])
     fold = int(sys.argv[4])
 
@@ -223,7 +234,6 @@ def main():
     save_code_snapshot(run_name)
 
     set_random_seeds(seed)
-    write_header(run_name)
 
     run_split(run_name, method, dataset_name, fold, seed)
 
