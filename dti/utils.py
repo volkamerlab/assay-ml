@@ -51,6 +51,10 @@ class Method(Enum):
     def on_pairs(self) -> bool:
         return self in [Method.PAIRS, Method.ALLPAIRS]
 
+    @property
+    def assay_based(self) -> bool:
+        return self in [Method.PAIRS, Method.SETS, Method.HODGE]
+
     def __str__(self):
         return self.name.lower()
 
@@ -118,24 +122,3 @@ def init_logging(run_name: Union[str, None] = str(time.time())):
     logger.addHandler(file_handler)
 
     logger.info(f"logging run {run_name} to {log_file}")
-
-
-def write_header(run_name: str):
-    write_info(
-        run_name,
-        [
-            "model_type",
-            "index",
-            "epoch",
-            "train_loss",
-            "val_loss",
-            "train_rank_corr",
-            "val_rank_corr",
-        ],
-    )
-
-
-def write_info(run_name: str, fields: list):
-    """Write optimization data to a CSV file."""
-    with open(output_dir(run_name) / "optimization.csv", "a") as f:
-        f.write(",".join(map(str, fields)) + "\n")

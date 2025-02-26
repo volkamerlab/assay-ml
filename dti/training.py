@@ -11,8 +11,9 @@ from scipy.stats import spearmanr
 
 import logging
 import traceback
+from functools import namedtuple
 
-from .utils import write_info, device
+from .utils import device
 from .constants import ASSAY, OUTPUT, ACT, COMPOUND
 from .hodge_ranking import assay_ranks
 
@@ -86,7 +87,7 @@ def corr_loss(x: Tensor, y: Tensor) -> float:
     vy = y - torch.mean(y)
     denom = torch.sqrt(torch.sum(vx**2)) * torch.sqrt(torch.sum(vy**2))
     if denom <= 0.0:
-        raise ValueError('zero variance in batch')
+        raise ValueError("zero variance in batch")
     return -torch.sum(vx * vy) / denom
 
 
@@ -238,6 +239,18 @@ def evaluate_epoch(
     return total_loss, mean_rank_corr
 
 
+Epoch = namedtuple(
+    "Epoch",
+    [
+        "epoch",
+        "lr",
+        "train_loss",
+        "val_loss",
+        "val_rank_corr",
+    ],
+)
+
+
 def train_and_evaluate_model(
     model_cls: Type[nn.Module],
     run_name: str,
@@ -285,6 +298,7 @@ def train_and_evaluate_model(
 
     best_corr = 0.0
     epochs_without_improvement = 0
+    optimization = []
 
     for epoch in range(opts["num_epochs"]):
         if opts.get("multi_batch", False):
@@ -310,7 +324,8 @@ def train_and_evaluate_model(
         )
 
         scheduler.step(val_rank_corr)
-        logger.debug(f"Learning rate: {scheduler.get_last_lr()}")
+        lr = scheduler.get_last_lr()
+        logger.debug(f"Learning rate: {lr}")
 
         logger.info(
             f"[{run_name}] Epoch: {epoch + 1} "
@@ -320,16 +335,14 @@ def train_and_evaluate_model(
             f"Val Rank Corr: {val_rank_corr:.4f}"
         )
 
-        write_info(
-            run_name, [target_name, index, epoch, train_loss, val_loss, val_rank_corr]
-        )
+        optimization.append(Epoch(epoch, lr, train_loss, val_loss, val_rank_corr))
 
         if val_rank_corr > best_corr:
             logger.info(f"[{run_name}] Updating test set predictions")
             best_corr = val_rank_corr
             epochs_without_improvement = 0
             torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")
-            pred_file = OUTPUT / run_name / f"{target_name}_index{index}_preds.csv"
+            pred_file = OUTPUT / run_name / "predictions.csv"
             _, test_rank_corr = evaluate_epoch(
                 model,
                 test_loader,
@@ -348,3 +361,6 @@ def train_and_evaluate_model(
                     f"[{run_name}] Early stopping triggered after {epoch + 1} epochs."
                 )
                 break
+    pd.DataFrame(optimization).to_csv(
+        OUTPUT / run_name / "optimization.csv", index=False
+    )

@@ -416,41 +416,41 @@ def load_kinodata(
     # strip CHEMBL prefixes
     data[ASSAY] = data["assays.chembl_id"].str[6:].astype(int)
     data[COMPOUND] = data["molecule_dictionary.chembl_id"].str[6:].astype(int)
-    return data.rename(
-        columns={
-            "activities.standard_value": ACT,
-            "compound_structures.canonical_smiles": SMILES,
-            "component_sequences.sequence": SEQUENCE,
-            "UniprotID": TID,
-        }
-    )
+    col_map = {
+        "activities.standard_value": ACT,
+        "compound_structures.canonical_smiles": SMILES,
+        "component_sequences.sequence": SEQUENCE,
+        "UniprotID": TID,
+    }
+    assert all(k in data.columns for k in col_map.keys()), data.columns
+    return data.rename(columns=col_map)
 
 
 def load_landrum(landrum_path: Path = DATA / "raw" / "landrum.csv") -> pd.DataFrame:
     logger.info(f"loading landrum data from {landrum_path}")
     data = pd.read_csv(landrum_path, index_col=0)
     data = data[~data["canonical_smiles"].isna()]
-    return data.rename(
-        columns={
-            "molregno": COMPOUND,
-            "pchembl_value": ACT,
-            "canonical_smiles": SMILES,
-            "component_sequence": SEQUENCE,
-            "tid": TID,
-            "assay_id": ASSAY,
-        }
-    )
+    col_map = {
+        "molregno": COMPOUND,
+        "pchembl_value": ACT,
+        "canonical_smiles": SMILES,
+        "component_sequence": SEQUENCE,
+        "tid": TID,
+        "assay_id": ASSAY,
+    }
+    assert all(k in data.columns for k in col_map.keys()), data.columns
+    return data.rename(columns=col_map)
 
 
-def load_atcc(path: Path = DATA / "raw" / "atcc.csv") -> pd.DataFrame:
+def load_nci(path: Path = DATA / "raw" / "atcc.csv") -> pd.DataFrame:
     logger.info(f"loading NCI ATCC data from {path}")
     data = pd.read_csv(path, index_col=0)
     assay_ids = {exp: i for i, exp in enumerate(data["EXPID"].unique())}
     data[ASSAY] = data["EXPID"].map(assay_ids.get)
-    return data.rename(
-        columns={
-            "NSC": COMPOUND,
-            "IC50": ACT,
-            "SMILES": SMILES,
-        }
-    )
+    col_map = {
+        "NSC": COMPOUND,
+        "IC50": ACT,
+        "SMILES": SMILES,
+    }
+    assert all(k in data.columns for k in col_map.keys()), data.columns
+    return data.rename(columns=col_map)
