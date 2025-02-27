@@ -285,12 +285,17 @@ def train_and_evaluate_model(
     for k, v in opts.items():
         logger.info(f" - {k}={v}")
 
-    model = model_cls(
-        ligand_input_size=opts["ligand_dim"],
-        embedding_size=opts["embedding_size"],
-        protein_input_size=opts["protein_dim"],
-        cosine_agg=opts["cosine_agg"],
-    ).to(device)
+    match opts.get("model", None):
+        case None:
+            model = model_cls(
+                ligand_input_size=opts["ligand_dim"],
+                embedding_size=opts["embedding_size"],
+                protein_input_size=opts["protein_dim"],
+                cosine_agg=opts["cosine_agg"],
+            ).to(device)
+        case _model:
+            assert isinstance(_model, nn.Module), type(_model)
+            model = _model
 
     optimizer = torch.optim.Adam(model.parameters(), lr=opts["lr"])
     scheduler = ReduceLROnPlateau(
@@ -320,28 +325,34 @@ def train_and_evaluate_model(
                 criterion=opts["training_loss"],
                 normalize_training_batches=opts["normalize_training_batches"],
             )
-        val_loss, val_rank_corr = evaluate_epoch(
-            model, val_loader, rank_corr_fn=opts["rank_corr_fn"]
-        )
-
-        scheduler.step(val_rank_corr)
         lr = scheduler.get_last_lr()
         logger.debug(f"Learning rate: {lr}")
-
-        logger.info(
-            f"[{run_name}] Epoch: {epoch + 1} "
-            f"Fold: {index} "
-            f"Train Loss: {train_loss:.4f} "
-            f"Val Loss: {val_loss:.4f} "
-            f"Val Rank Corr: {val_rank_corr:.4f}"
-        )
+        if opts.get("test", True):
+            val_loss, val_rank_corr = evaluate_epoch(
+                model, val_loader, rank_corr_fn=opts["rank_corr_fn"]
+            )
+            scheduler.step(val_rank_corr)
+            logger.info(
+                f"[{run_name}] Epoch: {epoch + 1} "
+                f"Fold: {index} "
+                f"Train Loss: {train_loss:.4f} "
+                f"Val Loss: {val_loss:.4f} "
+                f"Val Rank Corr: {val_rank_corr:.4f}"
+            )
+        else:
+            val_loss = val_rank_corr = None
+            logger.info(
+                f"[{run_name}] [Pretrain] Epoch: {epoch + 1} "
+                f"Fold: {index} "
+                f"Train Loss: {train_loss:.4f} "
+            )
 
         optimization.append(Epoch(epoch, lr, train_loss, val_loss, val_rank_corr))
         pd.DataFrame(optimization).to_csv(
             OUTPUT / run_name / "optimization.csv", index=False
         )
 
-        if val_rank_corr > best_corr:
+        if opts.get("test", True) and val_rank_corr > best_corr:
             logger.info(f"[{run_name}] Updating test set predictions")
             best_corr = val_rank_corr
             epochs_without_improvement = 0
@@ -365,3 +376,4 @@ def train_and_evaluate_model(
                     f"[{run_name}] Early stopping triggered after {epoch + 1} epochs."
                 )
                 break
+    return model
