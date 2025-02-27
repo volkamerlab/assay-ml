@@ -171,7 +171,7 @@ def run_split(
     test_dataset = val_dataset_cls(test_data, target=tgt_name, info_cols=info_cols)
 
     logger.info(f"training target: {train_tgt}")
-    train_dataset = dataset_cls(train_data, target=tgt_name, info_cols=info_cols)
+    train_dataset = dataset_cls(train_data, target=train_tgt, info_cols=info_cols)
 
     def seed_worker(worker_id):
         worker_seed = torch.initial_seed() % 2**32
