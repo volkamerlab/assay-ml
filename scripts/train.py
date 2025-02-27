@@ -138,10 +138,9 @@ def run_split(
     dataset_name: str,
     fold: int,
     seed: int,
-    num_epochs=50_000,
-    **kwargs,
 ):
     batch_size = 512
+    num_epochs = 50_000  # early stopping in place
     info_cols = [COMPOUND, ASSAY]
     data_dir = DATA / "processed" / dataset_name
     train_tgt = tgt_name = "scaled_ic50"
@@ -190,22 +189,13 @@ def run_split(
         dict(shuffle=True) if method.on_sets else dict(sampler=sampler, drop_last=True)
     )
     train_loader = DataLoader(
-        train_dataset,
-        batch_size=train_batch(method, batch_size),
-        num_workers=8,
-        **train_dl_kwargs,
+        train_dataset, batch_size=train_batch(method, batch_size), **train_dl_kwargs
     )
     val_loader = DataLoader(
-        val_dataset,
-        batch_size=test_batch(method, batch_size),
-        num_workers=8,
-        shuffle=False,
+        val_dataset, batch_size=test_batch(method, batch_size), shuffle=False
     )
     test_loader = DataLoader(
-        test_dataset,
-        batch_size=test_batch(method, batch_size),
-        num_workers=8,
-        shuffle=False,
+        test_dataset, batch_size=test_batch(method, batch_size), shuffle=False
     )
 
     rstat = partial(spearmanr, nan_policy="raise")  # , variant="c")
@@ -219,7 +209,7 @@ def run_split(
     else:
         training_loss = nn.HuberLoss()
     train_short = method.on_sets or method.on_pairs
-    model = train_and_evaluate_model(
+    train_and_evaluate_model(
         model_cls,
         run_name,
         train_loader,
@@ -238,12 +228,9 @@ def run_split(
         patience_lr=50 if train_short else 100,
         normalize_training_batches=False,  # method.on_sets,
         lr=1e-4,
-        **kwargs,
     )
 
     logger.info(f"{run_name} finished")
-
-    return model
 
 
 def main():
@@ -260,22 +247,7 @@ def main():
 
     set_random_seeds(seed)
 
-    # pre-train
-    logger.info(10 * "=" + " start pre-training")
-    pretrain = dict(num_epochs=10, test=False)
-    match method:
-        case Method.PAIRS:
-            model = run_split(
-                run_name, Method.ALLPAIRS, dataset_name, fold, seed, **pretrain
-            )
-        case Method.SETS:
-            model = run_split(
-                run_name, Method.ALLSETS, dataset_name, fold, seed, **pretrain
-            )
-        case _:
-            model = None
-    logger.info(10 * "=" + " start training")
-    run_split(run_name, method, dataset_name, fold, seed, model=model)
+    run_split(run_name, method, dataset_name, fold, seed)
 
 
 if __name__ == "__main__":
