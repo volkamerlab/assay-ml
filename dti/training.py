@@ -205,10 +205,11 @@ def evaluate_epoch(
     for protein_features, ligand_features, labels, info in tqdm.tqdm(
         loader, desc="evaluating"
     ):
-        protein_features, ligand_features, labels = (
-            protein_features.to(device),
-            ligand_features.to(device),
+        protein_features, ligand_features, labels, info = (
+            protein_features.to(device).squeeze(0),
+            ligand_features.to(device).squeeze(0),
             labels.to(device).squeeze(),
+            info.squeeze(0),
         )
 
         assert not protein_features.isnan().any()
@@ -336,6 +337,9 @@ def train_and_evaluate_model(
         )
 
         optimization.append(Epoch(epoch, lr, train_loss, val_loss, val_rank_corr))
+        pd.DataFrame(optimization).to_csv(
+            OUTPUT / run_name / "optimization.csv", index=False
+        )
 
         if val_rank_corr > best_corr:
             logger.info(f"[{run_name}] Updating test set predictions")
@@ -361,6 +365,3 @@ def train_and_evaluate_model(
                     f"[{run_name}] Early stopping triggered after {epoch + 1} epochs."
                 )
                 break
-    pd.DataFrame(optimization).to_csv(
-        OUTPUT / run_name / "optimization.csv", index=False
-    )

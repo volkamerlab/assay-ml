@@ -82,33 +82,33 @@ def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type, type]:
         case Method.ALLPAIRS:
             return PairCombinedModel, ActivityDataset, PairDataset
         case Method.HODGE | Method.IC50 if mol_only:
-            return MolecularModel, ActivityDataset, ActivityDataset
+            return MolecularModel, ActivityDataset, SetActivityDataset
         case Method.HODGE | Method.IC50:
-            return CombinedModel, ActivityDataset, ActivityDataset
+            return CombinedModel, ActivityDataset, SetActivityDataset
         case Method.SETS if mol_only:
             model = partial(
                 MoleculeSetRank,
                 hidden_channels=512,
             )
-            return model, SetActivityDataset, ActivityDataset
+            return model, SetActivityDataset, SetActivityDataset
         case Method.SETS:
             model = partial(
                 SetRankModel,
                 hidden_channels=512,
             )
-            return model, SetActivityDataset, ActivityDataset
+            return model, SetActivityDataset, SetActivityDataset
         case Method.ALLSETS if mol_only:
             model = partial(
                 MoleculeSetRank,
                 hidden_channels=512,
             )
-            return model, ActivityDataset, ActivityDataset
+            return model, ActivityDataset, SetActivityDataset
         case Method.ALLSETS:
             model = partial(
                 SetRankModel,
                 hidden_channels=512,
             )
-            return model, ActivityDataset, ActivityDataset
+            return model, ActivityDataset, SetActivityDataset
         case _:
             logger.error(f"Unknown method: {method}")
             sys.exit(1)
@@ -122,6 +122,14 @@ def train_batch(method: str, default: int) -> int:
             return 1
         case _:
             return default
+
+
+def test_batch(method: str, default: int) -> int:
+    match method:
+        case Method.ALLPAIRS | Method.PAIRS:
+            return default
+        case _:
+            return 1
 
 
 def run_split(
@@ -176,15 +184,19 @@ def run_split(
     sampler = WeightedRandomSampler(
         train_dataset.weights, len(train_dataset), generator=g
     )
-    tb = train_batch(method, batch_size)
-    assert isinstance(tb, int) and tb > 0, (tb, type(tb))
     assert len(train_dataset) > 0
     train_dl_kwargs = (
         dict(shuffle=True) if method.on_sets else dict(sampler=sampler, drop_last=True)
     )
-    train_loader = DataLoader(train_dataset, batch_size=tb, **train_dl_kwargs)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(
+        train_dataset, batch_size=train_batch(method, batch_size), **train_dl_kwargs
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=test_batch(method, batch_size), shuffle=False
+    )
+    test_loader = DataLoader(
+        test_dataset, batch_size=test_batch(method, batch_size), shuffle=False
+    )
 
     rstat = partial(spearmanr, nan_policy="raise")  # , variant="c")
     assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
