@@ -15,7 +15,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-HodgeRank = namedtuple("HodgeRank", [TID, SMILES, "hodge_screen"])
+HodgeRank = namedtuple("HodgeRank", [TID, SMILES, "hodge_score"])
 
 
 def _process_target_group_from_file(args):
@@ -146,29 +146,24 @@ def assay_ranks(preds: pd.DataFrame):
 
 
 def hodge_rank(
-    y_bar: np.ndarray,
-    w: np.ndarray,
-    diag_stab: float = 1e-5,
-    scale_scores: bool = False,
+    y_bar: np.ndarray, w: np.ndarray, diag_stab: float = 0.0, scale_scores: bool = False
 ):
     w = np.asarray(w, dtype=np.float64)
     y_bar = np.nan_to_num(y_bar, copy=False)
-
     laplacian = -w.copy()
     np.fill_diagonal(laplacian, w.sum(axis=0) + diag_stab)
-
     divergence = np.einsum("ij,ij->j", w, y_bar)
 
     try:
-        scores, *_ = scipy.sparse.linalg.lsmr(
-            laplacian, -divergence, atol=1e-10, btol=1e-10, maxiter=1000
+        scores, residuals, rank, singular_values = np.linalg.lstsq(
+            laplacian, -divergence, rcond=None
         )
-
         if scale_scores:
             scores = StandardScaler().fit_transform(scores.reshape(-1, 1)).flatten()
 
         return scores
 
     except np.linalg.LinAlgError:
-        logger.warning(f"unstable SVD (diag_stab={diag_stab})")
-        return hodge_rank(y_bar, w, diag_stab=diag_stab * 10, scale_scores=scale_scores)
+        new_diag_stab = max(1e-5, diag_stab * 10)
+        logger.warning(f"unstable system, increasing diag_stab to {new_diag_stab}")
+        return hodge_rank(y_bar, w, diag_stab=new_diag_stab, scale_scores=scale_scores)
