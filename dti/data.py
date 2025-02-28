@@ -78,7 +78,9 @@ class ActivityDataset(Dataset):
 
         @functools.cache
         def load_esm(uniprot_id: str) -> torch.Tensor:
-            emb = torch.load(emb_dir(uniprot_id), weights_only=False)
+            emb = torch.load(
+                emb_dir(uniprot_id), weights_only=False, map_location=device
+            )
             return emb["representation"][33].to(device)
 
         return torch.stack([load_esm(uniprot_id) for uniprot_id in data[TID]])
@@ -251,7 +253,7 @@ def extract_embeddings(
     if len(data) == 0:
         return
 
-    logger.info("setting up ESM model")
+    logger.info("setting up ESM model '{model_name}'")
     model, alphabet = pretrained.load_model_and_alphabet(model_name)
     model.eval()
 
@@ -291,6 +293,7 @@ def extract_embeddings(
                 }
 
                 torch.save(result, filename(entry_id))
+    logger.info("ESM embeddings written to {output_dir}")
 
 
 def split_kfold_by(
@@ -427,7 +430,7 @@ def load_kinodata(
 
 
 def load_landrum(landrum_path: Path = DATA / "raw" / "landrum.csv") -> pd.DataFrame:
-    logger.info(f"loading landrum data from {landrum_path}")
+    logger.info(f"loading data from {landrum_path}")
     data = pd.read_csv(landrum_path, index_col=0)
     data = data[~data["canonical_smiles"].isna()]
     col_map = {
