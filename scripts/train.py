@@ -144,11 +144,10 @@ def run_split(
     info_cols = [COMPOUND, ASSAY]
     data_dir = DATA / "processed" / dataset_name
     train_tgt = tgt_name = "scaled_ic50"
-    aggregate = False
+    aggregate = True
     inter_assay_weight = None
 
     if method == Method.HODGE:
-        aggregate = True
         inter_assay_weight = 0.0
         train_tgt = "hodge_score"
 

@@ -6,6 +6,8 @@ import tqdm
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
+import scipy.sparse
+import scipy.sparse.linalg
 
 from .constants import ACT, SMILES, TID, ASSAY, COMPOUND
 
@@ -123,18 +125,50 @@ def assay_ranks(preds: pd.DataFrame):
     return pd.DataFrame({COMPOUND: unique_cmpds, "prediction": scores})
 
 
+#
+#
+# def hodge_rank(
+#     y_bar: np.ndarray, w: np.ndarray, diag_stab: float = 0.0, scale_scores: bool = False
+# ):
+#     laplacian = -w
+#     laplacian[np.diag_indices_from(w)] = w.sum(0) + diag_stab
+#     y_bar = np.nan_to_num(y_bar)  # nan to zero
+#     divergence = (w * y_bar).sum(0)
+#     try:
+#         scores = -np.linalg.pinv(laplacian) @ divergence
+#         if scale_scores:
+#             scores = StandardScaler().fit_transform(scores.reshape(-1, 1)).flatten()
+#         return scores
+#     except np.linalg.LinAlgError:
+#         logger.warning(f"unstable SVD (diag_stab={diag_stab})")
+#         return hodge_rank(y_bar, w, diag_stab=diag_stab + 1e-5)
+#
+
+
 def hodge_rank(
-    y_bar: np.ndarray, w: np.ndarray, diag_stab: float = 0.0, scale_scores: bool = False
+    y_bar: np.ndarray,
+    w: np.ndarray,
+    diag_stab: float = 1e-5,
+    scale_scores: bool = False,
 ):
-    laplacian = -w
-    laplacian[np.diag_indices_from(w)] = w.sum(0) + diag_stab
-    y_bar = np.nan_to_num(y_bar)  # nan to zero
-    divergence = (w * y_bar).sum(0)
+    w = np.asarray(w, dtype=np.float64)
+    y_bar = np.nan_to_num(y_bar, copy=False)
+
+    laplacian = -w.copy()
+    np.fill_diagonal(laplacian, w.sum(axis=0) + diag_stab)
+
+    divergence = np.einsum("ij,ij->j", w, y_bar)
+
     try:
-        scores = -np.linalg.pinv(laplacian) @ divergence
+        scores, *_ = scipy.sparse.linalg.lsmr(
+            laplacian, -divergence, atol=1e-10, btol=1e-10, maxiter=1000
+        )
+
         if scale_scores:
             scores = StandardScaler().fit_transform(scores.reshape(-1, 1)).flatten()
+
         return scores
+
     except np.linalg.LinAlgError:
         logger.warning(f"unstable SVD (diag_stab={diag_stab})")
-        return hodge_rank(y_bar, w, diag_stab=diag_stab + 1e-5)
+        return hodge_rank(y_bar, w, diag_stab=diag_stab * 10, scale_scores=scale_scores)
