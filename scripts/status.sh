@@ -20,6 +20,7 @@ bar '━' $((${line_length}))
 
 upcoming=""
 old_fold="-1"
+old_dataset=""
 for f in $output_files; do
     line=$(rg "Test Rank Corr:" $f | tail -n 1)
     run_name=$(basename $(dirname $f))
@@ -28,13 +29,12 @@ for f in $output_files; do
     ident=$(echo $run_name | cut -d '_' -f 4 | cut -c -4)
     fold=$(echo $run_name | cut -d '_' -f 2)
     epoch=$(echo "$line" | awk '{print $5}')
-    if [ "$old_fold" != "$fold" ]; then
-        if [ "$old_fold" == "-1" ]; then
-            old_fold=$fold
-        elif [ "$fold" != "" ]; then
+    if [ "$old_fold" != "$fold" ] || [ "$old_dataset" != "$dataset" ]; then
+        if [ "$fold" != "" ]; then
             bar '―' $line_length
-            old_fold=$fold
         fi
+        old_fold=$fold
+        old_dataset=$dataset
     fi
     rank_corr=$(echo "$line" | awk '{print $11}')
     last_line=$(tail -n 1 "$f")

@@ -8,8 +8,6 @@ import pandas as pd
 import numpy as np
 import tqdm.auto as tqdm
 
-from rdkit import Chem
-from rdkit.Chem import rdFingerprintGenerator
 
 import torch
 from torch.utils.data import Dataset
@@ -17,13 +15,23 @@ from esm import FastaBatchedDataset, pretrained
 from sklearn.preprocessing import StandardScaler
 
 from .constants import DATA, SMILES, ACT, TID, SEQUENCE, ASSAY, COMPOUND
-from .utils import device
+from .utils import device, compute_fp
 from .hodge_ranking import parallel_hodge_rank
 
 logger = logging.getLogger(__name__)
 
 
 class ActivityDataset(Dataset):
+    """Dataset class for molecular activity data with protein and ligand features.
+
+    Args:
+        data (pd.DataFrame): DataFrame containing activity data.
+        target (str): Column name for target values. Defaults to ACT.
+        info_cols (List[str]): Column names to include as information. Defaults to [].
+        model_name (str): Name of the protein language model. Defaults to "esm2_t33_650M_UR50D".
+        n_jobs (int): Number of parallel jobs for fingerprint computation. Defaults to 16.
+    """
+
     def __init__(
         self,
         data: pd.DataFrame,
@@ -54,6 +62,15 @@ class ActivityDataset(Dataset):
         self.info = torch.tensor(self.data[info_cols].values)
 
     def _compute_protein_features(self, data: pd.DataFrame, model_name: str):
+        """Compute protein embeddings using the specified ESM model.
+
+        Args:
+            data (pd.DataFrame): DataFrame containing protein sequences.
+            model_name (str): Name of the ESM model to use.
+
+        Returns:
+            torch.Tensor or None: Tensor of protein embeddings or None if no protein targets.
+        """
         if TID not in data.columns or data[TID].isna().any():
             logger.info("missing protein target in dataset")
             return None
@@ -78,6 +95,14 @@ class ActivityDataset(Dataset):
 
         @functools.cache
         def load_esm(uniprot_id: str) -> torch.Tensor:
+            """Load ESM embeddings for a specific protein.
+
+            Args:
+                uniprot_id (str): UniProt identifier for the protein.
+
+            Returns:
+                torch.Tensor: Protein embedding tensor.
+            """
             emb = torch.load(
                 emb_dir(uniprot_id), weights_only=False, map_location=device
             )
@@ -87,12 +112,30 @@ class ActivityDataset(Dataset):
 
     @property
     def weights(self):
+        """Get sample weights for the dataset.
+
+        Returns:
+            torch.Tensor: Uniform weights for all samples.
+        """
         return torch.ones(len(self.labels))
 
     def __len__(self):
+        """Get the number of samples in the dataset.
+
+        Returns:
+            int: Number of samples.
+        """
         return len(self.labels)
 
     def __getitem__(self, idx):
+        """Get a sample from the dataset.
+
+        Args:
+            idx (int): Index of the sample.
+
+        Returns:
+            tuple: Protein features, ligand features, label, and info for the sample.
+        """
         prot_feats = (
             torch.ones(1)
             if self.protein_features is None
@@ -103,10 +146,18 @@ class ActivityDataset(Dataset):
             self.ligand_features[idx],
             self.labels[idx],
             self.info[idx],
+            torch.ones(1),
         )
 
 
 class PairDataset(ActivityDataset):
+    """Dataset for pairwise comparisons of molecular activities within the same assay.
+
+    Args:
+        data (pd.DataFrame): DataFrame containing activity data.
+        **kwargs: Additional arguments passed to ActivityDataset.
+    """
+
     def __init__(
         self,
         data: pd.DataFrame,
@@ -130,12 +181,30 @@ class PairDataset(ActivityDataset):
 
     @property
     def weights(self):
+        """Get sample weights for the dataset based on group size.
+
+        Returns:
+            torch.Tensor: Weights for each pair.
+        """
         return self._weights
 
     def __len__(self):
+        """Get the number of pairs in the dataset.
+
+        Returns:
+            int: Number of pairs.
+        """
         return len(self.pairs)
 
     def __getitem__(self, idx):
+        """Get a pair sample from the dataset.
+
+        Args:
+            idx (int): Index of the pair.
+
+        Returns:
+            tuple: Protein features, stacked ligand features, activity difference, concatenated info, and sample weights
+        """
         i, j = self.pairs[idx]
         prot_feats = (
             torch.ones(1) if self.protein_features is None else self.protein_features[i]
@@ -145,10 +214,23 @@ class PairDataset(ActivityDataset):
             torch.stack([self.ligand_features[i], self.ligand_features[j]]),
             self.labels[i] - self.labels[j],
             torch.cat([self.info[i], self.info[j]]),
+            self.weights[i],
         )
 
 
 class SetActivityDataset(ActivityDataset):
+    """Dataset that groups samples by assay and returns batches of samples.
+
+    Args:
+        data (pd.DataFrame): DataFrame containing activity data.
+        target (str): Column name for target values.
+        info_cols (List[str]): Column names to include as information.
+        model_name (str): Name of the protein language model. Defaults to "esm2_t33_650M_UR50D".
+        min_batch_size (int): Minimum size of a batch. Defaults to 3.
+        max_batch_size (int): Maximum size of a batch. Defaults to 1024.
+        random_seed (int): Random seed for shuffling. Defaults to 0.
+    """
+
     def __init__(
         self,
         data,
@@ -172,6 +254,7 @@ class SetActivityDataset(ActivityDataset):
         self._make_batches()
 
     def _make_batches(self):
+        """Create batches of samples from groups, respecting size constraints."""
         self.batches = []
         num_unused = 0
         for group in self.groups_index:
@@ -192,6 +275,14 @@ class SetActivityDataset(ActivityDataset):
         logger.debug(f"Number of unused examples: {num_unused} / {len(self.data)}")
 
     def _get_next_batch(self, idx: int):
+        """Get the next available batch and mark it as used.
+
+        Args:
+            idx (int): Index of the batch.
+
+        Returns:
+            np.ndarray: Indices of samples in the batch.
+        """
         if np.all(self.used):
             self._make_batches()
         self.used[idx] = True
@@ -199,12 +290,30 @@ class SetActivityDataset(ActivityDataset):
 
     @property
     def weights(self):
+        """Get sample weights for the dataset.
+
+        Returns:
+            torch.Tensor: Uniform weights for all batches.
+        """
         return torch.ones(len(self))
 
     def __len__(self):
+        """Get the number of batches in the dataset.
+
+        Returns:
+            int: Number of batches.
+        """
         return len(self.batches)
 
     def __getitem__(self, idx):
+        """Get a batch of samples from the dataset.
+
+        Args:
+            idx (int): Index of the batch.
+
+        Returns:
+            tuple: Protein features, ligand features, labels, info for the batch, and sample weight.
+        """
         batch_idcs = self._get_next_batch(idx)
         prot_feats = (
             torch.ones(1)
@@ -216,10 +325,19 @@ class SetActivityDataset(ActivityDataset):
             self.ligand_features[batch_idcs],
             self.labels[batch_idcs],
             self.info[batch_idcs],
+            torch.ones(1),
         )
 
 
 def aggregate_multi_measurements(data: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate multiple measurements for the same compound and assay.
+
+    Args:
+        data (pd.DataFrame): DataFrame containing activity measurements.
+
+    Returns:
+        pd.DataFrame: DataFrame with aggregated measurements.
+    """
     keys = [COMPOUND, ASSAY]
     if TID in data.columns:
         keys += [TID]
@@ -306,15 +424,6 @@ def split_kfold_by(
     np.random.seed(seed)
     np.random.shuffle(values)
     return values.reshape(k, -1)
-
-
-def compute_fp(smi: str):
-    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
-    try:
-        return mfpgen.GetFingerprintAsNumPy(Chem.MolFromSmiles(smi))
-    except TypeError:
-        logger.warn(f"No fp for SMILES={smi}")
-        return None
 
 
 def split_data(

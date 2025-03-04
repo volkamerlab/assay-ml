@@ -1,16 +1,25 @@
-from typing import Union
+from typing import Union, Tuple
+import functools
 import subprocess
 import time
 import logging
 import tarfile
 from pathlib import Path
 from enum import Enum
+import random
+from multiprocessing import Pool
+import tempfile
 
 import torch
+import pandas as pd
 import numpy as np
-import random
+import tqdm.auto as tqdm
+from rdkit import Chem
+from rdkit.Chem.Scaffolds import MurckoScaffold
+from rdkit.Chem import rdFingerprintGenerator
+from sklearn.cluster import AgglomerativeClustering
 
-from .constants import OUTPUT
+from .constants import OUTPUT, SMILES
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -122,3 +131,74 @@ def init_logging(run_name: Union[str, None] = str(time.time())):
     logger.addHandler(file_handler)
 
     logger.info(f"logging run {run_name} to {log_file}")
+
+
+@functools.cache
+def get_scaffold(smiles: str, generic: bool = True) -> str:
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        scaffold = MurckoScaffold.GetScaffoldForMol(mol)
+        if generic:
+            scaffold = MurckoScaffold.MakeScaffoldGeneric(scaffold)
+        return Chem.CanonSmiles(Chem.MolToSmiles(scaffold))
+    except Exception as e:
+        logger.error(f"error processing SMILES {smiles}: {e}")
+        return None
+
+
+def compute_fp(smi: str):
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
+    try:
+        return mfpgen.GetFingerprintAsNumPy(Chem.MolFromSmiles(smi))
+    except TypeError:
+        logger.warn(f"No fp for SMILES={smi}")
+        return None
+
+
+def compute_fp(smi: str, radius: int = 3, fp_dim: int = 2048):
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=fp_dim)
+    try:
+        return mfpgen.GetFingerprintAsNumPy(Chem.MolFromSmiles(smi))
+    except TypeError:
+        logger.warn(f"No fp for SMILES={smi}")
+        return None
+
+
+def scaffold_split(
+    data: pd.DataFrame, proportion: float = 0.8, seed: int = 0, progress: bool = True
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    np.random.seed(seed)
+    smiles_it = tqdm.tqdm(data[SMILES], desc="scaffold") if progress else data[SMILES]
+    data["scaffold"] = [get_scaffold(smi) for smi in smiles_it]
+
+    data = data[~data["scaffold"].isna()]
+
+    all_scaffolds = data["scaffold"].unique()
+    np.random.shuffle(all_scaffolds)
+
+    train_scaffolds = all_scaffolds[: int(len(all_scaffolds) * 0.8)]
+    df_train = data[data["scaffold"].isin(train_scaffolds)]
+    df_test = data[~data["scaffold"].isin(train_scaffolds)]
+
+    return df_train, df_test
+
+
+def umap_clusters(
+    data: pd.DataFrame,
+    proportions: float = 0.8,
+    seed: int = 0,
+    progress: bool = True,
+    n_clusters: int = 10,
+    n_jobs: int = 6,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Adapted from Pat Walter's useful rdkit utils
+    """
+    with tempfile.TemporaryDirectory() as tempdir:
+        ac = AgglomerativeClustering(
+            n_clusters=n_clusters, memory=tempdir, compute_full_tree=False
+        )
+    with Pool(n_jobs) as p:
+        fp_list = p.map(compute_fp, data[SMILES].values)
+    ac.fit_predict(np.stack(fp_list))
+    return ac.labels_

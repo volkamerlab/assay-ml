@@ -2,14 +2,12 @@ import logging
 import traceback
 import uuid
 import sys
-import random
 from functools import partial
 from typing import Tuple, Callable
 
 import numpy as np
-import torch
 from torch import nn
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader
 from scipy.stats import spearmanr
 
 from dti.model import (
@@ -42,7 +40,7 @@ from dti.utils import (
     set_random_seeds,
     save_code_snapshot,
 )
-from dti.constants import DATA, ASSAY, COMPOUND
+from dti.constants import DATA, ASSAY, COMPOUND, HODGE
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +147,7 @@ def run_split(
 
     if method == Method.HODGE:
         inter_assay_weight = 0.0
-        train_tgt = "hodge_score"
+        train_tgt = HODGE
 
     model_cls, dataset_cls, val_dataset_cls, load_data = setup(method, dataset_name)
     data = load_data()
@@ -172,23 +170,13 @@ def run_split(
     logger.info(f"training target: {train_tgt}")
     train_dataset = dataset_cls(train_data, target=train_tgt, info_cols=info_cols)
 
-    def seed_worker(worker_id):
-        worker_seed = torch.initial_seed() % 2**32
-        np.random.seed(worker_seed)
-        random.seed(worker_seed)
-
-    g = torch.Generator()
-    g.manual_seed(seed + fold)
-
-    sampler = WeightedRandomSampler(
-        train_dataset.weights, len(train_dataset), generator=g
-    )
     assert len(train_dataset) > 0
-    train_dl_kwargs = (
-        dict(shuffle=True) if method.on_sets else dict(sampler=sampler, drop_last=True)
-    )
+    train_dl_kwargs = dict() if not method.on_pairs else dict(drop_last=True)
     train_loader = DataLoader(
-        train_dataset, batch_size=train_batch(method, batch_size), **train_dl_kwargs
+        train_dataset,
+        batch_size=train_batch(method, batch_size),
+        shuffle=True,
+        **train_dl_kwargs,
     )
     val_loader = DataLoader(
         val_dataset, batch_size=test_batch(method, batch_size), shuffle=False
@@ -204,9 +192,11 @@ def run_split(
         training_loss = corr_loss
         multi_batch = True
     elif method == Method.ALLPAIRS:
-        training_loss = partial(batch_pair_loss, criterion=nn.HuberLoss())
+        training_loss = partial(
+            batch_pair_loss, criterion=nn.SmoothL1Loss(reduction="none")
+        )
     else:
-        training_loss = nn.HuberLoss()
+        training_loss = nn.SmoothL1Loss(reduction="none")
     train_short = method.on_sets or method.on_pairs
     train_and_evaluate_model(
         model_cls,
