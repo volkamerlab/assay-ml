@@ -1,4 +1,5 @@
 import tempfile
+from typing import Tuple
 from concurrent.futures import ProcessPoolExecutor
 from collections import namedtuple
 import itertools as itt
@@ -15,9 +16,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 HodgeRank = namedtuple("HodgeRank", [TID, SMILES, HODGE])
-
-
-from typing import Tuple
 
 
 def _build_matrices(

@@ -268,10 +268,11 @@ def train_epoch(
     for protein_features, ligand_features, labels, _, weights in tqdm.tqdm(
         loader, desc="training"
     ):
-        protein_features, ligand_features, labels = (
+        protein_features, ligand_features, labels, weights = (
             protein_features.to(device),
             ligand_features.to(device),
             labels.to(device).squeeze(),
+            weights.to(device),
         )
         if labels.std() < 1e-10:
             logger.warning("low label variance - skipping batch")
@@ -325,7 +326,7 @@ def evaluate_epoch(
     total_loss = 0
     all_preds, all_labels, all_info = [], [], []
 
-    for protein_features, ligand_features, labels, info, weights in tqdm.tqdm(
+    for protein_features, ligand_features, labels, info, _ in tqdm.tqdm(
         loader, desc="evaluating"
     ):
         protein_features, ligand_features, labels, info = (
@@ -361,18 +362,6 @@ def evaluate_epoch(
 
     mean_rank_corr = -1 if rank_corr_fn is None else rank_corr_fn(prediction_data)
     return total_loss, mean_rank_corr
-
-
-Epoch = namedtuple(
-    "Epoch",
-    [
-        "epoch",
-        "lr",
-        "train_loss",
-        "val_loss",
-        "val_rank_corr",
-    ],
-)
 
 
 def train_and_evaluate_model(
@@ -418,6 +407,17 @@ def train_and_evaluate_model(
         None: The function saves the model and training statistics but doesn't return a value.
     """
     logger.info(f"training model for target: {target_name}")
+    Epoch = namedtuple(
+        "Epoch",
+        [
+            "epoch",
+            "lr",
+            "train_loss",
+            "val_loss",
+            "val_rank_corr",
+        ],
+    )
+
     opts: Dict[str, Any] = (
         dict(
             protein_dim=1280,
