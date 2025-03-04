@@ -13,6 +13,34 @@ request_memory = 64G
 requirements = UidDomain == "cs.uni-saarland.de"
 +WantGPUHomeMounted = true
 queue fold, script, seed, dataset, method from (
-    0, scripts/train.py, 0, landrum, pair_all
-    1, scripts/train.py, 0, landrum, pair_all
+    0, scripts/train.py, 0, :andrum, ic50
+    0, scripts/train.py, 0, omnivore, hodge
+    0, scripts/train.py, 0, omnivore, set
+    0, scripts/train.py, 0, omnivore, setall
+    0, scripts/train.py, 0, omnivore, pair
+    0, scripts/train.py, 0, omnivore, pairall
+    1, scripts/train.py, 0, omnivore, ic50
+    1, scripts/train.py, 0, omnivore, hodge
+    1, scripts/train.py, 0, omnivore, set
+    1, scripts/train.py, 0, omnivore, setall
+    1, scripts/train.py, 0, omnivore, pair
+    1, scripts/train.py, 0, omnivore, pairall
+    2, scripts/train.py, 0, omnivore, ic50
+    2, scripts/train.py, 0, omnivore, hodge
+    2, scripts/train.py, 0, omnivore, set
+    2, scripts/train.py, 0, omnivore, setall
+    2, scripts/train.py, 0, omnivore, pair
+    2, scripts/train.py, 0, omnivore, pairall
+    3, scripts/train.py, 0, omnivore, ic50
+    3, scripts/train.py, 0, omnivore, hodge
+    3, scripts/train.py, 0, omnivore, set
+    3, scripts/train.py, 0, omnivore, setall
+    3, scripts/train.py, 0, omnivore, pair
+    3, scripts/train.py, 0, omnivore, pairall
+    4, scripts/train.py, 0, omnivore, ic50
+    4, scripts/train.py, 0, omnivore, hodge
+    4, scripts/train.py, 0, omnivore, set
+    4, scripts/train.py, 0, omnivore, setall
+    4, scripts/train.py, 0, omnivore, pair
+    4, scripts/train.py, 0, omnivore, pairall
 )

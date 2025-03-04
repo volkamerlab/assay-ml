@@ -239,7 +239,7 @@ def main():
     init_logging(run_name)
     logger = logging.getLogger(run_name)
     logger.info(f"seed={seed} method={method} dataset={dataset_name} fold={fold}")
-    save_code_snapshot(run_name)
+    # save_code_snapshot(run_name)
 
     set_random_seeds(seed)
 

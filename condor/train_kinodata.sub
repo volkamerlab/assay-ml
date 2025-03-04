@@ -18,4 +18,9 @@ queue fold, script, seed, dataset, method from (
     2, scripts/train.py, 0, kinodata, set
     3, scripts/train.py, 0, kinodata, set
     4, scripts/train.py, 0, kinodata, set
+    0, scripts/train.py, 0, kinodata, ic50
+    1, scripts/train.py, 0, kinodata, ic50
+    2, scripts/train.py, 0, kinodata, ic50
+    3, scripts/train.py, 0, kinodata, ic50
+    4, scripts/train.py, 0, kinodata, ic50
 )
