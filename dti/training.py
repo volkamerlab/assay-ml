@@ -96,7 +96,7 @@ class AssayRankAccuracy:
                 logger.warning("\n".join(traceback.format_exc().split("\n")))
                 return 0, 0
 
-        results = Parallel(n_jobs=-1)(
+        results = Parallel(n_jobs=8)(
             delayed(process_assay)(assay, data)
             for assay, data in prediction_data.groupby(ASSAY + key_sffx)
         )
