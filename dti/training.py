@@ -1,4 +1,6 @@
 from typing import Type, Any, Dict, Callable
+from joblib import Parallel, delayed
+import traceback
 
 import tqdm
 import pandas as pd
@@ -54,7 +56,7 @@ class AssayRankAccuracy:
 
     def __call__(self, prediction_data: pd.DataFrame) -> float:
         """
-        Calculate weighted average rank correlation across assays.
+        Calculate weighted average rank correlation across assays in parallel.
 
         Args:
             prediction_data (pd.DataFrame): DataFrame containing model predictions.
@@ -62,35 +64,38 @@ class AssayRankAccuracy:
         Returns:
             float: Weighted average rank correlation across all assays.
         """
-        count = 0
-        corr_sum = 0
-
         key_sffx = "_a" if self.pair_predictions else ""
-        for assay, data in prediction_data.groupby(ASSAY + key_sffx):
+
+        def process_assay(assay, data):
             if len(data) <= 1 or assay not in self.reference_data:
-                continue
+                return 0, 0  # No valid data for this assay
 
             scores = assay_ranks(data) if self.pair_predictions else data
             scores = scores.set_index(COMPOUND)
-            reference = self.reference_data.loc[assay, scores.index]
+            reference = self.reference_data.loc[assay].reindex(scores.index)
 
-            if len(scores) > 1 and reference.nunique() > 1:
-                try:
-                    prediction = scores[PREDICTION].values
-                    ground_truth = reference.values
-                    corr = self.rank_statistic(prediction, ground_truth).statistic
-                except ValueError as e:
-                    for line in traceback.format_exc().split("\n"):
-                        logger.warning(line)
-                    logger.warning(f"rank correlation failed (assay={assay}): {e}")
-                    continue
+            if len(scores) <= 1 or reference.nunique() <= 1:
+                return 0, 0  # Skip invalid assays
+
+            try:
+                prediction = scores[PREDICTION].values
+                ground_truth = reference.values
+                corr = self.rank_statistic(prediction, ground_truth).statistic
                 if np.isnan(corr):
                     logger.warning(f"rank correlation is nan (assay={assay})")
-                    continue
-                corr_sum += len(scores) * corr
-                count += len(scores)
+                    return 0, 0
+                return len(scores) * corr, len(scores)
+            except ValueError as e:
+                logger.warning(f"rank correlation failed (assay={assay}): {e}")
+                logger.warning("\n".join(traceback.format_exc().split("\n")))
+                return 0, 0
 
-        return corr_sum / count
+        results = Parallel(n_jobs=-1)(
+            delayed(process_assay)(assay, data) for assay, data in prediction_data.groupby(ASSAY + key_sffx)
+        )
+
+        corr_sum, count = map(sum, zip(*results))
+        return corr_sum / count if count > 0 else float('nan')
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.rank_statistic})"
