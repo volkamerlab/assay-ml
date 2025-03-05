@@ -6,6 +6,7 @@ from functools import partial
 from typing import Tuple, Callable
 
 import numpy as np
+import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from scipy.stats import spearmanr
@@ -176,20 +177,23 @@ def run_split(
         train_dataset,
         batch_size=train_batch(method, batch_size),
         shuffle=True,
-        num_workers=4,
+        num_workers=8,
+        pin_memory=True,
         **train_dl_kwargs,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=test_batch(method, batch_size),
         shuffle=False,
-        num_workers=4,
+        num_workers=8,
+        pin_memory=True,
     )
     test_loader = DataLoader(
         test_dataset,
         batch_size=test_batch(method, batch_size),
         shuffle=False,
         num_workers=4,
+        pin_memory=True,
     )
 
     rstat = partial(spearmanr, nan_policy="raise")  # , variant="c")
@@ -230,6 +234,7 @@ def run_split(
 
 
 def main():
+    torch.cuda.empty_cache()
     seed = int(sys.argv[1])
     dataset_name = sys.argv[2].lower()
     method = Method.from_string(sys.argv[3])

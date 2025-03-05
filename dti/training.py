@@ -205,9 +205,9 @@ def train_multi_batch_epoch(
         loader, desc="training"
     ):
         protein_features, ligand_features, labels = (
-            protein_features.to(device),
-            ligand_features.to(device),
-            labels.to(device).squeeze(),
+            protein_features.to(device, non_blocking=True),
+            ligand_features.to(device, non_blocking=True),
+            labels.to(device, non_blocking=True).squeeze(),
         )
         if labels.std() < 1e-10:
             continue

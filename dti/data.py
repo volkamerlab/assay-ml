@@ -106,7 +106,7 @@ class ActivityDataset(Dataset):
             emb = torch.load(
                 emb_dir(uniprot_id), weights_only=False, map_location=device
             )
-            return emb["representation"][33].to(device)
+            return emb["representation"][33].cpu()
 
         return torch.stack([load_esm(uniprot_id) for uniprot_id in data[TID]])
 
@@ -139,13 +139,13 @@ class ActivityDataset(Dataset):
         prot_feats = (
             torch.ones(1)
             if self.protein_features is None
-            else self.protein_features[idx]
+            else self.protein_features[idx].cpu()
         )
         return (
             prot_feats,
-            self.ligand_features[idx],
-            self.labels[idx],
-            self.info[idx],
+            self.ligand_features[idx].cpu(),
+            self.labels[idx].cpu(),
+            self.info[idx].cpu(),
             torch.ones(1),
         )
 
@@ -207,14 +207,14 @@ class PairDataset(ActivityDataset):
         """
         i, j = self.pairs[idx]
         prot_feats = (
-            torch.ones(1) if self.protein_features is None else self.protein_features[i]
+            torch.ones(1) if self.protein_features is None else self.protein_features[i].cpu()
         )
         return (
             prot_feats,
-            torch.stack([self.ligand_features[i], self.ligand_features[j]]),
-            self.labels[i] - self.labels[j],
-            torch.cat([self.info[i], self.info[j]]),
-            self.weights[i],
+            torch.stack([self.ligand_features[i].cpu(), self.ligand_features[j].cpu()]),
+            self.labels[i].cpu() - self.labels[j].cpu(),
+            torch.cat([self.info[i].cpu(), self.info[j].cpu()]),
+            self.weights[i].cpu(),
         )
 
 
