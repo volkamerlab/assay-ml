@@ -176,13 +176,20 @@ def run_split(
         train_dataset,
         batch_size=train_batch(method, batch_size),
         shuffle=True,
+        num_workers=4,
         **train_dl_kwargs,
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=test_batch(method, batch_size), shuffle=False
+        val_dataset,
+        batch_size=test_batch(method, batch_size),
+        shuffle=False,
+        num_workers=4,
     )
     test_loader = DataLoader(
-        test_dataset, batch_size=test_batch(method, batch_size), shuffle=False
+        test_dataset,
+        batch_size=test_batch(method, batch_size),
+        shuffle=False,
+        num_workers=4,
     )
 
     rstat = partial(spearmanr, nan_policy="raise")  # , variant="c")
