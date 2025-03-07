@@ -40,6 +40,7 @@ class AssayRankAccuracy:
         reference_data: pd.DataFrame,
         pair_predictions: bool,
         rank_statistic: Callable = spearmanr,
+        fisher: bool = True,
     ):
         """
         Initialize the AssayRankAccuracy evaluator.
@@ -49,10 +50,12 @@ class AssayRankAccuracy:
             pair_predictions (bool): Whether predictions are made for pairs of compounds.
             rank_statistic (Callable, optional): Function to calculate rank correlation.
                 Defaults to spearmanr from scipy.stats.
+            fisher (bool, optional): Perform a Fisher transform before aggregation.
         """
         self.pair_predictions = pair_predictions
         self.rank_statistic = rank_statistic
         self.reference_data = reference_data.groupby([ASSAY, COMPOUND])[ACT].mean()
+        self.fisher = fisher
 
     def __call__(self, prediction_data: pd.DataFrame) -> float:
         """
@@ -67,7 +70,7 @@ class AssayRankAccuracy:
         key_sffx = "_a" if self.pair_predictions else ""
 
         def process_assay(assay, data):
-            if len(data) <= 1 or assay not in self.reference_data:
+            if len(data) <= 4 or assay not in self.reference_data:
                 return 0, 0  # No valid data for this assay
 
             scores = assay_ranks(data) if self.pair_predictions else data
@@ -84,21 +87,32 @@ class AssayRankAccuracy:
                 if np.isnan(corr):
                     logger.warning(f"rank correlation is nan (assay={assay})")
                     return 0, 0
-                return len(scores) * corr, len(scores)
+                if self.fisher:
+                    corr = fisher_transform_numpy(corr)
+                n = len(scores) - 3
+                return n * corr, n
             except ValueError as e:
                 logger.warning(f"rank correlation failed (assay={assay}): {e}")
                 logger.warning("\n".join(traceback.format_exc().split("\n")))
                 return 0, 0
 
         results = Parallel(n_jobs=-1)(
-            delayed(process_assay)(assay, data) for assay, data in prediction_data.groupby(ASSAY + key_sffx)
+            delayed(process_assay)(assay, data)
+            for assay, data in prediction_data.groupby(ASSAY + key_sffx)
         )
 
         corr_sum, count = map(sum, zip(*results))
-        return corr_sum / count if count > 0 else float('nan')
+        return np.tanh(corr_sum / count) if count > 0 else float("nan")
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.rank_statistic})"
+
+
+def fisher_transform_numpy(corr: float) -> float:
+    return np.atanh(np.clip(corr, 1e-7 - 1, 1 - 1e-7))
+
+def fisher_transform_torch(corr: Tensor) -> Tensor:
+    return torch.atanh(torch.clamp(corr, 1e-7 - 1, 1 - 1e-7))
 
 
 def normBCE(pred_deltas: Tensor, true_deltas: Tensor):
@@ -223,7 +237,8 @@ def train_multi_batch_epoch(
         assay_size = len(labels)
         loss = criterion(predictions, labels)
         if fisher_transform:
-            loss = torch.atanh(torch.clamp(loss, 1e-7 - 1, 1 - 1e-7))
+            loss = fisher_transform_torch(loss)
+        # assay_size - 3 would be theoretically optimal
         batch_loss += loss * assay_size
         seen_samples += assay_size
 
