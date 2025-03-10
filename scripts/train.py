@@ -178,7 +178,6 @@ def run_split(
         batch_size=train_batch(method, batch_size),
         shuffle=True,
         num_workers=0,
-        pin_memory=True,
         **train_dl_kwargs,
     )
     val_loader = DataLoader(
@@ -186,22 +185,19 @@ def run_split(
         batch_size=test_batch(method, batch_size),
         shuffle=False,
         num_workers=0,
-        pin_memory=True,
     )
     test_loader = DataLoader(
         test_dataset,
         batch_size=test_batch(method, batch_size),
         shuffle=False,
         num_workers=0,
-        pin_memory=True,
     )
 
     rstat = partial(spearmanr, nan_policy="raise")  # , variant="c")
     assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
-    multi_batch = False
+    multi_batch = method == Method.SETS
     if method.on_sets:
         training_loss = corr_loss
-        multi_batch = True
     elif method == Method.ALLPAIRS:
         training_loss = partial(
             batch_pair_loss, criterion=nn.SmoothL1Loss(reduction="none")

@@ -114,7 +114,7 @@ class ActivityDataset(Dataset):
         emb = torch.stack([load_esm(uniprot_id) for uniprot_id in self.data[TID]])
         return emb.to(device)
 
-    @property
+    @functools.cached_property
     def weights(self):
         """Get sample weights for the dataset.
 
@@ -183,7 +183,7 @@ class PairDataset(ActivityDataset):
             col + "_b" for col in self.info_cols
         ]
 
-    @property
+    @functools.cached_property
     def weights(self):
         """Get sample weights for the dataset based on group size.
 

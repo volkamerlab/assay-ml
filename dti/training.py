@@ -1,6 +1,7 @@
 from typing import Type, Any, Dict, Callable
 from joblib import Parallel, delayed
 import traceback
+import time
 
 import tqdm
 import pandas as pd
@@ -287,9 +288,12 @@ def train_epoch(
 
     total_loss = 0
 
+    start_time = time.time()
     for protein_features, ligand_features, labels, _, weights in tqdm.tqdm(
         loader, desc="training"
     ):
+        logger.debug(f"{time.time() - start_time}s loading")
+        start_time = time.time()
         labels = labels.squeeze()
         if labels.std() < 1e-10:
             logger.warning("low label variance - skipping batch")
@@ -297,15 +301,14 @@ def train_epoch(
             labels = (labels - labels.mean()) / labels.std()
 
         optimizer.zero_grad()
-        assert not protein_features.isnan().any()
-        assert not ligand_features.isnan().any()
         predictions = model(protein_features, ligand_features).squeeze()
-        assert not predictions.isnan().any(), predictions
         loss = (criterion(predictions, labels) * weights).sum() / weights.sum()
         loss.backward()
         optimizer.step()
 
         total_loss += loss.item()
+        logger.debug(f"{time.time() - start_time}s training")
+        start_time = time.time()
 
     total_loss /= len(loader)
     return total_loss
@@ -353,10 +356,7 @@ def evaluate_epoch(
             info.squeeze(0),
         )
 
-        assert not protein_features.isnan().any()
-        assert not ligand_features.isnan().any()
         predictions = model(protein_features, ligand_features).squeeze()
-        assert not predictions.isnan().any()
         loss = criterion(predictions, labels).mean()
 
         total_loss += loss.item()
