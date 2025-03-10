@@ -362,9 +362,10 @@ def train_epoch(
         loader, desc="training"
     ):
         labels = labels.squeeze()
-        if labels.std() < 1e-10:
-            logger.warning("low label variance - skipping batch")
         if normalize_training_batches:
+            if labels.std() < 1e-10:
+                logger.warning("low label variance - skipping batch")
+                break
             labels = (labels - labels.mean()) / labels.std()
 
         optimizer.zero_grad()

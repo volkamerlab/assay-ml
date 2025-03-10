@@ -141,7 +141,7 @@ class ActivityDataset(Dataset):
             tuple: Protein features, ligand features, label, and info for the sample.
         """
         prot_feats = (
-            torch.ones(1)
+            torch.ones(1).to(device)
             if self.protein_features is None
             else self.protein_features[idx]
         )
@@ -150,7 +150,7 @@ class ActivityDataset(Dataset):
             self.ligand_features[idx],
             self.labels[idx],
             self.info[idx],
-            torch.ones(1),
+            torch.ones(1).to(device),
         )
 
 
@@ -312,7 +312,7 @@ class SetActivityDataset(ActivityDataset):
         Returns:
             torch.Tensor: Uniform weights for all batches.
         """
-        return torch.ones(len(self))
+        return torch.ones(len(self), device=device)
 
     def __len__(self):
         """Get the number of batches in the dataset.
