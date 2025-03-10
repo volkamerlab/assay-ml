@@ -192,7 +192,7 @@ def assay_ranks(
 
 def hodge_rank(
     y_bar: np.ndarray, w: np.ndarray, diag_stab: float = 0.0, scale_scores: bool = True
-):
+) -> np.ndarray:
     laplacian = -w.copy()
     laplacian[np.diag_indices_from(w)] = w.sum(0) + diag_stab
     y_bar = np.nan_to_num(y_bar)

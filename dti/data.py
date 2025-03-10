@@ -14,7 +14,7 @@ from torch.utils.data import Dataset
 from esm import FastaBatchedDataset, pretrained
 from sklearn.preprocessing import StandardScaler
 
-from .constants import DATA, SMILES, ACT, TID, SEQUENCE, ASSAY, COMPOUND
+from .constants import DATA, SMILES, ACT, TID, SEQUENCE, ASSAY, COMPOUND, HODGE
 from .utils import device, compute_fp
 from .hodge_ranking import parallel_hodge_rank
 
@@ -207,7 +207,9 @@ class PairDataset(ActivityDataset):
         """
         i, j = self.pairs[idx]
         prot_feats = (
-            torch.ones(1) if self.protein_features is None else self.protein_features[i].cpu()
+            torch.ones(1)
+            if self.protein_features is None
+            else self.protein_features[i].cpu()
         )
         return (
             prot_feats,
@@ -227,7 +229,7 @@ class SetActivityDataset(ActivityDataset):
         info_cols (List[str]): Column names to include as information.
         model_name (str): Name of the protein language model. Defaults to "esm2_t33_650M_UR50D".
         min_batch_size (int): Minimum size of a batch. Defaults to 3.
-        max_batch_size (int): Maximum size of a batch. Defaults to 1024.
+        max_batch_size (int): Maximum size of a batch. For no limit use 0. Defaults to 0.
         random_seed (int): Random seed for shuffling. Defaults to 0.
     """
 
@@ -238,7 +240,7 @@ class SetActivityDataset(ActivityDataset):
         info_cols=...,
         model_name="esm2_t33_650M_UR50D",
         min_batch_size: int = 3,
-        max_batch_size: int = 1024,
+        max_batch_size: int = 0,
         random_seed: int = 0,
     ):
         super().__init__(data, target, info_cols, model_name)
@@ -261,7 +263,7 @@ class SetActivityDataset(ActivityDataset):
             if len(group) < self.min_batch_size:
                 num_unused += len(group)
                 continue
-            if len(group) > self.max_batch_size:
+            if self.max_batch_size > 0 and len(group) > self.max_batch_size:
                 batches = np.array_split(group, len(group) // self.max_batch_size)
             else:
                 batches = [group]
@@ -466,6 +468,7 @@ def load_split(
     data_dir: Path,
     tgt_name: str,
     inter_assay_weight: Union[float, None] = None,
+    scale_scores: bool = False,
 ) -> Tuple[pd.DataFrame, Union[pd.DataFrame, None], pd.DataFrame, pd.DataFrame]:
     split_dir = data_dir / f"{index}"
     logger.info(f"reading dataset from {split_dir}")
@@ -480,24 +483,44 @@ def load_split(
     val_data[tgt_name] = scaler.transform(val_data[ACT].values.reshape(-1, 1))
 
     if inter_assay_weight is not None:
-        hodge_file = split_dir / f"train_hodge_lam{inter_assay_weight:.2f}.csv"
-        if not hodge_file.exists():
-            logger.info("computing Hodge ranking")
-            hodge_df = parallel_hodge_rank(train_data, inter_assay_weight)
-            merge_keys = [SMILES]
-            if TID in train_data:
-                merge_keys.append(TID)
-            train_data = train_data.merge(
-                hodge_df,
-                on=merge_keys,
-                how="inner",
-            )
-            train_data.to_csv(hodge_file)
-        else:
-            logger.info(f"cached Hodge ranking data at {hodge_file}")
-            train_data = pd.read_csv(hodge_file, index_col=0)
+        train_data = _load_hodge_ranking(
+            split_dir, inter_assay_weight, train_data, scale_scores
+        )
 
     return train_data, val_data, test_data
+
+
+def _load_hodge_ranking(
+    split_dir: Path,
+    inter_assay_weight: float,
+    train_data: pd.DataFrame,
+    scale_scores: bool,
+) -> pd.DataFrame:
+    logger.info("reading Hodge rank data")
+    hodge_file = split_dir / f"train_hodge_lam{inter_assay_weight:.2f}.csv"
+    if not hodge_file.exists():
+        logger.info("no cached Hodge ranking")
+        hodge_df = parallel_hodge_rank(
+            train_data, inter_assay_weight, scale_scores=False
+        )
+        merge_keys = [SMILES]
+        if TID in train_data:
+            merge_keys.append(TID)
+        train_data = train_data.merge(
+            hodge_df,
+            on=merge_keys,
+            how="inner",
+        )
+        train_data.to_csv(hodge_file)
+    else:
+        logger.info(f"cached Hodge ranking data at {hodge_file}")
+        train_data = pd.read_csv(hodge_file, index_col=0)
+
+    if scale_scores:
+        scores = StandardScaler().fit_transform(train_data[HODGE].values.reshape(-1, 1))
+        train_data[HODGE] = scores.flatten()
+
+    return train_data
 
 
 def prepare_datasets(
