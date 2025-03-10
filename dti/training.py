@@ -12,7 +12,6 @@ from torch.utils.data import DataLoader
 from scipy.stats import spearmanr
 
 import logging
-import traceback
 from functools import namedtuple
 
 from .utils import device
@@ -109,9 +108,12 @@ class AssayRankAccuracy:
 
 
 def fisher_transform_numpy(corr: float) -> float:
+    """Fisher transform a correlation using numpy."""
     return np.atanh(np.clip(corr, 1e-7 - 1, 1 - 1e-7))
 
+
 def fisher_transform_torch(corr: Tensor) -> Tensor:
+    """Fisher transform a correlation using pytorch."""
     return torch.atanh(torch.clamp(corr, 1e-7 - 1, 1 - 1e-7))
 
 
@@ -288,12 +290,7 @@ def train_epoch(
     for protein_features, ligand_features, labels, _, weights in tqdm.tqdm(
         loader, desc="training"
     ):
-        protein_features, ligand_features, labels, weights = (
-            protein_features.to(device),
-            ligand_features.to(device),
-            labels.to(device).squeeze(),
-            weights.to(device),
-        )
+        labels = labels.squeeze()
         if labels.std() < 1e-10:
             logger.warning("low label variance - skipping batch")
         if normalize_training_batches:
@@ -350,9 +347,9 @@ def evaluate_epoch(
         loader, desc="evaluating"
     ):
         protein_features, ligand_features, labels, info = (
-            protein_features.to(device).squeeze(0),
-            ligand_features.to(device).squeeze(0),
-            labels.to(device).squeeze(),
+            protein_features.squeeze(0),
+            ligand_features.squeeze(0),
+            labels.squeeze(),
             info.squeeze(0),
         )
 

@@ -53,25 +53,28 @@ class ActivityDataset(Dataset):
         self.data = data[mask].copy()
         self.data.reset_index(inplace=True)
         self.ligand_features = torch.tensor(
-            np.stack([fp for fp in fps if fp is not None]), dtype=torch.float32
+            np.stack([fp for fp in fps if fp is not None]),
+            dtype=torch.float32,
+            device=device,
         )
-        self.protein_features = self._compute_protein_features(self.data, model_name)
-        self.labels = torch.tensor(self.data[target].values, dtype=torch.float32)
+        self.protein_features = self._protein_features(model_name)
+        self.labels = torch.tensor(
+            self.data[target].values, dtype=torch.float32, device=device
+        )
         self.info_cols = info_cols
         logger.info(f"info cols: {info_cols}")
         self.info = torch.tensor(self.data[info_cols].values)
 
-    def _compute_protein_features(self, data: pd.DataFrame, model_name: str):
+    def _protein_features(self, model_name: str):
         """Compute protein embeddings using the specified ESM model.
 
         Args:
-            data (pd.DataFrame): DataFrame containing protein sequences.
             model_name (str): Name of the ESM model to use.
 
         Returns:
             torch.Tensor or None: Tensor of protein embeddings or None if no protein targets.
         """
-        if TID not in data.columns or data[TID].isna().any():
+        if TID not in self.data.columns or self.data[TID].isna().any():
             logger.info("missing protein target in dataset")
             return None
 
@@ -82,7 +85,7 @@ class ActivityDataset(Dataset):
         emb_dir = lambda uniprot_id: output_dir / f"{uniprot_id}.pt"
         fasta_file = DATA / "data.fasta"
         with open(fasta_file, "w") as f:
-            for _, row in data.iterrows():
+            for _, row in self.data.iterrows():
                 uniprot = row[TID]
                 if emb_dir(uniprot).exists():
                     continue
@@ -108,7 +111,8 @@ class ActivityDataset(Dataset):
             )
             return emb["representation"][33].cpu()
 
-        return torch.stack([load_esm(uniprot_id) for uniprot_id in data[TID]])
+        emb = torch.stack([load_esm(uniprot_id) for uniprot_id in self.data[TID]])
+        return emb.to(device)
 
     @property
     def weights(self):
@@ -117,7 +121,7 @@ class ActivityDataset(Dataset):
         Returns:
             torch.Tensor: Uniform weights for all samples.
         """
-        return torch.ones(len(self.labels))
+        return torch.ones(len(self.labels)).to(device)
 
     def __len__(self):
         """Get the number of samples in the dataset.
@@ -139,13 +143,13 @@ class ActivityDataset(Dataset):
         prot_feats = (
             torch.ones(1)
             if self.protein_features is None
-            else self.protein_features[idx].cpu()
+            else self.protein_features[idx]
         )
         return (
             prot_feats,
-            self.ligand_features[idx].cpu(),
-            self.labels[idx].cpu(),
-            self.info[idx].cpu(),
+            self.ligand_features[idx],
+            self.labels[idx],
+            self.info[idx],
             torch.ones(1),
         )
 
@@ -174,7 +178,7 @@ class PairDataset(ActivityDataset):
                     self.pairs.append((ix0, ix1))
                     weights.append(2 / (len(group) + 1))
         assert len(weights) == len(self.pairs), (len(weights), len(self.pairs))
-        self._weights = torch.tensor(weights, dtype=torch.double)
+        self._weights = torch.tensor(weights, dtype=torch.double, device=device)
         self.info_cols = [col + "_a" for col in self.info_cols] + [
             col + "_b" for col in self.info_cols
         ]
@@ -207,16 +211,16 @@ class PairDataset(ActivityDataset):
         """
         i, j = self.pairs[idx]
         prot_feats = (
-            torch.ones(1)
+            torch.ones(1).to(device)
             if self.protein_features is None
-            else self.protein_features[i].cpu()
+            else self.protein_features[i]
         )
         return (
             prot_feats,
-            torch.stack([self.ligand_features[i].cpu(), self.ligand_features[j].cpu()]),
-            self.labels[i].cpu() - self.labels[j].cpu(),
-            torch.cat([self.info[i].cpu(), self.info[j].cpu()]),
-            self.weights[i].cpu(),
+            torch.stack([self.ligand_features[i], self.ligand_features[j]]),
+            self.labels[i] - self.labels[j],
+            torch.cat([self.info[i], self.info[j]]),
+            self.weights[i],
         )
 
 
