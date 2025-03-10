@@ -118,7 +118,7 @@ def init_logging(run_name: Union[str, None] = str(time.time())):
     console_handler = logging.StreamHandler()
     file_handler = logging.FileHandler(log_file)
 
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(logging.DEBUG)
     file_handler.setLevel(logging.DEBUG)
 
     formatter = logging.Formatter(
@@ -143,15 +143,6 @@ def get_scaffold(smiles: str, generic: bool = True) -> str:
         return Chem.CanonSmiles(Chem.MolToSmiles(scaffold))
     except Exception as e:
         logger.error(f"error processing SMILES {smiles}: {e}")
-        return None
-
-
-def compute_fp(smi: str):
-    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=2048)
-    try:
-        return mfpgen.GetFingerprintAsNumPy(Chem.MolFromSmiles(smi))
-    except TypeError:
-        logger.warn(f"No fp for SMILES={smi}")
         return None
 
 
