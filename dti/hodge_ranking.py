@@ -1,4 +1,4 @@
-import tempfile
+import os
 from typing import Tuple
 from concurrent.futures import ProcessPoolExecutor
 from collections import namedtuple
@@ -56,23 +56,14 @@ def _build_matrices(
     return y_bar, weights
 
 
-def _process_target_group_from_file(args):
-    """
-    Process target group data from file to compute Hodge rank scores.
-
-    Args:
-        args (tuple): Tuple containing (input_file, inter_assay_weight, scale_scores)
-
-    Returns:
-        List[HodgeRank]: List of HodgeRank tuples with compounds and their scores
-    """
-    input_file, inter_assay_weight, scale_scores = args
-
-    group_data = pd.read_csv(input_file, engine="c", low_memory=True)
+def _rank_target(
+    group_data: pd.DataFrame, inter_assay_weight: float, scale_scores: bool
+) -> HodgeRank:
     usecols = [SMILES, ASSAY, ACT]
     if TID in group_data.columns:
         usecols.append(TID)
     target = group_data[TID].iloc[0] if TID in group_data.columns else None
+    logger.debug(f"ranking target {target}")
 
     if inter_assay_weight == 0:
         group_data = group_data[group_data.groupby(ASSAY)[ASSAY].transform("count") > 1]
@@ -108,7 +99,7 @@ def parallel_hodge_rank(
     data: pd.DataFrame,
     inter_assay_weight: float = 0,
     scale_scores: bool = False,
-    n_jobs: int = 1,
+    n_jobs: int = min(os.cpu_count() - 2, 32),
 ) -> pd.DataFrame:
     """
     Compute Hodge ranking for targets as specified by the `TID` column in parallel.
@@ -120,48 +111,52 @@ def parallel_hodge_rank(
         n_jobs (int, optional): Number of jobs
 
     Returns:
-        pd.DataFrame: data with hodge potential in `HODGE` column
+        pd.DataFrame: data with Hodge potential in `HODGE` column
     """
-    logger.info(f"compute Hodge ranking (inter_assay_weight={inter_assay_weight})")
+    logger.info(
+        f"compute Hodge ranking (inter_assay_weight={inter_assay_weight}, scale_scores={scale_scores})"
+    )
     all_scores = list()
 
     groups = [g for _, g in data.groupby(TID)] if TID in data.columns else [data]
 
-    args = []
-    for tgt_data in groups:
-        with tempfile.NamedTemporaryFile(delete=False) as fp:
-            tgt_data.to_csv(fp, index=False)
-        args.append((fp.name, inter_assay_weight, scale_scores))
-
     with ProcessPoolExecutor(max_workers=n_jobs) as executor:
-        results = list(
-            tqdm.tqdm(
-                executor.map(_process_target_group_from_file, args),
-                total=len(args),
+        futures = [
+            executor.submit(
+                _rank_target,
+                tgt_data,
+                inter_assay_weight,
+                scale_scores,
             )
-        )
+            for tgt_data in groups
+        ]
+
+        futures = tqdm.tqdm(futures, total=len(futures), desc="Ranking")
+        results = [future.result() for future in futures]
 
     for result in results:
         all_scores.extend(result)
 
-    hodge_df = pd.DataFrame(all_scores)
-    hodge_df = hodge_df.rename(columns={"smiles": SMILES})
+    hodge_df = pd.DataFrame(all_scores).rename(columns={"smiles": SMILES})
 
     return hodge_df
 
 
-def assay_ranks(preds: pd.DataFrame) -> pd.DataFrame:
+def assay_ranks(
+    preds: pd.DataFrame, suffixes: tuple[str, str] = ("_a", "_b")
+) -> pd.DataFrame:
     """
     Compute Hodge ranking for pairwise predictions over the whole dataframe.
 
     Args:
         data (pd.DataFrame): Prediction data
+        suffixes (tuple[str, str], optional): Column suffixes for pair predictions.
 
     Returns:
         pd.DataFrame: dataframe with compounds and Hodge potentials
     """
-    cmpd_a = COMPOUND + "_a"
-    cmpd_b = COMPOUND + "_b"
+    cmpd_a = COMPOUND + suffixes[0]
+    cmpd_b = COMPOUND + suffixes[1]
     unique_cmpds = np.unique(
         np.concat(
             [
@@ -196,7 +191,7 @@ def assay_ranks(preds: pd.DataFrame) -> pd.DataFrame:
 
 
 def hodge_rank(
-    y_bar: np.ndarray, w: np.ndarray, diag_stab: float = 0.0, scale_scores: bool = False
+    y_bar: np.ndarray, w: np.ndarray, diag_stab: float = 0.0, scale_scores: bool = True
 ):
     laplacian = -w.copy()
     laplacian[np.diag_indices_from(w)] = w.sum(0) + diag_stab
@@ -207,7 +202,7 @@ def hodge_rank(
         if scale_scores:
             scores = StandardScaler().fit_transform(scores.reshape(-1, 1)).flatten()
         return scores
-    except np.linalg.LinAlgError:
+    except np.linalg.LinAlgError as e:
         new_diag_stab = max(1e-6, diag_stab) * 10
         logger.warning(
             f"unstable SVD ({str(e)}); retrying with diag_stab={new_diag_stab}"
