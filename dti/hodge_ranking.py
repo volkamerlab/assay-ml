@@ -116,7 +116,6 @@ def parallel_hodge_rank(
     logger.info(
         f"compute Hodge ranking (inter_assay_weight={inter_assay_weight}, scale_scores={scale_scores})"
     )
-    all_scores = list()
 
     groups = [g for _, g in data.groupby(TID)] if TID in data.columns else [data]
 
@@ -134,12 +133,7 @@ def parallel_hodge_rank(
         futures = tqdm.tqdm(futures, total=len(futures), desc="Ranking")
         results = [future.result() for future in futures]
 
-    for result in results:
-        all_scores.extend(result)
-
-    hodge_df = pd.DataFrame(all_scores).rename(columns={"smiles": SMILES})
-
-    return hodge_df
+    return pd.DataFrame(sum(results, start=[])).rename(columns={"smiles": SMILES})
 
 
 def assay_ranks(
@@ -157,19 +151,19 @@ def assay_ranks(
     """
     cmpd_a = COMPOUND + suffixes[0]
     cmpd_b = COMPOUND + suffixes[1]
-    unique_cmpds = np.unique(
+    cmpds = np.unique(
         np.concat(
             [
-                preds[cmpd_a].values,
-                preds[cmpd_b].values,
+                preds[cmpd_a].unique(),
+                preds[cmpd_b].unique(),
             ]
         )
     )
-    cmpd_to_idx = {cmpd: idx for idx, cmpd in enumerate(unique_cmpds)}
-    dim = len(unique_cmpds)
+    cmpd_to_idx = {cmpd: idx for idx, cmpd in enumerate(cmpds)}
+    dim = len(cmpds)
 
     if dim <= 1:
-        return 0
+        return pd.DataFrame({COMPOUND: cmpds, PREDICTION: np.zeros_like(cmpds)})
 
     y_bar = np.zeros((dim, dim))
     weights = np.zeros((dim, dim))
@@ -177,17 +171,16 @@ def assay_ranks(
     for _, row in preds.iterrows():
         c_i = cmpd_to_idx[row[cmpd_a]]
         c_j = cmpd_to_idx[row[cmpd_b]]
-        pref = row[PREDICTION]
-        y_bar[c_i, c_j] += pref
-        y_bar[c_j, c_i] -= pref
+        y_bar[c_i, c_j] += row[PREDICTION]
         weights[c_i, c_j] += 1
 
     weights[np.diag_indices_from(weights)] = 0
     weights += weights.T
+    y_bar -= y_bar.T
 
     scores = hodge_rank(y_bar, weights)
 
-    return pd.DataFrame({COMPOUND: unique_cmpds, PREDICTION: scores})
+    return pd.DataFrame({COMPOUND: cmpds, PREDICTION: scores})
 
 
 def hodge_rank(
