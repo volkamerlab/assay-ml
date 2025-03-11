@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 class Method(Enum):
     IC50 = "ic50"
+    IC50CORR = "ic50corr"
     HODGE = "hodge"
     PAIRS = "pairs"
     ALLPAIRS = "allpairs"
@@ -39,6 +40,8 @@ class Method(Enum):
         match m.upper().replace("_", ""):
             case "IC50":
                 return Method.IC50
+            case "IC50CORR":
+                return Method.IC50CORR
             case "HODGE":
                 return Method.HODGE
             case "ALLPAIRS" | "PAIRALL":
@@ -63,6 +66,10 @@ class Method(Enum):
     @property
     def assay_based(self) -> bool:
         return self in [Method.PAIRS, Method.SETS, Method.HODGE]
+
+    @property
+    def point_prediction(self):
+        return self in [Method.IC50, Method.HODGE, Method.IC50CORR]
 
     def __str__(self):
         return self.name.lower()
@@ -118,7 +125,7 @@ def init_logging(run_name: Union[str, None] = str(time.time())):
     console_handler = logging.StreamHandler()
     file_handler = logging.FileHandler(log_file)
 
-    console_handler.setLevel(logging.DEBUG)
+    console_handler.setLevel(logging.INFO)
     file_handler.setLevel(logging.DEBUG)
 
     formatter = logging.Formatter(

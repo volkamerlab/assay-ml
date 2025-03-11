@@ -322,7 +322,7 @@ class SetActivityDataset(ActivityDataset):
         """
         batch_idcs = self._get_next_batch(idx)
         prot_feats = (
-            torch.ones(1)
+            torch.ones(1, device=device)
             if self.protein_features is None
             else self.protein_features[batch_idcs]
         )
@@ -331,7 +331,7 @@ class SetActivityDataset(ActivityDataset):
             self.ligand_features[batch_idcs],
             self.labels[batch_idcs],
             self.info[batch_idcs],
-            torch.ones(1),
+            torch.ones(1, device=device),
         )
 
 

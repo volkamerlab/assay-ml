@@ -70,7 +70,7 @@ def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
     return model_cls, dataset_cls, val_dataset_cls, data
 
 
-def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type, type]:
+def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]:
     match method:
         case Method.PAIRS if mol_only:
             return PairMolecularModel, PairDataset, PairDataset
@@ -80,6 +80,10 @@ def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type, type]:
             return PairMolecularModel, ActivityDataset, PairDataset
         case Method.ALLPAIRS:
             return PairCombinedModel, ActivityDataset, PairDataset
+        case Method.IC50CORR if mol_only:
+            return MolecularModel, SetActivityDataset, SetActivityDataset
+        case Method.IC50CORR:
+            return CombinedModel, SetActivityDataset, SetActivityDataset
         case Method.HODGE | Method.IC50 if mol_only:
             return MolecularModel, ActivityDataset, SetActivityDataset
         case Method.HODGE | Method.IC50:
@@ -113,17 +117,17 @@ def model_and_dataset(method: str, mol_only: bool) -> Tuple[type, type, type]:
             sys.exit(1)
 
 
-def train_batch(method: str, default: int) -> int:
+def train_batch(method: Method, default: int) -> int:
     match method:
         case Method.ALLPAIRS:
             return int(np.sqrt(default))
-        case Method.SETS:
+        case Method.SETS | Method.IC50CORR:
             return 1
         case _:
             return default
 
 
-def test_batch(method: str, default: int) -> int:
+def test_batch(method: Method, default: int) -> int:
     match method:
         case Method.ALLPAIRS | Method.PAIRS:
             return default
@@ -133,7 +137,7 @@ def test_batch(method: str, default: int) -> int:
 
 def run_split(
     run_name: str,
-    method: str,
+    method: Method,
     dataset_name: str,
     fold: int,
     seed: int,
@@ -172,13 +176,12 @@ def run_split(
     train_dataset = dataset_cls(train_data, target=train_tgt, info_cols=info_cols)
 
     assert len(train_dataset) > 0
-    train_dl_kwargs = dict() if not method.on_pairs else dict(drop_last=True)
     train_loader = DataLoader(
         train_dataset,
         batch_size=train_batch(method, batch_size),
         shuffle=True,
         num_workers=0,
-        **train_dl_kwargs,
+        drop_last=method.on_pairs,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -195,8 +198,8 @@ def run_split(
 
     rstat = partial(spearmanr, nan_policy="raise")  # , variant="c")
     assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
-    multi_batch = method == Method.SETS
-    if method.on_sets:
+    multi_batch = method in [Method.SETS, Method.IC50CORR]
+    if method.on_sets or method == Method.IC50CORR:
         training_loss = corr_loss
     elif method == Method.ALLPAIRS:
         training_loss = partial(

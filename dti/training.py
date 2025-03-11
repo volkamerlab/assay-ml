@@ -93,7 +93,7 @@ class AssayRankAccuracy:
                 return n * corr, n
             except ValueError as e:
                 logger.warning(f"rank correlation failed (assay={assay}): {e}")
-                logger.warning("\n".join(traceback.format_exc().split("\n")))
+                # logger.warning("\n".join(traceback.format_exc().split("\n")))
                 return 0, 0
 
         results = Parallel(n_jobs=8)(
@@ -226,17 +226,15 @@ def train_multi_batch_epoch(
     for protein_features, ligand_features, labels, _, _ in tqdm.tqdm(
         loader, desc="training"
     ):
-        protein_features, ligand_features, labels = (
-            protein_features.to(device, non_blocking=True),
-            ligand_features.to(device, non_blocking=True),
-            labels.to(device, non_blocking=True).squeeze(),
-        )
-        if labels.std() < 1e-10:
-            continue
+        labels = labels.squeeze()
         if normalize_training_batches:
+            if labels.std() < 1e-10:
+                continue
             labels = (labels - labels.mean()) / labels.std()
 
-        predictions = model(protein_features, ligand_features).squeeze()
+        predictions = model(
+            protein_features.squeeze(), ligand_features.squeeze()
+        ).squeeze()
         assay_size = len(labels)
         loss = criterion(predictions, labels)
         if fisher_transform:
