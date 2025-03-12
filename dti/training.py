@@ -193,7 +193,7 @@ def train_with_batched_sets(
     optimizer,
     criterion,
     fisher_transform=True,
-    normalize_training_batches=True,
+    normalize_training_batches=False,
 ):
     logger.debug("Training model")
     model.train()

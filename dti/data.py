@@ -368,7 +368,7 @@ class MultiSetActivityDataset(ActivityDataset):
         model_name="esm2_t33_650M_UR50D",
         min_batch_size: int = 3,
         max_set_size: int = 0,
-        sets_per_batch: int = 10,
+        sets_per_batch: int = 20,
         random_seed: int = 0,
     ):
         super().__init__(data, target, info_cols, model_name)
