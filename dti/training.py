@@ -295,10 +295,12 @@ def train_with_batched_sets(
             set_preds = predictions[start_idx:end_idx]
             set_labels = labels[start_idx:end_idx]
 
+            # Skip zero variance sets
+            if set_labels.std() < 1e-10:
+                continue
+
             # Normalize if needed
             if normalize_training_batches:
-                if set_labels.std() < 1e-10:
-                    continue
                 set_labels = (set_labels - set_labels.mean()) / set_labels.std()
 
             # Apply criterion to each set
