@@ -335,6 +335,142 @@ class SetActivityDataset(ActivityDataset):
         )
 
 
+class MultiSetActivityDataset(ActivityDataset):
+    """Dataset that processes multiple sets in a single batch while preserving set identity.
+
+    Args:
+        data (pd.DataFrame): DataFrame containing activity data.
+        target (str): Column name for target values.
+        info_cols (List[str]): Column names to include as information.
+        model_name (str): Name of the protein language model.
+        min_batch_size (int): Minimum size of a set to be included.
+        max_set_size (int): Maximum samples per set (0 for no limit).
+        sets_per_batch (int): Number of sets to process in a single batch.
+        random_seed (int): Random seed for shuffling.
+    """
+
+    def __init__(
+        self,
+        data,
+        target=...,
+        info_cols=...,
+        model_name="esm2_t33_650M_UR50D",
+        min_batch_size: int = 3,
+        max_set_size: int = 0,
+        sets_per_batch: int = 10,
+        random_seed: int = 0,
+    ):
+        super().__init__(data, target, info_cols, model_name)
+        self.min_batch_size = min_batch_size
+        self.max_set_size = max_set_size
+        self.sets_per_batch = sets_per_batch
+        self.random = np.random.default_rng(random_seed)
+
+        # Process and organize sets
+        self.valid_sets = []
+        self.set_ids = []  # Track which assay each set belongs to
+        num_unused = 0
+
+        for assay_id, (_, group) in enumerate(self.data.groupby(ASSAY)):
+            assert group is not None
+            group_idcs = np.array(group.index)
+            self.random.shuffle(group_idcs)
+
+            if len(group_idcs) < self.min_batch_size:
+                num_unused += len(group_idcs)
+                continue
+
+            if self.max_set_size > 0 and len(group_idcs) > self.max_set_size:
+                # Split large sets into multiple smaller ones
+                sub_batches = np.array_split(
+                    group_idcs, len(group_idcs) // self.max_set_size
+                )
+                for batch in sub_batches:
+                    if len(batch) >= self.min_batch_size:
+                        self.valid_sets.append(batch)
+                        self.set_ids.append(assay_id)
+                    else:
+                        num_unused += len(batch)
+            else:
+                self.valid_sets.append(group_idcs)
+                self.set_ids.append(assay_id)
+
+        self._make_batches()
+        logger.debug(f"Number of unused examples: {num_unused} / {len(self.data)}")
+
+    def _make_batches(self):
+        """Create batches of multiple sets for processing."""
+        # Shuffle sets while maintaining set-id pairing
+        indices = np.arange(len(self.valid_sets))
+        self.random.shuffle(indices)
+        self.valid_sets = [self.valid_sets[i] for i in indices]
+        self.set_ids = [self.set_ids[i] for i in indices]
+
+        # Group sets into batches
+        self.batches = []
+        self.batch_set_ids = []
+
+        for i in range(0, len(self.valid_sets), self.sets_per_batch):
+            end_idx = min(i + self.sets_per_batch, len(self.valid_sets))
+            batch_sets = self.valid_sets[i:end_idx]
+            batch_ids = self.set_ids[i:end_idx]
+
+            self.batches.append(batch_sets)
+            self.batch_set_ids.append(batch_ids)
+
+        self.used = np.full(len(self.batches), False, dtype=bool)
+        logger.debug(
+            f"Created {len(self.batches)} batches with up to {self.sets_per_batch} sets each"
+        )
+
+    def _get_next_batch(self, idx: int):
+        """Get the next available batch and mark it as used."""
+        if np.all(self.used):
+            self._make_batches()
+        self.used[idx] = True
+        return self.batches[idx], self.batch_set_ids[idx]
+
+    def __len__(self):
+        """Get the number of batches in the dataset."""
+        return len(self.batches)
+
+    def __getitem__(self, idx):
+        """Get a batch of multiple sets from the dataset.
+
+        Returns:
+            tuple: Protein features, ligand features, labels, info for each set in the batch,
+                  and metadata to track set boundaries for the loss function.
+        """
+        batch_sets, batch_ids = self._get_next_batch(idx)
+
+        # Get cumulative sizes for tracking set boundaries
+        set_sizes = [len(set_idcs) for set_idcs in batch_sets]
+        cumulative_sizes = np.cumsum([0] + set_sizes).squeeze()
+
+        # Concatenate all indices to process in a single forward pass
+        all_indices = np.concatenate(batch_sets)
+
+        # Get features for all concatenated samples
+        prot_feats = (
+            torch.ones(1, device=device)
+            if self.protein_features is None
+            else self.protein_features[all_indices]
+        )
+
+        # Return concatenated features along with metadata about set boundaries
+        return (
+            prot_feats,
+            self.ligand_features[all_indices],
+            self.labels[all_indices],
+            self.info[all_indices],
+            {
+                "set_boundaries": cumulative_sizes,
+                "set_ids": batch_ids,
+                "num_sets": len(batch_sets),
+            },
+        )
+
+
 def aggregate_multi_measurements(data: pd.DataFrame) -> pd.DataFrame:
     """Aggregate multiple measurements for the same compound and assay.
 

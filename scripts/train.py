@@ -22,6 +22,7 @@ from dti.model import (
 from dti.data import (
     ActivityDataset,
     SetActivityDataset,
+    MultiSetActivityDataset,
     PairDataset,
     prepare_datasets,
     load_landrum,
@@ -93,13 +94,13 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
                 MoleculeSetRank,
                 hidden_channels=512,
             )
-            return model, SetActivityDataset, SetActivityDataset
+            return model, MultiSetActivityDataset, SetActivityDataset
         case Method.SETS:
             model = partial(
                 SetRankModel,
                 hidden_channels=512,
             )
-            return model, SetActivityDataset, SetActivityDataset
+            return model, MultiSetActivityDataset, SetActivityDataset
         case Method.ALLSETS if mol_only:
             model = partial(
                 MoleculeSetRank,

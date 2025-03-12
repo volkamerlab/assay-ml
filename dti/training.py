@@ -257,6 +257,75 @@ def train_multi_batch_epoch(
     return total_loss / steps
 
 
+def train_with_batched_sets(
+    model,
+    loader,
+    optimizer,
+    criterion,
+    fisher_transform=True,
+    normalize_training_batches=True,
+):
+    logger.debug("Training model")
+    model.train()
+    torch.set_grad_enabled(True)
+    total_loss = 0
+    steps = 0
+
+    for protein_features, ligand_features, labels, info, metadata in tqdm.tqdm(
+        loader, desc="training"
+    ):
+        # Get boundaries of each set within the batch
+        set_boundaries = metadata["set_boundaries"].squeeze()
+        num_sets = metadata["num_sets"].squeeze()
+
+        # Process all samples in a single forward pass
+        predictions = model(
+            protein_features.squeeze(), ligand_features.squeeze()
+        ).squeeze()
+        labels = labels.squeeze()
+
+        # Calculate loss for each set separately
+        batch_loss = 0
+        total_samples = 0
+
+        for i in range(num_sets):
+            start_idx = set_boundaries[i]
+            end_idx = set_boundaries[i + 1]
+
+            set_preds = predictions[start_idx:end_idx]
+            set_labels = labels[start_idx:end_idx]
+
+            # Normalize if needed
+            if normalize_training_batches:
+                if set_labels.std() < 1e-10:
+                    continue
+                set_labels = (set_labels - set_labels.mean()) / set_labels.std()
+
+            # Apply criterion to each set
+            set_loss = criterion(set_preds, set_labels)
+
+            if fisher_transform:
+                set_loss = fisher_transform_torch(set_loss)
+
+            set_size = end_idx - start_idx
+            batch_loss += set_loss * set_size
+            total_samples += set_size
+
+        if total_samples > 0:
+            # Normalize the batch loss by total samples
+            batch_loss /= total_samples
+
+            # Backprop and update
+            optimizer.zero_grad()
+            batch_loss.backward()
+            optimizer.step()
+
+            total_loss += batch_loss.item()
+            steps += 1
+
+    return total_loss / max(1, steps)
+
+
 def train_epoch(
     model,
     loader,
@@ -473,11 +542,11 @@ def train_and_evaluate_model(
     for epoch in range(opts["num_epochs"]):
         if opts.get("multi_batch", False):
             batch_size = opts.get("batch_size", 512)
-            train_loss = train_multi_batch_epoch(
+            # train_loss = train_multi_batch_epoch(
+            train_loss = train_with_batched_sets(
                 model,
                 train_loader,
                 optimizer,
-                batch_size,
                 criterion=opts["training_loss"],
                 normalize_training_batches=opts["normalize_training_batches"],
             )
