@@ -177,6 +177,7 @@ class PairDataset(ActivityDataset):
                         break
                     self.pairs.append((ix0, ix1))
                     weights.append(2 / (len(group) + 1))
+        self.pairs = torch.tensor(self.pairs, device=device, dtype=torch.int)
         assert len(weights) == len(self.pairs), (len(weights), len(self.pairs))
         self._weights = torch.tensor(weights, dtype=torch.double, device=device)
         self.info_cols = [col + "_a" for col in self.info_cols] + [
@@ -209,18 +210,18 @@ class PairDataset(ActivityDataset):
         Returns:
             tuple: Protein features, stacked ligand features, activity difference, concatenated info, and sample weights
         """
-        i, j = self.pairs[idx]
+        p = self.pairs[idx]
         prot_feats = (
             torch.ones(1).to(device)
             if self.protein_features is None
-            else self.protein_features[i]
+            else self.protein_features[p[0].item()]
         )
         return (
             prot_feats,
-            torch.stack([self.ligand_features[i], self.ligand_features[j]]),
-            self.labels[i] - self.labels[j],
-            torch.cat([self.info[i], self.info[j]]),
-            self.weights[i],
+            self.ligand_features[p],
+            -torch.diff(self.labels[p], axis=0),
+            self.info[p].flatten(),
+            self.weights[p[0]],
         )
 
 
