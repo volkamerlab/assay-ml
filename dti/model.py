@@ -52,12 +52,12 @@ class PairMolecularModel(MolecularModel):
         x = self.embed(molecule)
         if x.dim() == 2:  # full (b, b) pairs
             n, d = molecule.size(0), self.embedding_size
-            diff_a = (x.view(n, 1, d) - x.view(1, n, d)).reshape(n**2, d)  # (b^2, d)
-            diff_b = (x.view(1, n, d) - x.view(n, 1, d)).reshape(n**2, d)  # (b^2, d)
+            diff = (x.view(n, 1, d) - x.view(1, n, d)).reshape(n**2, d)  # (b^2, d)
         elif x.dim() == 3:  # assume pre-defined pairs (k, 2, d)
-            diff_a = x[:, 0, :] - x[:, 1, :]  # (k, d)
-            diff_b = x[:, 1, :] - x[:, 0, :]
-        return self.readout(diff_a) - self.readout(diff_b)
+            diff = x[:, 0, :] - x[:, 1, :]  # (k, d)
+        else:
+            assert False
+        return self.readout(diff) - self.readout(-diff)
 
 
 class CombinedModel(nn.Module):
@@ -147,18 +147,14 @@ class PairCombinedModel(CombinedModel):
         if x.dim() == 2:  # all pairs
             x = protein_emb * x
             n, d = ligand.size(0), self.embedding_size
-            diff_a = (x.view(n, 1, d) - x.view(1, n, d)).reshape(n**2, d)
-            diff_b = (x.view(1, n, d) - x.view(n, 1, d)).reshape(n**2, d)
+            diff = (x.view(n, 1, d) - x.view(1, n, d)).reshape(n**2, d)
         elif x.dim() == 3:  # pre-defined pairs (k, 2, d)
             x = x * protein_emb.unsqueeze(1)
-            xa = x[:, 0, :]
-            xb = x[:, 1, :]
-            diff_a = xa - xb
-            diff_b = xb - xa
+            diff = x[:, 0, :] - x[:, 1, :]
         else:
             assert False
 
-        return self.combined_mlp(diff_a) - self.combined_mlp(diff_b)
+        return self.combined_mlp(diff) - self.combined_mlp(-diff)
 
 
 class MoleculeSetRank(Module):
