@@ -82,37 +82,21 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
         case Method.ALLPAIRS:
             return PairCombinedModel, ActivityDataset, PairDataset
         case Method.IC50CORR if mol_only:
-            return MolecularModel, SetActivityDataset, SetActivityDataset
+            return MolecularModel, SetActivityDataset, MultiSetActivityDataset
         case Method.IC50CORR:
-            return CombinedModel, SetActivityDataset, SetActivityDataset
+            return CombinedModel, SetActivityDataset, MultiSetActivityDataset
         case Method.HODGE | Method.IC50 if mol_only:
-            return MolecularModel, ActivityDataset, SetActivityDataset
+            return MolecularModel, ActivityDataset, MultiSetActivityDataset
         case Method.HODGE | Method.IC50:
-            return CombinedModel, ActivityDataset, SetActivityDataset
+            return CombinedModel, ActivityDataset, MultiSetActivityDataset
         case Method.SETS if mol_only:
-            model = partial(
-                MoleculeSetRank,
-                hidden_channels=512,
-            )
-            return model, MultiSetActivityDataset, SetActivityDataset
+            return MoleculeSetRank, MultiSetActivityDataset, MultiSetActivityDataset
         case Method.SETS:
-            model = partial(
-                SetRankModel,
-                hidden_channels=512,
-            )
-            return model, MultiSetActivityDataset, SetActivityDataset
+            return SetRankModel, MultiSetActivityDataset, MultiSetActivityDataset
         case Method.ALLSETS if mol_only:
-            model = partial(
-                MoleculeSetRank,
-                hidden_channels=512,
-            )
-            return model, ActivityDataset, SetActivityDataset
+            return MoleculeSetRank, ActivityDataset, MultiSetActivityDataset
         case Method.ALLSETS:
-            model = partial(
-                SetRankModel,
-                hidden_channels=512,
-            )
-            return model, ActivityDataset, SetActivityDataset
+            return SetRankModel, ActivityDataset, MultiSetActivityDataset
         case _:
             logger.error(f"Unknown method: {method}")
             sys.exit(1)
@@ -129,12 +113,10 @@ def train_batch(method: Method, default: int) -> int:
 
 
 def test_batch(method: Method, default: int) -> int:
-    match method:
-        case Method.ALLPAIRS | Method.PAIRS:
-            return default
-        case _:
-            return 1
-
+    if method.on_pairs:
+        return default
+    else:
+        return 1
 
 def run_split(
     run_name: str,

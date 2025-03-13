@@ -2,6 +2,7 @@ from typing import Type, Any, Dict, Callable
 from joblib import Parallel, delayed
 import traceback
 import time
+from pathlib import Path
 
 import tqdm
 import pandas as pd
@@ -18,6 +19,7 @@ from functools import namedtuple
 from .utils import device
 from .constants import ASSAY, OUTPUT, ACT, COMPOUND, PREDICTION, TID
 from .hodge_ranking import assay_ranks
+from .data import MultiSetActivityDataset
 
 logger = logging.getLogger(__name__)
 
@@ -185,78 +187,6 @@ def corr_loss(x: Tensor, y: Tensor) -> float:
     return -torch.sum(vx * vy) / denom
 
 
-def train_multi_batch_epoch(
-    model,
-    loader,
-    optimizer,
-    count,
-    criterion=nn.MSELoss(),
-    normalize_training_batches=True,
-    fisher_transform=True,
-):
-    """
-    Train the model for one epoch using multiple batches for gradient accumulation.
-
-    This function implements gradient accumulation, allowing effective batch sizes
-    larger than what would fit in memory.
-
-    Args:
-        model (nn.Module): The neural network model to train.
-        loader (DataLoader): DataLoader providing batches of training data.
-        optimizer (torch.optim.Optimizer): Optimizer for updating model parameters.
-        count (int): Number of samples to accumulate before performing a parameter update.
-        criterion (nn.Module, optional): Loss function. Defaults to nn.MSELoss().
-        normalize_training_batches (bool, optional): Whether to normalize labels within each batch.
-            Defaults to True.
-        fisher_transform (bool, optional): Whether to apply Fisher transformation to the loss.
-            Defaults to True.
-
-    Returns:
-        float: Average loss for the epoch.
-    """
-    logger.debug("Training model")
-    model.train()
-    torch.set_grad_enabled(True)
-
-    total_loss = 0
-    seen_samples = 0
-    batch_loss = 0
-    steps = 0
-
-    for protein_features, ligand_features, labels, _, _ in tqdm.tqdm(
-        loader, desc="training"
-    ):
-        labels = labels.squeeze()
-        if normalize_training_batches:
-            if labels.std() < 1e-10:
-                continue
-            labels = (labels - labels.mean()) / labels.std()
-
-        predictions = model(
-            protein_features.squeeze(), ligand_features.squeeze()
-        ).squeeze()
-        assay_size = len(labels)
-        loss = criterion(predictions, labels)
-        if fisher_transform:
-            loss = fisher_transform_torch(loss)
-        # assay_size - 3 would be theoretically optimal
-        batch_loss += loss * assay_size
-        seen_samples += assay_size
-
-        if seen_samples >= count:
-            batch_loss /= seen_samples
-            optimizer.zero_grad()
-            batch_loss.backward()
-            optimizer.step()
-
-            total_loss += batch_loss.item()
-            seen_samples = 0
-            batch_loss = 0
-            steps += 1
-
-    return total_loss / steps
-
-
 def train_with_batched_sets(
     model,
     loader,
@@ -274,17 +204,14 @@ def train_with_batched_sets(
     for protein_features, ligand_features, labels, info, metadata in tqdm.tqdm(
         loader, desc="training"
     ):
-        # Get boundaries of each set within the batch
         set_boundaries = metadata["set_boundaries"].squeeze()
         num_sets = metadata["num_sets"].squeeze()
 
-        # Process all samples in a single forward pass
         predictions = model(
             protein_features.squeeze(), ligand_features.squeeze()
         ).squeeze()
         labels = labels.squeeze()
 
-        # Calculate loss for each set separately
         batch_loss = 0
         total_samples = 0
 
@@ -295,15 +222,12 @@ def train_with_batched_sets(
             set_preds = predictions[start_idx:end_idx]
             set_labels = labels[start_idx:end_idx]
 
-            # Skip zero variance sets
             if set_labels.std() < 1e-10:
                 continue
 
-            # Normalize if needed
             if normalize_training_batches:
                 set_labels = (set_labels - set_labels.mean()) / set_labels.std()
 
-            # Apply criterion to each set
             set_loss = criterion(set_preds, set_labels)
 
             if fisher_transform:
@@ -314,10 +238,8 @@ def train_with_batched_sets(
             total_samples += set_size
 
         if total_samples > 0:
-            # Normalize the batch loss by total samples
             batch_loss /= total_samples
 
-            # Backprop and update
             optimizer.zero_grad()
             batch_loss.backward()
             optimizer.step()
@@ -326,6 +248,85 @@ def train_with_batched_sets(
             steps += 1
 
     return total_loss / max(1, steps)
+
+
+def eval_with_batched_sets(
+    model,
+    loader,
+    criterion=nn.L1Loss(),
+    rank_corr_fn=None,
+    fisher_transform=True,
+    normalize_training_batches=True,
+    prediction_file: Path | str | None = None,
+):
+    """Call with batch size one only."""
+    logger.debug("Evaluating model")
+    model.eval()
+    torch.set_grad_enabled(False)
+    total_loss = 0
+    steps = 0
+
+    all_preds, all_labels, all_info = [], [], []
+
+    for protein_features, ligand_features, labels, info, metadata in tqdm.tqdm(
+        loader, desc="evaluate"
+    ):
+        set_boundaries = metadata["set_boundaries"].squeeze()
+        num_sets = metadata["num_sets"].squeeze()
+        labels = labels.squeeze()
+
+        predictions = model(
+            protein_features.squeeze(), ligand_features.squeeze()
+        ).squeeze()
+
+        all_preds.extend(predictions.detach().cpu().numpy().flatten())
+        all_labels.extend(labels.detach().cpu().numpy().flatten())
+        all_info.append(info.squeeze().detach().cpu().numpy())
+
+        batch_loss = 0
+        total_samples = 0
+
+        for i in range(num_sets):
+            start_idx = set_boundaries[i]
+            end_idx = set_boundaries[i + 1]
+
+            set_preds = predictions[start_idx:end_idx]
+            set_labels = labels[start_idx:end_idx]
+
+            if set_labels.std() < 1e-10:
+                continue
+
+            if normalize_training_batches:
+                set_labels = (set_labels - set_labels.mean()) / set_labels.std()
+
+            set_loss = criterion(set_preds, set_labels)
+
+            if fisher_transform:
+                set_loss = fisher_transform_torch(set_loss)
+
+            set_size = end_idx - start_idx
+            batch_loss += set_loss * set_size
+            total_samples += set_size
+
+        if total_samples > 0:
+            batch_loss /= total_samples
+
+            total_loss += batch_loss.item()
+            steps += 1
+
+    all_info = np.concatenate(all_info)
+    content = {PREDICTION: all_preds, TID: all_labels}
+    for i, col in enumerate(loader.dataset.info_cols):
+        content[col] = list(all_info[:, i].flatten())
+
+    prediction_data = pd.DataFrame(content)
+    if prediction_file is not None:
+        logger.info(f"Writing predictions to {prediction_file}")
+        prediction_data.to_csv(prediction_file)
+
+    mean_rank_corr = -1 if rank_corr_fn is None else rank_corr_fn(prediction_data)
+
+    return total_loss / max(1, steps), mean_rank_corr
 
 
 def train_epoch(
@@ -536,31 +537,30 @@ def train_and_evaluate_model(
     scheduler = ReduceLROnPlateau(
         optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
     )
+    train_fn = (
+        train_with_batched_sets
+        if isinstance(train_loader.dataset, MultiSetActivityDataset)
+        else train_epoch
+    )
+    eval_fn = (
+        eval_with_batched_sets
+        if isinstance(test_loader.dataset, MultiSetActivityDataset)
+        else evaluate_epoch
+    )
 
     best_corr = 0.0
     epochs_without_improvement = 0
     optimization = []
 
     for epoch in range(opts["num_epochs"]):
-        if opts.get("multi_batch", False):
-            batch_size = opts.get("batch_size", 512)
-            # train_loss = train_multi_batch_epoch(
-            train_loss = train_with_batched_sets(
-                model,
-                train_loader,
-                optimizer,
-                criterion=opts["training_loss"],
-                normalize_training_batches=opts["normalize_training_batches"],
-            )
-        else:
-            train_loss = train_epoch(
-                model,
-                train_loader,
-                optimizer,
-                criterion=opts["training_loss"],
-                normalize_training_batches=opts["normalize_training_batches"],
-            )
-        val_loss, val_rank_corr = evaluate_epoch(
+        train_loss = train_fn(
+            model,
+            train_loader,
+            optimizer,
+            criterion=opts["training_loss"],
+            normalize_training_batches=opts["normalize_training_batches"],
+        )
+        val_loss, val_rank_corr = eval_fn(
             model, val_loader, rank_corr_fn=opts["rank_corr_fn"]
         )
 
@@ -587,7 +587,7 @@ def train_and_evaluate_model(
             epochs_without_improvement = 0
             torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")
             pred_file = OUTPUT / run_name / "predictions.csv"
-            _, test_rank_corr = evaluate_epoch(
+            _, test_rank_corr = eval_fn(
                 model,
                 test_loader,
                 rank_corr_fn=opts["rank_corr_fn"],

@@ -165,7 +165,7 @@ class MoleculeSetRank(Module):
     def __init__(
         self,
         ligand_input_size: int,
-        hidden_channels: int,
+        hidden_channels: int = 512,
         p_dropout: float = 0.05,
         **kwargs,
     ):
@@ -214,7 +214,7 @@ class SetRankModel(MoleculeSetRank):
         self,
         ligand_input_size: int,
         protein_input_size: int,
-        hidden_channels: int,
+        hidden_channels: int = 512,
         p_dropout: float = 0.05,
         **kwargs,
     ):
