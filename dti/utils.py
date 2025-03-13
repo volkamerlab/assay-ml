@@ -104,6 +104,9 @@ def get_tracked_files():
 
 
 def save_code_snapshot(run_name):
+    if shutil.which("git") is None:
+        logger.error("git not installed; no code snapshot")
+        return
     archive_name = output_dir(run_name) / "code.tar.gz"
     python_files = get_tracked_files()
     if not python_files:

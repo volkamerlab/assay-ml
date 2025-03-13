@@ -113,10 +113,8 @@ def train_batch(method: Method, default: int) -> int:
 
 
 def test_batch(method: Method, default: int) -> int:
-    if method.on_pairs:
-        return default
-    else:
-        return 1
+    return default if method.on_pairs else 1
+
 
 def run_split(
     run_name: str,
@@ -226,7 +224,7 @@ def main():
     init_logging(run_name)
     logger = logging.getLogger(run_name)
     logger.info(f"seed={seed} method={method} dataset={dataset_name} fold={fold}")
-    # save_code_snapshot(run_name)
+    save_code_snapshot(run_name)
 
     set_random_seeds(seed)
 
