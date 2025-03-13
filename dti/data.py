@@ -213,18 +213,20 @@ class PairDataset(ActivityDataset):
         p = self.pairs[idx]
 
         if self.protein_features is None:
-            if not hasattr(self, '_ones_cache'):
+            if not hasattr(self, "_ones_cache"):
                 self._ones_cache = torch.ones(1, device=device)
             prot_feats = self._ones_cache
         else:
             prot_feats = self.protein_features[p[0]]
 
-        if not hasattr(self, '_label_diffs'):
+        if not hasattr(self, "_label_diffs"):
             self._label_diffs = -torch.diff(self.labels[self.pairs], axis=1)
         label_diff = self._label_diffs[idx]
 
-        if not hasattr(self, '_flattened_info'):
-            self._flattened_info = self.info[self.pairs].reshape(len(self.pairs), -1)
+        if not hasattr(self, "_flattened_info"):
+            self._flattened_info = self.info[self.pairs.detach().cpu()].reshape(
+                len(self.pairs), -1
+            )
         flattened_info = self._flattened_info[idx]
 
         return (
@@ -234,6 +236,7 @@ class PairDataset(ActivityDataset):
             flattened_info,
             self.weights[idx],
         )
+
 
 class SetActivityDataset(ActivityDataset):
     """Dataset that groups samples by assay and returns batches of samples.
@@ -410,7 +413,7 @@ class MultiSetActivityDataset(ActivityDataset):
 
         self._make_batches()
         logger.debug(f"Number of unused examples: {num_unused} / {len(self.data)}")
-    
+
     def _shuffle_data(self):
         idcs = torch.randperm(self.ligand_features.shape[0])
         self.ligand_features = self.ligand_features[idcs]
