@@ -50,6 +50,7 @@ that would be considered quite good in many settings!
 *Hypothesis*: **Assays cluster in the molecular space and in terms of
 measured activity.**
 
+
 ### *Q2* Do assay splits capture generalization performance better for real-world scenarios?
 
 Recently, the splitting of molecular data has received a lot of
@@ -145,6 +146,36 @@ change to the absolute prediction model.
 
 *Hypothesis*: **Rank-based models can achieve a better performance in
 ordering compounds in unseen assays.**
+
+#### Modelling study
+
+*Pair models*: Pair models predict the difference between two query
+molecules instead of predicting values for molecules in isolation. This
+shift to the domain of molecular tuples allows us to decide whether we
+want to learn on inter-assay information or on intra-assay information
+alone.
+
+*Set rank models*: We focus on the SetRank model. This shifts the focus
+to ranking arbitrarily large sets of molecules. Building on the assay
+split idea, we can define these sets to be data points from single
+assays. This way we circumvent learning from low confidence data points
+which in this context are sets of measurments originating from separate
+assays.
+
+For both modelling paradigms, we can compare performance of the exact
+same architecture when training on only within and inter assay data. For
+datasets based on ChEMBL data, we observe a marked difference:
+Intra-assay training out-performs all-data training. Overall ensemble
+prediction (i.e. set rank models and pair prediction) out-perform
+standard IC50 prediction.
+
+There is a trade-off between coverage of the domain and the data
+quality. When make the step to set models, we change the domain to the
+comparison of molecules. Due to the clustering of molecular structures
+along assays, the variety of learning only on these sets is usually less
+than when taking arbitrary sets. Depending on consistency of
+measurements between assays, we will either observe a benefit or not of
+using only within-assay data.
 
 ### Further points
 
