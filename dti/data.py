@@ -365,6 +365,7 @@ class MultiSetActivityDataset(ActivityDataset):
         data,
         target=...,
         info_cols=...,
+        inter_assay=False,
         model_name="esm2_t33_650M_UR50D",
         min_batch_size: int = 3,
         max_set_size: int = 0,
@@ -375,6 +376,7 @@ class MultiSetActivityDataset(ActivityDataset):
         self.min_batch_size = min_batch_size
         self.max_set_size = max_set_size
         self.sets_per_batch = sets_per_batch
+        self.inter_assay = inter_assay
         self.random = np.random.default_rng(random_seed)
 
         # Process and organize sets
@@ -408,16 +410,24 @@ class MultiSetActivityDataset(ActivityDataset):
 
         self._make_batches()
         logger.debug(f"Number of unused examples: {num_unused} / {len(self.data)}")
+    
+    def _shuffle_data(self):
+        idcs = torch.randperm(self.ligand_features.shape[0])
+        self.ligand_features = self.ligand_features[idcs]
+        self.labels = self.labels[idcs]
+        self.info = self.info[idcs]
+        if self.protein_features is not None:
+            self.protein_features = self.protein_features[idcs]
 
     def _make_batches(self):
         """Create batches of multiple sets for processing."""
-        # Shuffle sets while maintaining set-id pairing
+        if self.inter_assay:
+            self._shuffle_data()
         indices = np.arange(len(self.valid_sets))
         self.random.shuffle(indices)
         self.valid_sets = [self.valid_sets[i] for i in indices]
         self.set_ids = [self.set_ids[i] for i in indices]
 
-        # Group sets into batches
         self.batches = []
         self.batch_set_ids = []
 

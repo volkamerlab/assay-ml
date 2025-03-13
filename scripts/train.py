@@ -72,6 +72,7 @@ def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
 
 
 def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]:
+    shuffled_multiset = partial(MultiSetActivityDataset, inter_assay=True)
     match method:
         case Method.PAIRS if mol_only:
             return PairMolecularModel, PairDataset, PairDataset
@@ -94,22 +95,21 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
         case Method.SETS:
             return SetRankModel, MultiSetActivityDataset, MultiSetActivityDataset
         case Method.ALLSETS if mol_only:
-            return MoleculeSetRank, ActivityDataset, MultiSetActivityDataset
+            return MoleculeSetRank, shuffled_multiset, MultiSetActivityDataset
         case Method.ALLSETS:
-            return SetRankModel, ActivityDataset, MultiSetActivityDataset
+            return SetRankModel, shuffled_multiset, MultiSetActivityDataset
         case _:
             logger.error(f"Unknown method: {method}")
             sys.exit(1)
 
 
 def train_batch(method: Method, default: int) -> int:
-    match method:
-        case Method.ALLPAIRS:
-            return int(np.sqrt(default))
-        case Method.SETS | Method.IC50CORR:
-            return 1
-        case _:
-            return default
+    if method == Method.ALLPAIRS:
+        return int(np.sqrt(default))
+    elif method.on_sets or method == Method.IC50CORR:
+        return 1
+    else:
+        return default
 
 
 def test_batch(method: Method, default: int) -> int:
