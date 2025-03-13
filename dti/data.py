@@ -211,19 +211,29 @@ class PairDataset(ActivityDataset):
             tuple: Protein features, stacked ligand features, activity difference, concatenated info, and sample weights
         """
         p = self.pairs[idx]
-        prot_feats = (
-            torch.ones(1).to(device)
-            if self.protein_features is None
-            else self.protein_features[p[0].item()]
-        )
+
+        if self.protein_features is None:
+            if not hasattr(self, '_ones_cache'):
+                self._ones_cache = torch.ones(1, device=device)
+            prot_feats = self._ones_cache
+        else:
+            prot_feats = self.protein_features[p[0]]
+
+        if not hasattr(self, '_label_diffs'):
+            self._label_diffs = -torch.diff(self.labels[self.pairs], axis=1)
+        label_diff = self._label_diffs[idx]
+
+        if not hasattr(self, '_flattened_info'):
+            self._flattened_info = self.info[self.pairs].reshape(len(self.pairs), -1)
+        flattened_info = self._flattened_info[idx]
+
         return (
             prot_feats,
             self.ligand_features[p],
-            -torch.diff(self.labels[p], axis=0),
-            self.info[p].flatten(),
-            self.weights[p[0]],
+            label_diff,
+            flattened_info,
+            self.weights[idx],
         )
-
 
 class SetActivityDataset(ActivityDataset):
     """Dataset that groups samples by assay and returns batches of samples.
@@ -444,21 +454,17 @@ class MultiSetActivityDataset(ActivityDataset):
         """
         batch_sets, batch_ids = self._get_next_batch(idx)
 
-        # Get cumulative sizes for tracking set boundaries
         set_sizes = [len(set_idcs) for set_idcs in batch_sets]
         cumulative_sizes = np.cumsum([0] + set_sizes).squeeze()
 
-        # Concatenate all indices to process in a single forward pass
         all_indices = np.concatenate(batch_sets)
 
-        # Get features for all concatenated samples
         prot_feats = (
             torch.ones(1, device=device)
             if self.protein_features is None
             else self.protein_features[all_indices]
         )
 
-        # Return concatenated features along with metadata about set boundaries
         return (
             prot_feats,
             self.ligand_features[all_indices],

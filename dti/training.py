@@ -358,12 +358,9 @@ def train_epoch(
 
     total_loss = 0
 
-    start_time = time.time()
     for protein_features, ligand_features, labels, _, weights in tqdm.tqdm(
         loader, desc="training"
     ):
-        logger.debug(f"{time.time() - start_time}s loading")
-        start_time = time.time()
         labels = labels.squeeze()
         if labels.std() < 1e-10:
             logger.warning("low label variance - skipping batch")
@@ -377,8 +374,6 @@ def train_epoch(
         optimizer.step()
 
         total_loss += loss.item()
-        logger.debug(f"{time.time() - start_time}s training")
-        start_time = time.time()
 
     total_loss /= len(loader)
     return total_loss
