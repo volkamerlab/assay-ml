@@ -56,8 +56,8 @@ class Method(Enum):
                 return Method.SETS
             case "SETALL" | "ALLSETS":
                 return Method.ALLSETS
-            # case "IC50SETS":
-            #     return Method.IC50SETS
+            case "IC50SETS":
+                return Method.IC50SETS
             case "IC50ALLSETS":
                 return Method.IC50ALLSETS
             case _:

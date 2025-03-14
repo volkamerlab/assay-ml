@@ -90,9 +90,9 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
             return MolecularModel, ActivityDataset, MultiSetActivityDataset
         case Method.HODGE | Method.IC50:
             return CombinedModel, ActivityDataset, MultiSetActivityDataset
-        case Method.SETS if mol_only:
+        case Method.IC50SETS | Method.SETS if mol_only:
             return MoleculeSetRank, MultiSetActivityDataset, MultiSetActivityDataset
-        case Method.SETS:
+        case Method.IC50SETS | Method.SETS:
             return SetRankModel, MultiSetActivityDataset, MultiSetActivityDataset
         case Method.IC50ALLSETS | Method.ALLSETS if mol_only:
             return MoleculeSetRank, shuffled_multiset, MultiSetActivityDataset
@@ -119,7 +119,7 @@ def loss_fn(method: Method, default: Callable) -> Callable:
             return corr_loss
         case Method.ALLPAIRS:
             return partial(batch_pair_loss, criterion=default)
-        case Method.IC50ALLSETS:
+        case Method.IC50ALLSETS | Method.IC50SETS:
             return nn.SmoothL1Loss()
         case _:
             return nn.SmoothL1Loss(reduction="none")
