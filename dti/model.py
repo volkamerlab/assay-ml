@@ -39,6 +39,8 @@ class MolecularModel(nn.Module):
 
     def forward(self, _protein, molecule):
         # the  first argument (protein embeddings) is ignored
+        if molecule.dim() == 3:
+            molecule = molecule.squeeze()
         assert molecule.shape[1] == self.molecule_input_size, molecule.shape
         molecule = self.embed(molecule)
         return self.readout(molecule)
@@ -110,6 +112,10 @@ class CombinedModel(nn.Module):
         )
 
     def forward(self, protein, ligand):
+        if ligand.dim() == 3:
+            ligand = ligand.squeeze()
+            protein = protein.squeeze()
+
         assert ligand.shape[1] == self.ligand_input_size, ligand.shape
 
         protein_emb = self.protein_mlp(protein)

@@ -364,12 +364,16 @@ def train_epoch(
         if normalize_training_batches:
             if labels.std() < 1e-10:
                 logger.warning("low label variance - skipping batch")
-                break
+                continue
             labels = (labels - labels.mean()) / labels.std()
 
         optimizer.zero_grad()
         predictions = model(protein_features, ligand_features).squeeze()
-        loss = (criterion(predictions, labels) * weights).sum() / weights.sum()
+        try:
+            loss = (criterion(predictions, labels) * weights).sum() / weights.sum()
+        except ValueError as e:
+            logger.warning(f"exception in criterion: '{e}'")
+            continue
         loss.backward()
         optimizer.step()
 
