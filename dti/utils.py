@@ -35,10 +35,13 @@ class Method(Enum):
     ALLPAIRS = "allpairs"
     SETS = "sets"
     ALLSETS = "allsets"
+    IC50SETS = "ic50sets"
+    IC50ALLSETS = "ic50sets"
 
     @staticmethod
     def from_string(m: str):
-        match m.upper().replace("_", ""):
+        m_cleaned = m.upper().replace("_", "")
+        match m_cleaned:
             case "IC50":
                 return Method.IC50
             case "IC50CORR":
@@ -53,12 +56,21 @@ class Method(Enum):
                 return Method.SETS
             case "SETALL" | "ALLSETS":
                 return Method.ALLSETS
+            case "IC50SETS":
+                return Method.IC50SETS
+            case "IC50ALLSETS":
+                return Method.IC50ALLSETS
             case _:
-                raise ValueError(f"Unknown method '{m}'")
+                raise ValueError(f"Unknown method '{m_cleaned}'")
 
     @property
     def on_sets(self) -> bool:
-        return self in [Method.SETS, Method.ALLSETS]
+        return self in [
+            Method.SETS,
+            Method.ALLSETS,
+            Method.IC50SETS,
+            Method.IC50ALLSETS,
+        ]
 
     @property
     def on_pairs(self) -> bool:
@@ -66,7 +78,7 @@ class Method(Enum):
 
     @property
     def assay_based(self) -> bool:
-        return self in [Method.PAIRS, Method.SETS, Method.HODGE]
+        return self in [Method.PAIRS, Method.SETS, Method.HODGE, Method.IC50SETS]
 
     @property
     def point_prediction(self):

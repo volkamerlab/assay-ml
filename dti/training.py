@@ -1,8 +1,7 @@
 from typing import Type, Any, Dict, Callable
 from joblib import Parallel, delayed
-import traceback
-import time
 from pathlib import Path
+from functools import partial
 
 import tqdm
 import pandas as pd
@@ -485,6 +484,7 @@ def train_and_evaluate_model(
             - lr (float): Initial learning rate.
             - multi_batch (bool): Whether to use multi-batch training.
             - batch_size (int): Batch size for multi-batch training.
+            - fisher_transform (bool): Fisher transform criterion values in set training before aggregation during training.
 
     Returns:
         None: The function saves the model and training statistics but doesn't return a value.
@@ -514,6 +514,7 @@ def train_and_evaluate_model(
             cosine_agg=True,
             normalize_training_batches=False,
             lr=1e-4,
+            fisher_transform=True,
         )
         | kwargs
     )
@@ -534,7 +535,7 @@ def train_and_evaluate_model(
         optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
     )
     train_fn = (
-        train_with_batched_sets
+        partial(train_with_batched_sets, fisher_transform=opts["fisher_transform"])
         if isinstance(train_loader.dataset, MultiSetActivityDataset)
         else train_epoch
     )

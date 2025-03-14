@@ -94,13 +94,14 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
             return MoleculeSetRank, MultiSetActivityDataset, MultiSetActivityDataset
         case Method.SETS:
             return SetRankModel, MultiSetActivityDataset, MultiSetActivityDataset
-        case Method.ALLSETS if mol_only:
+        case Method.IC50ALLSETS | Method.ALLSETS if mol_only:
             return MoleculeSetRank, shuffled_multiset, MultiSetActivityDataset
-        case Method.ALLSETS:
+        case Method.IC50ALLSETS | Method.ALLSETS:
             return SetRankModel, shuffled_multiset, MultiSetActivityDataset
         case _:
-            logger.error(f"Unknown method: {method}")
+            logger.error(f"No model and dataset configuration for method: {method}")
             sys.exit(1)
+            assert False
 
 
 def train_batch(method: Method, default: int) -> int:
@@ -110,6 +111,18 @@ def train_batch(method: Method, default: int) -> int:
         return 1
     else:
         return default
+
+
+def loss_fn(method: Method, default: Callable) -> Callable:
+    match method:
+        case Method.IC50CORR | Method.SETS | Method.ALLSETS:
+            return corr_loss
+        case Method.ALLPAIRS:
+            return partial(batch_pair_loss, criterion=default)
+        case Method.IC50ALLSETS:
+            return nn.SmoothL1Loss()
+        case _:
+            return nn.SmoothL1Loss(reduction="none")
 
 
 def test_batch(method: Method, default: int) -> int:
@@ -180,14 +193,7 @@ def run_split(
     rstat = partial(spearmanr, nan_policy="raise")  # , variant="c")
     assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
     multi_batch = method in [Method.SETS, Method.IC50CORR]
-    if method.on_sets or method == Method.IC50CORR:
-        training_loss = corr_loss
-    elif method == Method.ALLPAIRS:
-        training_loss = partial(
-            batch_pair_loss, criterion=nn.SmoothL1Loss(reduction="none")
-        )
-    else:
-        training_loss = nn.SmoothL1Loss(reduction="none")
+    training_loss = loss_fn(method, nn.SmoothL1Loss(reduction="none"))
     train_short = method.on_sets or method.on_pairs
     train_and_evaluate_model(
         model_cls,
@@ -208,6 +214,7 @@ def run_split(
         patience_lr=10 if train_short else 100,
         normalize_training_batches=False,  # method.on_sets,
         lr=1e-4,
+        fisher_transform=method not in [Method.IC50SETS, Method.IC50ALLSETS],
     )
 
     logger.info(f"{run_name} finished")
