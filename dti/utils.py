@@ -36,7 +36,7 @@ class Method(Enum):
     SETS = "sets"
     ALLSETS = "allsets"
     IC50SETS = "ic50sets"
-    IC50ALLSETS = "ic50sets"
+    IC50ALLSETS = "ic50allsets"
 
     @staticmethod
     def from_string(m: str):
@@ -56,8 +56,8 @@ class Method(Enum):
                 return Method.SETS
             case "SETALL" | "ALLSETS":
                 return Method.ALLSETS
-            case "IC50SETS":
-                return Method.IC50SETS
+            # case "IC50SETS":
+            #     return Method.IC50SETS
             case "IC50ALLSETS":
                 return Method.IC50ALLSETS
             case _:
