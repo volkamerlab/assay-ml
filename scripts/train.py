@@ -101,7 +101,6 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
         case _:
             logger.error(f"No model and dataset configuration for method: {method}")
             sys.exit(1)
-            assert False
 
 
 def train_batch(method: Method, default: int) -> int:
@@ -227,10 +226,10 @@ def main():
     method = Method.from_string(sys.argv[3])
     fold = int(sys.argv[4])
 
-    run_name = f"{dataset_name}_{fold}_{method}_" + uuid.uuid4().hex[:4]
+    run_name = f"{dataset_name}_{fold}_{repr(method)}_" + uuid.uuid4().hex[:4]
     init_logging(run_name)
     logger = logging.getLogger(run_name)
-    logger.info(f"seed={seed} method={method} dataset={dataset_name} fold={fold}")
+    logger.info(f"seed={seed} method={repr(method)} dataset={dataset_name} fold={fold}")
     save_code_snapshot(run_name)
 
     set_random_seeds(seed)

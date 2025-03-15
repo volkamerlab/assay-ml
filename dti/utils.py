@@ -85,7 +85,27 @@ class Method(Enum):
         return self in [Method.IC50, Method.HODGE, Method.IC50CORR]
 
     def __str__(self):
-        return self.name.lower()
+        match self:
+            case Method.IC50:
+                return "IC50"
+            case Method.IC50CORR:
+                return "IC50 corr."
+            case Method.HODGE:
+                return "Hodge rank"
+            case Method.PAIRS:
+                return "Within-assay pairs"
+            case Method.ALLPAIRS:
+                return "Across-assay pairs"
+            case Method.SETS:
+                return "Assays"
+            case Method.ALLSETS:
+                return "Across-assay sets"
+            case Method.IC50SETS:
+                return "Within-assay IC50"
+            case Method.IC50ALLSETS:
+                return "Across-assay IC50"
+            case _:
+                return self.name.lower()
 
     def __repr__(self):
         return self.name.lower()
