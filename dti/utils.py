@@ -19,6 +19,7 @@ from rdkit import Chem
 from rdkit.Chem.Scaffolds import MurckoScaffold
 from rdkit.Chem import rdFingerprintGenerator
 from sklearn.cluster import AgglomerativeClustering
+from sklearn.decomposition import PCA
 
 from .constants import OUTPUT, SMILES
 
@@ -91,19 +92,19 @@ class Method(Enum):
             case Method.IC50CORR:
                 return "IC50 corr."
             case Method.HODGE:
-                return "Hodge rank"
+                return "Hodge"
             case Method.PAIRS:
-                return "Within-assay pairs"
+                return "Assay PairModel"
             case Method.ALLPAIRS:
-                return "Across-assay pairs"
+                return "Random PairModel"
             case Method.SETS:
-                return "Assays"
+                return "Assay SetRank"
             case Method.ALLSETS:
-                return "Across-assay sets"
+                return "Random SetRank"
             case Method.IC50SETS:
-                return "Within-assay IC50"
+                return "Assay IC50 SetRank"
             case Method.IC50ALLSETS:
-                return "Across-assay IC50"
+                return "Random IC50 SetRank"
             case _:
                 return self.name.lower()
 
@@ -200,7 +201,7 @@ def compute_fp(smi: str, radius: int = 3, fp_dim: int = 2048):
 
 def scaffold_split(
     data: pd.DataFrame, proportion: float = 0.8, seed: int = 0, progress: bool = True
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     np.random.seed(seed)
     smiles_it = tqdm.tqdm(data[SMILES], desc="scaffold") if progress else data[SMILES]
     data["scaffold"] = [get_scaffold(smi) for smi in smiles_it]
@@ -217,22 +218,30 @@ def scaffold_split(
     return df_train, df_test
 
 
-def umap_clusters(
+def umap_split(
     data: pd.DataFrame,
-    proportions: float = 0.8,
-    seed: int = 0,
-    progress: bool = True,
-    n_clusters: int = 10,
-    n_jobs: int = 6,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Adapted from Pat Walter's useful rdkit utils
-    """
-    with tempfile.TemporaryDirectory() as tempdir:
-        ac = AgglomerativeClustering(
-            n_clusters=n_clusters, memory=tempdir, compute_full_tree=False
-        )
+    n_jobs=6,
+    n_clusters=5,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    import umap
+
+    logger.info("umap split: compute fingerprints")
     with Pool(n_jobs) as p:
         fp_list = p.map(compute_fp, data[SMILES].values)
-    ac.fit_predict(np.stack(fp_list))
-    return ac.labels_
+
+    data = data[[fp is not None for fp in fp_list]]
+
+    logger.info("umap split: PCA dimensionality reduction")
+    pca = PCA(n_components=20)
+    pcs = pca.fit_transform(np.stack(fp_list))
+
+    logger.info("umap split: UMAP dimensionality reduction")
+    reducer = umap.UMAP(n_components=2, n_neighbors=15, min_dist=0.1)
+    embedding = reducer.fit_transform(pcs)
+
+    logger.info("umap split: Agglomerative clustering")
+    ac = AgglomerativeClustering(n_clusters=n_clusters)
+    ac.fit_predict(embedding)
+    data["_umap"] = ac.labels_
+
+    return data[data["_umap"] != 0], data[data["_umap"] == 0]
