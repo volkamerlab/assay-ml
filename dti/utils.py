@@ -1,4 +1,4 @@
-from typing import Union, Tuple
+from typing import Union, Iterable
 import functools
 import subprocess
 import time
@@ -8,7 +8,6 @@ from pathlib import Path
 from enum import Enum
 import random
 from multiprocessing import Pool
-import tempfile
 import shutil
 
 import torch
@@ -199,48 +198,56 @@ def compute_fp(smi: str, radius: int = 3, fp_dim: int = 2048):
         return None
 
 
+def par_compute_fp(smiles: Iterable[str], n_jobs=16):
+    with Pool(n_jobs) as p:
+        return p.map(compute_fp, data[SMILES].values)
+
+
 def scaffold_split(
     data: pd.DataFrame, proportion: float = 0.8, seed: int = 0, progress: bool = True
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     np.random.seed(seed)
     smiles_it = tqdm.tqdm(data[SMILES], desc="scaffold") if progress else data[SMILES]
-    data["scaffold"] = [get_scaffold(smi) for smi in smiles_it]
+    scaffold_key = "_scaffold"
+    data[_scaffold_key] = [get_scaffold(smi) for smi in smiles_it]
 
-    data = data[~data["scaffold"].isna()]
+    data = data[~data[_scaffold_key].isna()]
 
-    all_scaffolds = data["scaffold"].unique()
+    all_scaffolds = data[_scaffold_key].unique()
     np.random.shuffle(all_scaffolds)
 
     train_scaffolds = all_scaffolds[: int(len(all_scaffolds) * 0.8)]
-    df_train = data[data["scaffold"].isin(train_scaffolds)]
-    df_test = data[~data["scaffold"].isin(train_scaffolds)]
+    df_train = data[data[_scaffold_key].isin(train_scaffolds)]
+    df_test = data[~data[_scaffold_key].isin(train_scaffolds)]
 
     return df_train, df_test
 
 
 def umap_split(
     data: pd.DataFrame,
-    n_jobs=6,
-    n_clusters=5,
+    n_jobs: int = 6,
+    pca_args: dict = dict(n_components=20),
+    umap_args: dict = dict(n_components=2, n_neighbors=15, min_dist=0.1),
+    cluster_args: dict = dict(n_clusters=5),
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Adapted from Pat Walters' useful rdkit utils."""
     import umap
 
     logger.info("umap split: compute fingerprints")
-    with Pool(n_jobs) as p:
-        fp_list = p.map(compute_fp, data[SMILES].values)
+    fp_list = par_compute_fp(data[SMILES].values, n_jobs=6)
 
     data = data[[fp is not None for fp in fp_list]]
 
     logger.info("umap split: PCA dimensionality reduction")
-    pca = PCA(n_components=20)
+    pca = PCA(**pca_args)
     pcs = pca.fit_transform(np.stack(fp_list))
 
     logger.info("umap split: UMAP dimensionality reduction")
-    reducer = umap.UMAP(n_components=2, n_neighbors=15, min_dist=0.1)
+    reducer = umap.UMAP(**umap_args)
     embedding = reducer.fit_transform(pcs)
 
     logger.info("umap split: Agglomerative clustering")
-    ac = AgglomerativeClustering(n_clusters=n_clusters)
+    ac = AgglomerativeClustering(**cluster_args)
     ac.fit_predict(embedding)
     data["_umap"] = ac.labels_
 

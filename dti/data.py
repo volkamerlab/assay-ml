@@ -2,7 +2,6 @@ from typing import List, Union, Iterator, Tuple
 import functools
 import logging
 from pathlib import Path
-from multiprocessing import Pool
 
 import pandas as pd
 import numpy as np
@@ -15,7 +14,7 @@ from esm import FastaBatchedDataset, pretrained
 from sklearn.preprocessing import StandardScaler
 
 from .constants import DATA, SMILES, ACT, TID, SEQUENCE, ASSAY, COMPOUND, HODGE
-from .utils import device, compute_fp
+from .utils import device, par_compute_fp
 from .hodge_ranking import parallel_hodge_rank
 
 logger = logging.getLogger(__name__)
@@ -43,8 +42,7 @@ class ActivityDataset(Dataset):
         super().__init__()
         logger.info(f"creating dataset of size {len(data)}")
         logger.info("computing fingerprints")
-        with Pool(n_jobs) as p:
-            fps = p.map(compute_fp, data[SMILES].values)
+        fp_list = par_compute_fp(data[SMILES].values, n_jobs=n_jobs)
         mask = [fp is not None for fp in fps]
         if len(mask) - sum(mask) > 0:
             logger.info(
