@@ -27,6 +27,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 logger = logging.getLogger(__name__)
 
 
+@functools.total_ordering
 class Method(Enum):
     IC50 = "ic50"
     IC50CORR = "ic50corr"
@@ -109,6 +110,9 @@ class Method(Enum):
 
     def __repr__(self):
         return self.name.lower()
+
+    def __lt__(self, other):
+        return str(self) < str(other)
 
 
 def set_random_seeds(seed: int):
