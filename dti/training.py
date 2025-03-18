@@ -90,7 +90,7 @@ class AssayRankAccuracy:
                     return 0, 0
                 if self.fisher:
                     corr = fisher_transform_numpy(corr)
-                n = len(scores) - 3
+                    n = len(scores) - 3
                 return n * corr, n
             except ValueError as e:
                 logger.warning(f"rank correlation failed (assay={assay}): {e}")
@@ -103,7 +103,11 @@ class AssayRankAccuracy:
         )
 
         corr_sum, count = map(sum, zip(*results))
-        return np.tanh(corr_sum / count) if count > 0 else float("nan")
+        if count <= 0:
+            return np.nan
+        if self.fisher:
+            return np.tanh(corr_sum / count)
+        return corr_sum / count
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.rank_statistic})"
