@@ -32,12 +32,12 @@ class Method(Enum):
     IC50 = "ic50"
     IC50CORR = "ic50corr"
     HODGE = "hodge"
-    PAIRS = "pairs"
     ALLPAIRS = "allpairs"
-    SETS = "sets"
+    PAIRS = "pairs"
     ALLSETS = "allsets"
-    IC50SETS = "ic50sets"
+    SETS = "sets"
     IC50ALLSETS = "ic50allsets"
+    IC50SETS = "ic50sets"
 
     @staticmethod
     def from_string(m: str):
@@ -112,7 +112,8 @@ class Method(Enum):
         return self.name.lower()
 
     def __lt__(self, other):
-        return str(self) < str(other)
+        vals = list(__class__)
+        return vals.index(self) < vals.index(other)
 
 
 def set_random_seeds(seed: int):
