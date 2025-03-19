@@ -1,4 +1,5 @@
 #!/bin/bash
+
 output_dir=data/hpc-data/
 remote_dir=/home/michael.backenkoehler/hodge-dti/data/output/
 remote=michael.backenkoehler@conduit.cs.uni-saarland.de:$remote_dir
@@ -14,7 +15,7 @@ bar ()
     printf '\n'
 }
 bar '━' $((${line_length}))
-printf "%-6s %-13s %-9s %-6s %-5s %-10s %-10s\n" "Ident" "Dataset" "Method" "Epoch" "Fold" "Test Corr" "State"
+printf "%-6s %-10s %-11s %-6s %-5s %-10s %-10s\n" "Ident" "Dataset" "Method" "Epoch" "Fold" "Test Corr" "State"
 bar '━' $((${line_length}))
 
 
@@ -22,7 +23,7 @@ upcoming=""
 old_fold="-1"
 old_dataset=""
 for f in $output_files; do
-    line=$(rg "Test Rank Corr:" $f | tail -n 1)
+    line=$(tail -n 200 $f | rg "Test Rank Corr:" $f | tail -n 1)
     run_name=$(basename $(dirname $f))
     dataset=$(echo $run_name | cut -d '_' -f 1)
     method=$(echo $run_name | cut -d '_' -f 3)
@@ -30,7 +31,7 @@ for f in $output_files; do
     fold=$(echo $run_name | cut -d '_' -f 2)
     epoch=$(echo "$line" | awk '{print $5}')
     if [ "$old_fold" != "$fold" ] || [ "$old_dataset" != "$dataset" ]; then
-        if [ "$fold" != "" ]; then
+        if [ "$fold" != "" -a "$old_dataset" != "" ]; then
             bar '―' $line_length
         fi
         old_fold=$fold
@@ -48,7 +49,7 @@ for f in $output_files; do
         state="Running"
     fi
     if [ "$state" != "Error" ]; then
-        printf "%-6s %-13s %-9s %-6s %-5s %-10s %-10s\n" "$ident" "$dataset" "$method" "$epoch" "$fold" "$rank_corr" "$state"
+        printf "%-6s %-10s %-11s %-6s %-5s %-10s %-10s\n" "$ident" "$dataset" "$method" "$epoch" "$fold" "$rank_corr" "$state"
     fi
 done
 bar '━' $line_length
