@@ -42,7 +42,7 @@ class ActivityDataset(Dataset):
         super().__init__()
         logger.info(f"creating dataset of size {len(data)}")
         logger.info("computing fingerprints")
-        fp_list = par_compute_fp(data[SMILES].values, n_jobs=n_jobs)
+        fps = par_compute_fp(data[SMILES].values, n_jobs=n_jobs)
         mask = [fp is not None for fp in fps]
         if len(mask) - sum(mask) > 0:
             logger.info(

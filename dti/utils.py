@@ -5,7 +5,7 @@ import time
 import logging
 import tarfile
 from pathlib import Path
-from enum import Enum
+from enum import Enum, unique
 import random
 from multiprocessing import Pool
 import shutil
@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 @functools.total_ordering
+@unique
 class Method(Enum):
     IC50 = "ic50"
     IC50CORR = "ic50corr"
@@ -111,9 +112,12 @@ class Method(Enum):
     def __repr__(self):
         return self.name.lower()
 
+    def _value(self):
+        return list(__class__).index(self)
+
     def __lt__(self, other):
-        vals = list(__class__)
-        return vals.index(self) < vals.index(other)
+        assert isinstance(other, __class__)
+        return self._value < other._value
 
 
 def set_random_seeds(seed: int):
@@ -129,7 +133,7 @@ def output_dir(run_name: str) -> Path:
     return out_dir
 
 
-def get_tracked_files():
+def get_tracked_files() -> list[Path]:
     try:
         result = subprocess.run(
             ["git", "ls-files"], capture_output=True, text=True, check=True
@@ -141,7 +145,7 @@ def get_tracked_files():
         return []
 
 
-def save_code_snapshot(run_name):
+def save_code_snapshot(run_name: str):
     if shutil.which("git") is None:
         logger.error("git not installed; no code snapshot")
         return
@@ -205,7 +209,7 @@ def compute_fp(smi: str, radius: int = 3, fp_dim: int = 2048):
 
 def par_compute_fp(smiles: Iterable[str], n_jobs=16):
     with Pool(n_jobs) as p:
-        return p.map(compute_fp, data[SMILES].values)
+        return p.map(compute_fp, smiles)
 
 
 def scaffold_split(
