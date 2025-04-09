@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, pearsonr
 
 from dti.model import (
     CombinedModel,
@@ -189,7 +189,8 @@ def run_split(
         num_workers=0,
     )
 
-    rstat = partial(spearmanr, nan_policy="raise")  # , variant="c")
+    # rstat = partial(spearmanr, nan_policy="raise")  # , variant="c")
+    rstat = pearsonr
     assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
     multi_batch = method in [Method.SETS, Method.IC50CORR]
     training_loss = loss_fn(method, nn.SmoothL1Loss(reduction="none"))
