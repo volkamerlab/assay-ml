@@ -217,7 +217,7 @@ def scaffold_split(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     np.random.seed(seed)
     smiles_it = tqdm.tqdm(data[SMILES], desc="scaffold") if progress else data[SMILES]
-    scaffold_key = "_scaffold"
+    _scaffold_key = "_scaffold"
     data[_scaffold_key] = [get_scaffold(smi) for smi in smiles_it]
 
     data = data[~data[_scaffold_key].isna()]
