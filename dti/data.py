@@ -575,15 +575,15 @@ def extract_embeddings(
 
 
 def split_kfold_by(
-    data: pd.DataFrame, k: int, column: str, seed: int = 1
+    data: pd.DataFrame, k: int, columns: list[str], seed: int = 1
 ) -> np.ndarray:
-    """Return the k-fold partitioning of `data[column]` in shape `(k, -1)`."""
-    values = data[column].unique()
-    missing_modk = k - len(values) % k
-    values = np.concatenate((values, [-1] * missing_modk))
+    """Return the k-fold partitioning of unique concatenated keys from `columns`."""
+    keys = data[columns].astype(str).agg("§".join, axis=1).unique()
+    missing_modk = k - len(keys) % k if len(keys) % k != 0 else 0
+    keys = np.concatenate([keys, ["__DUMMY__"] * missing_modk])
     np.random.seed(seed)
-    np.random.shuffle(values)
-    return values.reshape(k, -1)
+    np.random.shuffle(keys)
+    return keys.reshape(k, -1)
 
 
 def split_data(
@@ -591,32 +591,50 @@ def split_data(
     target_dir: Path = DATA / "processed",
     k: int = 5,
     random_valset: bool = False,
-    col: str = ASSAY,
+    columns: list[str] = [ASSAY],
 ):
     logger.info(f"computing split and saving to {target_dir}")
     if (target_dir / "0").exists():
         return target_dir
     target_dir.mkdir(exist_ok=True, parents=True)
 
-    partition = split_kfold_by(data, column=col, k=k)
+    # Create key column
+    key_col = "_split_key"
+    data = data.copy()
+    data[key_col] = data[columns].astype(str).agg("§".join, axis=1)
+
+    partition = split_kfold_by(data, k=k, columns=columns)
 
     for index in range(k):
         split_dir = target_dir / f"{index}"
         split_dir.mkdir()
-        data[data[ASSAY].isin(partition[index])].to_csv(split_dir / "test.csv")
-        rest = data[~data[ASSAY].isin(partition[index])]
+
+        test_keys = partition[index]
+        test_keys = test_keys[test_keys != "__DUMMY__"]
+        test = data[data[key_col].isin(test_keys)]
+        test.drop(columns=[key_col]).to_csv(split_dir / "test.csv", index=False)
+
+        rest = data[~data[key_col].isin(test_keys)]
+
         if random_valset:
             logger.info(f"random validation set for split {index}")
             idcs = np.arange(len(rest))
             np.random.shuffle(idcs)
             split = len(rest) // 8
-            rest.iloc[idcs[:split]].to_csv(split_dir / "val.csv")
-            rest.iloc[idcs[split:]].to_csv(split_dir / "train.csv")
+            rest.iloc[idcs[:split]].drop(columns=[key_col]).to_csv(
+                split_dir / "val.csv", index=False
+            )
+            rest.iloc[idcs[split:]].drop(columns=[key_col]).to_csv(
+                split_dir / "train.csv", index=False
+            )
         else:
-            logger.info(f"assay-split validation set for split {index}")
-            val_assays = partition[(index + 1) % k][: partition.shape[1] // 2]
-            rest[rest[ASSAY].isin(val_assays)].to_csv(split_dir / "val.csv")
-            rest[~rest[ASSAY].isin(val_assays)].to_csv(split_dir / "train.csv")
+            logger.info(f"key-split validation set for split {index}")
+            val_keys = partition[(index + 1) % k][: partition.shape[1] // 2]
+            val_keys = val_keys[val_keys != "__DUMMY__"]
+            val = rest[rest[key_col].isin(val_keys)]
+            train = rest[~rest[key_col].isin(val_keys)]
+            val.drop(columns=[key_col]).to_csv(split_dir / "val.csv", index=False)
+            train.drop(columns=[key_col]).to_csv(split_dir / "train.csv", index=False)
 
     return target_dir
 
@@ -688,13 +706,14 @@ def prepare_datasets(
     inter_assay_weight: Union[float, None] = None,
     random_valset: bool = False,
     aggregate: bool = True,
+    columns: list[str] = [ASSAY],
 ) -> Iterator[
     Tuple[int, pd.DataFrame, Union[pd.DataFrame, None], pd.DataFrame, pd.DataFrame]
 ]:
     """Prepare train, validation, and test datasets."""
     if aggregate:
         data = aggregate_multi_measurements(data)
-    split_data(data, data_dir, k=k, random_valset=random_valset)
+    split_data(data, data_dir, columns=columns, k=k, random_valset=random_valset)
 
 
 def load_kinodata(
