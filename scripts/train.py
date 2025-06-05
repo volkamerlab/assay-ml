@@ -42,7 +42,7 @@ from dti.utils import (
     set_random_seeds,
     save_code_snapshot,
 )
-from dti.constants import DATA, ASSAY, COMPOUND, HODGE
+from dti.constants import DATA, ASSAY, COMPOUND, HODGE, TID
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +138,7 @@ def run_split(
     batch_size = 512
     num_epochs = 50_000  # early stopping in place
     info_cols = [COMPOUND, ASSAY]
-    data_dir = DATA / "processed" / dataset_name
+    data_dir = DATA / "processed_assay_target" / dataset_name
     train_tgt = tgt_name = "scaled_ic50"
     aggregate = True
     inter_assay_weight = None
@@ -157,6 +157,7 @@ def run_split(
             5,
             random_valset=False,
             aggregate=aggregate,
+            columns=[ASSAY, TID],
         )
 
     train_data, val_data, test_data = load_split(
