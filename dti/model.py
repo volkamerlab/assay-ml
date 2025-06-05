@@ -195,7 +195,12 @@ class MoleculeSetRank(Module):
             Linear(hidden_channels, 1),
         )
 
-    def forward(self, _protein: Tensor, ligand: Tensor) -> Tensor:
+    def forward(
+        self,
+        _protein: Tensor,
+        ligand: Tensor,
+        attn_mask: Tensor | None = None,
+    ) -> Tensor:
         """
         Only supports batch size 1 (ie 1 intra assay group of molecule)
 
@@ -207,7 +212,7 @@ class MoleculeSetRank(Module):
             Tensor: unnormalized ranking scores (N, 1)
         """
         x_ligand = self.embed_ligand(ligand.squeeze())
-        h = self.set_transformer(x_ligand)
+        h = self.set_transformer(x_ligand, attn_mask=attn_mask)
         return self.ouput(h).squeeze()
 
 
@@ -231,7 +236,12 @@ class SetRankModel(MoleculeSetRank):
     def combine_with_query(self, x: Tensor, query: Tensor) -> Tensor:
         return x * query
 
-    def forward(self, protein: Tensor, ligand: Tensor) -> Tensor:
+    def forward(
+        self,
+        protein: Tensor,
+        ligand: Tensor,
+        attn_mask: Tensor | None = None,
+    ) -> Tensor:
         """
         Only supports batch size 1 (ie 1 intra assay group of molecule)
 
@@ -245,5 +255,5 @@ class SetRankModel(MoleculeSetRank):
         x_ligand = self.embed_ligand(ligand)
         x_protein = self.embed_protein(protein)
         x = self.combine_with_query(x_ligand, x_protein)
-        h = self.set_transformer(x)
+        h = self.set_transformer(x, attn_mask=attn_mask)
         return self.ouput(h).squeeze()

@@ -190,6 +190,21 @@ def corr_loss(x: Tensor, y: Tensor) -> float:
     return -torch.sum(vx * vy) / denom
 
 
+def create_set_attention_mask_from_ids(set_ids: torch.Tensor) -> torch.Tensor:
+    """
+    Create a mask where elements can only attend within their set.
+
+    Args:
+        set_ids: Tensor of shape (N,) with set identifier for each element
+
+    Returns:
+        Attention mask of shape (N, N) where True means "mask out" (no attention)
+    """
+    # Create mask: True where set_ids don't match (block attention)
+    mask = set_ids.unsqueeze(0) != set_ids.unsqueeze(1)  # (N, N)
+    return mask
+
+
 def train_with_batched_sets(
     model,
     loader,
@@ -209,19 +224,26 @@ def train_with_batched_sets(
     ):
         set_boundaries = metadata["set_boundaries"].squeeze()
         num_sets = metadata["num_sets"].squeeze()
+        set_ids_tensor = metadata["set_ids_tensor"]
 
+        # Create attention mask for set-aware attention
+        device = ligand_features.device
+        set_ids_tensor = set_ids_tensor.to(device)
+        attn_mask = create_set_attention_mask_from_ids(set_ids_tensor)
+
+        # Forward pass with attention mask
         predictions = model(
-            protein_features.squeeze(), ligand_features.squeeze()
+            protein_features.squeeze(), ligand_features.squeeze(), attn_mask=attn_mask
         ).squeeze()
-        labels = labels.squeeze()
 
+        labels = labels.squeeze()
         batch_loss = 0
         total_samples = 0
 
+        # Compute set-wise losses
         for i in range(num_sets):
             start_idx = set_boundaries[i]
             end_idx = set_boundaries[i + 1]
-
             set_preds = predictions[start_idx:end_idx]
             set_labels = labels[start_idx:end_idx]
 
@@ -242,11 +264,9 @@ def train_with_batched_sets(
 
         if total_samples > 0:
             batch_loss /= total_samples
-
             optimizer.zero_grad()
             batch_loss.backward()
             optimizer.step()
-
             total_loss += batch_loss.item()
             steps += 1
 
