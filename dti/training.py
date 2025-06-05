@@ -231,9 +231,7 @@ def train_with_batched_sets(
     ):
         set_boundaries = metadata["set_boundaries"].squeeze()
         num_sets = metadata["num_sets"].squeeze()
-        set_ids_tensor = metadata["set_ids_tensor"]
-
-        set_ids_tensor = set_ids_tensor.to(device)
+        set_ids_tensor = metadata["set_ids_tensor"].to(device)
 
         attn_mask = create_set_attention_mask_from_ids(set_ids_tensor, model.num_heads)
 
@@ -302,9 +300,12 @@ def eval_with_batched_sets(
         set_boundaries = metadata["set_boundaries"].squeeze()
         num_sets = metadata["num_sets"].squeeze()
         labels = labels.squeeze()
+        set_ids_tensor = metadata["set_ids_tensor"].to(device)
+
+        attn_mask = create_set_attention_mask_from_ids(set_ids_tensor, model.num_heads)
 
         predictions = model(
-            protein_features.squeeze(), ligand_features.squeeze()
+            protein_features.squeeze(), ligand_features.squeeze(), attn_mask=attn_mask
         ).squeeze()
 
         all_preds.extend(predictions.detach().cpu().numpy().flatten())
