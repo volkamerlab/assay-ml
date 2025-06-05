@@ -190,18 +190,25 @@ def corr_loss(x: Tensor, y: Tensor) -> float:
     return -torch.sum(vx * vy) / denom
 
 
-def create_set_attention_mask_from_ids(set_ids: torch.Tensor) -> torch.Tensor:
+def create_set_attention_mask_from_ids(
+    set_ids: torch.Tensor, num_heads: int = None
+) -> torch.Tensor:
     """
     Create a mask where elements can only attend within their set.
 
     Args:
         set_ids: Tensor of shape (N,) with set identifier for each element
+        num_heads: Number of attention heads (if None, returns 2D mask)
 
     Returns:
-        Attention mask of shape (N, N) where True means "mask out" (no attention)
+        Attention mask of shape (N, N) or (num_heads, N, N) where True means "mask out" (no attention)
     """
-    # Create mask: True where set_ids don't match (block attention)
+    set_ids = set_ids.flatten()
     mask = set_ids.unsqueeze(0) != set_ids.unsqueeze(1)  # (N, N)
+
+    if num_heads is not None:
+        mask = mask.unsqueeze(0).expand(num_heads, -1, -1)  # (num_heads, N, N)
+
     return mask
 
 
@@ -226,12 +233,10 @@ def train_with_batched_sets(
         num_sets = metadata["num_sets"].squeeze()
         set_ids_tensor = metadata["set_ids_tensor"]
 
-        # Create attention mask for set-aware attention
-        device = ligand_features.device
         set_ids_tensor = set_ids_tensor.to(device)
-        attn_mask = create_set_attention_mask_from_ids(set_ids_tensor)
 
-        # Forward pass with attention mask
+        attn_mask = create_set_attention_mask_from_ids(set_ids_tensor, model.num_heads)
+
         predictions = model(
             protein_features.squeeze(), ligand_features.squeeze(), attn_mask=attn_mask
         ).squeeze()

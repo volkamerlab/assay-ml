@@ -169,6 +169,7 @@ class MoleculeSetRank(Module):
         ligand_input_size: int,
         hidden_channels: int = 512,
         p_dropout: float = 0.05,
+        num_heads: int = 8,
         **kwargs,
     ):
         super().__init__()
@@ -178,9 +179,10 @@ class MoleculeSetRank(Module):
             output_size=hidden_channels,
             hidden_layers=4,
         )
+        self.num_heads = num_heads
         self.set_transformer = SetTransformer(
             hidden_channels=hidden_channels,
-            num_heads=8,
+            num_heads=self.num_heads,
             ffn_hidden_layers=2,
             num_blocks=8,
             dropout=0.0,
