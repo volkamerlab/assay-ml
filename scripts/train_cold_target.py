@@ -42,7 +42,7 @@ from dti.utils import (
     set_random_seeds,
     save_code_snapshot,
 )
-from dti.constants import DATA, ASSAY, COMPOUND, HODGE, TID
+from dti.constants import DATA, ASSAY, COMPOUND, HODGE, TID, SEQUENCE
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +157,7 @@ def run_split(
             5,
             random_valset=False,
             aggregate=aggregate,
-            columns=[ASSAY, TID],
+            columns=[ASSAY, SEQUENCE],
         )
 
     train_data, val_data, test_data = load_split(
