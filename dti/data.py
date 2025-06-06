@@ -711,6 +711,7 @@ def prepare_datasets(
     Tuple[int, pd.DataFrame, Union[pd.DataFrame, None], pd.DataFrame, pd.DataFrame]
 ]:
     """Prepare train, validation, and test datasets."""
+    logger.info(f"split along {columns}")
     if aggregate:
         data = aggregate_multi_measurements(data)
     split_data(data, data_dir, columns=columns, k=k, random_valset=random_valset)
