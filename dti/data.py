@@ -470,7 +470,6 @@ class MultiSetActivityDataset(ActivityDataset):
 
         all_indices = np.concatenate(batch_sets)
 
-        # Create set_ids tensor indicating which set each sample belongs to
         set_ids_tensor = []
         for set_idx, set_size in enumerate(set_sizes):
             set_ids_tensor.extend([set_idx] * set_size)
@@ -489,8 +488,8 @@ class MultiSetActivityDataset(ActivityDataset):
             self.info[all_indices],
             {
                 "set_boundaries": cumulative_sizes,
-                "set_ids": batch_ids,  # Original assay IDs
-                "set_ids_tensor": set_ids_tensor,  # New: per-sample set indices
+                "set_ids": batch_ids,
+                "set_ids_tensor": set_ids_tensor,
                 "num_sets": len(batch_sets),
             },
         )
