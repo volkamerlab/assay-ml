@@ -588,7 +588,7 @@ def split_kfold_by(
 
 def split_data(
     data: pd.DataFrame,
-    target_dir: Path = DATA / "processed",
+    target_dir: Path ,
     k: int = 5,
     random_valset: bool = False,
     columns: list[str] = [ASSAY],

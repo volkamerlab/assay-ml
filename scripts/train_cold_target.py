@@ -228,10 +228,11 @@ def main():
     method = Method.from_string(sys.argv[3])
     fold = int(sys.argv[4])
 
-    run_name = f"{dataset_name}_{fold}_{repr(method)}_" + uuid.uuid4().hex[:4]
+    run_name = f"{dataset_name}_{fold}_{repr(method)}_" + uuid.uuid4().hex[:4] + "_coldtgt"
     init_logging(run_name)
     logger = logging.getLogger(run_name)
     logger.info(f"seed={seed} method={repr(method)} dataset={dataset_name} fold={fold}")
+    logger.info("cold target split")
     save_code_snapshot(run_name)
 
     set_random_seeds(seed)
