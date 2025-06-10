@@ -586,23 +586,51 @@ def split_kfold_by(
     return keys.reshape(k, -1)
 
 
+def get_overlapping_keys(key_set: set[str], all_keys: np.ndarray) -> set[str]:
+    """Find all keys that share components with any key in key_set."""
+    components_in_set = set()
+    for key in key_set:
+        if key != "__DUMMY__":
+            components_in_set.update(key.split("§"))
+
+    overlapping = set()
+    for key in all_keys:
+        if key != "__DUMMY__":
+            key_components = set(key.split("§"))
+            if key_components & components_in_set:  # If there's any intersection
+                overlapping.add(key)
+
+    return overlapping
+
+
+def split_kfold_by(
+    data: pd.DataFrame, k: int, columns: list[str], seed: int = 1
+) -> np.ndarray:
+    """Return the k-fold partitioning of unique concatenated keys from `columns`."""
+    keys = data[columns].astype(str).agg("§".join, axis=1).unique()
+    missing_modk = k - len(keys) % k if len(keys) % k != 0 else 0
+    keys = np.concatenate([keys, ["__DUMMY__"] * missing_modk])
+    np.random.seed(seed)
+    np.random.shuffle(keys)
+    return keys.reshape(k, -1)
+
+
 def split_data(
     data: pd.DataFrame,
     target_dir: Path = DATA / "processed",
     k: int = 5,
     random_valset: bool = False,
     columns: list[str] = [ASSAY],
+    seed: int = 0,
 ):
     logger.info(f"computing split and saving to {target_dir}")
     if (target_dir / "0").exists():
         return target_dir
     target_dir.mkdir(exist_ok=True, parents=True)
 
-    # Create key column
     key_col = "_split_key"
     data = data.copy()
     data[key_col] = data[columns].astype(str).agg("§".join, axis=1)
-
     partition = split_kfold_by(data, k=k, columns=columns)
 
     for index in range(k):
@@ -611,6 +639,8 @@ def split_data(
 
         test_keys = partition[index]
         test_keys = test_keys[test_keys != "__DUMMY__"]
+        test_keys_set = set(test_keys)
+
         test = data[data[key_col].isin(test_keys)]
         test.drop(columns=[key_col]).to_csv(split_dir / "test.csv", index=False)
 
@@ -620,19 +650,47 @@ def split_data(
             logger.info(f"random validation set for split {index}")
             idcs = np.arange(len(rest))
             np.random.shuffle(idcs)
-            split = len(rest) // 8
-            rest.iloc[idcs[:split]].drop(columns=[key_col]).to_csv(
+            split_idx = len(rest) // 8
+            rest.iloc[idcs[:split_idx]].drop(columns=[key_col]).to_csv(
                 split_dir / "val.csv", index=False
             )
-            rest.iloc[idcs[split:]].drop(columns=[key_col]).to_csv(
+            rest.iloc[idcs[split_idx:]].drop(columns=[key_col]).to_csv(
                 split_dir / "train.csv", index=False
             )
         else:
             logger.info(f"key-split validation set for split {index}")
-            val_keys = partition[(index + 1) % k][: partition.shape[1] // 2]
-            val_keys = val_keys[val_keys != "__DUMMY__"]
-            val = rest[rest[key_col].isin(val_keys)]
-            train = rest[~rest[key_col].isin(val_keys)]
+
+            # Find all keys that overlap with test keys
+            all_keys = data[key_col].unique()
+            overlapping_with_test = get_overlapping_keys(test_keys_set, all_keys)
+
+            # Get available keys for validation (exclude those overlapping with test)
+            available_for_val = rest[~rest[key_col].isin(overlapping_with_test)]
+
+            if len(available_for_val) > 0:
+                # Use available keys for validation
+                available_keys = available_for_val[key_col].unique()
+                val_size = min(
+                    len(available_keys) // 4, len(available_keys)
+                )  # Use 1/4 for validation
+
+                np.random.seed(seed + index)  # Different seed for each fold
+                val_keys = np.random.choice(
+                    available_keys, size=val_size, replace=False
+                )
+
+                overlapping_with_val = get_overlapping_keys(set(val_keys), all_keys)
+
+                val = rest[rest[key_col].isin(val_keys)]
+                train = rest[
+                    ~rest[key_col].isin(overlapping_with_test | overlapping_with_val)
+                ]
+            else:
+                # if no non-overlapping keys available, crash
+                logger.error(
+                    f"No non-overlapping keys available for validation in fold {index}"
+                )
+
             val.drop(columns=[key_col]).to_csv(split_dir / "val.csv", index=False)
             train.drop(columns=[key_col]).to_csv(split_dir / "train.csv", index=False)
 

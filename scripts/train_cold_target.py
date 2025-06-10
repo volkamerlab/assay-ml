@@ -150,15 +150,18 @@ def run_split(
     model_cls, dataset_cls, val_dataset_cls, load_data = setup(method, dataset_name)
     data = load_data()
 
-    if not (data_dir / f"{fold}").exists():
+    fold_dir = data_dir / f"{fold}"
+    if not fold_dir.exists():
         prepare_datasets(
             data,
             data_dir,
             5,
             random_valset=False,
             aggregate=aggregate,
-            columns=[ASSAY, SEQUENCE],
+            columns=[TID],
         )
+    else:
+        logger.info(f"read cached data from {fold_dir}")
 
     train_data, val_data, test_data = load_split(
         fold, data_dir, tgt_name, inter_assay_weight=inter_assay_weight
