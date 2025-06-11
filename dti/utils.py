@@ -261,3 +261,27 @@ def umap_split(
     data["_umap"] = ac.labels_
 
     return data[data["_umap"] != 0], data[data["_umap"] == 0]
+
+
+def read_predictions(p: Path) -> pd.DataFrame:
+    predictions = list()
+    for run in tqdm.tqdm(p.iterdir()):
+        preds = run / "predictions.csv.gz"
+        if not preds.exists():
+            preds = run / "predictions.csv"
+        if not preds.exists():
+            logger.warn(f"no predictions file in {run}")
+            continue
+        dataset, fold, method, _ = run.name.split("_")
+        if dataset not in ["omnivore", "landrum", "kinodata"]:
+            continue
+        method = Method.from_string(method)
+        if method not in [Method.IC50, Method.ALLSETS, Method.SETS]:
+            continue
+        fold = int(fold)
+        df = pd.read_csv(preds, index_col=0)
+        df["method"] = method
+        df["fold"] = fold
+        df["dataset"] = dataset
+        predictions.append(df)
+    return pd.concat(predictions)

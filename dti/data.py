@@ -470,6 +470,11 @@ class MultiSetActivityDataset(ActivityDataset):
 
         all_indices = np.concatenate(batch_sets)
 
+        set_ids_tensor = []
+        for set_idx, set_size in enumerate(set_sizes):
+            set_ids_tensor.extend([set_idx] * set_size)
+        set_ids_tensor = torch.tensor(set_ids_tensor, dtype=torch.long)
+
         prot_feats = (
             torch.ones(1, device=device)
             if self.protein_features is None
@@ -484,6 +489,7 @@ class MultiSetActivityDataset(ActivityDataset):
             {
                 "set_boundaries": cumulative_sizes,
                 "set_ids": batch_ids,
+                "set_ids_tensor": set_ids_tensor,
                 "num_sets": len(batch_sets),
             },
         )
