@@ -233,17 +233,20 @@ def train_with_batched_sets(
         num_sets = metadata["num_sets"].squeeze()
         set_ids_tensor = metadata["set_ids_tensor"].to(device)
 
-        attn_mask = create_set_attention_mask_from_ids(set_ids_tensor, model.num_heads)
+        model_kwargs = dict()
+        if hasattr(model, "num_heads"):
+            model_kwargs["attn_mask"] = create_set_attention_mask_from_ids(
+                set_ids_tensor, model.num_heads
+            )
 
         predictions = model(
-            protein_features.squeeze(), ligand_features.squeeze(), attn_mask=attn_mask
+            protein_features.squeeze(), ligand_features.squeeze(), **model_kwargs
         ).squeeze()
 
         labels = labels.squeeze()
         batch_loss = 0
         total_samples = 0
 
-        # Compute set-wise losses
         for i in range(num_sets):
             start_idx = set_boundaries[i]
             end_idx = set_boundaries[i + 1]
@@ -302,10 +305,14 @@ def eval_with_batched_sets(
         labels = labels.squeeze()
         set_ids_tensor = metadata["set_ids_tensor"].to(device)
 
-        attn_mask = create_set_attention_mask_from_ids(set_ids_tensor, model.num_heads)
+        model_kwargs = dict()
+        if hasattr(model, "num_heads"):
+            model_kwargs["attn_mask"] = create_set_attention_mask_from_ids(
+                set_ids_tensor, model.num_heads
+            )
 
         predictions = model(
-            protein_features.squeeze(), ligand_features.squeeze(), attn_mask=attn_mask
+            protein_features.squeeze(), ligand_features.squeeze(), **model_kwargs
         ).squeeze()
 
         all_preds.extend(predictions.detach().cpu().numpy().flatten())
