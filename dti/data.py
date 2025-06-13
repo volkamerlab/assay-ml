@@ -629,7 +629,7 @@ def split_data(
     columns: list[str] = [ASSAY],
     seed: int = 0,
 ):
-    logger.info(f"computing split and saving to {target_dir}")
+    logger.info(f"computing split along {columns} and saving to {target_dir}")
     if (target_dir / "0").exists():
         return target_dir
     target_dir.mkdir(exist_ok=True, parents=True)

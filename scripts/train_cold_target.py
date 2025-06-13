@@ -138,7 +138,7 @@ def run_split(
     batch_size = 512
     num_epochs = 50_000  # early stopping in place
     info_cols = [COMPOUND, ASSAY]
-    data_dir = DATA / "processed_assay_target" / dataset_name
+    data_dir = DATA / "processed_coldtarget" / dataset_name
     train_tgt = tgt_name = "scaled_ic50"
     aggregate = True
     inter_assay_weight = None
