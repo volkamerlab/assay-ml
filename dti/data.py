@@ -580,18 +580,6 @@ def extract_embeddings(
     logger.info("ESM embeddings written to {output_dir}")
 
 
-def split_kfold_by(
-    data: pd.DataFrame, k: int, columns: list[str], seed: int = 1
-) -> np.ndarray:
-    """Return the k-fold partitioning of unique concatenated keys from `columns`."""
-    keys = data[columns].astype(str).agg("§".join, axis=1).unique()
-    missing_modk = k - len(keys) % k if len(keys) % k != 0 else 0
-    keys = np.concatenate([keys, ["__DUMMY__"] * missing_modk])
-    np.random.seed(seed)
-    np.random.shuffle(keys)
-    return keys.reshape(k, -1)
-
-
 def get_overlapping_keys(key_set: set[str], all_keys: np.ndarray) -> set[str]:
     """Find all keys that share components with any key in key_set."""
     components_in_set = set()
@@ -638,8 +626,8 @@ def split_data(
     columns: str = [ASSAY],
 ):
     if len(columns) != 1:
-        logger.error(f"split along multiple columns not implemented")
-        raise NotImplementedError(f"split along multiple columns not implemented")
+        logger.error("split along multiple columns not implemented")
+        raise NotImplementedError("split along multiple columns not implemented")
     col = columns[0]
     logger.info(f"computing split along {col} and saving to {target_dir}")
     if (target_dir / "0").exists():
