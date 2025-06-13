@@ -609,96 +609,91 @@ def get_overlapping_keys(key_set: set[str], all_keys: np.ndarray) -> set[str]:
     return overlapping
 
 
-def split_kfold_by(
-    data: pd.DataFrame, k: int, columns: list[str], seed: int = 1
-) -> np.ndarray:
-    """Return the k-fold partitioning of unique concatenated keys from `columns`."""
-    keys = data[columns].astype(str).agg("§".join, axis=1).unique()
-    missing_modk = k - len(keys) % k if len(keys) % k != 0 else 0
-    keys = np.concatenate([keys, ["__DUMMY__"] * missing_modk])
+def split_kfold_by(data: pd.DataFrame, k: int, column: str, seed: int = 1) -> list:
+    """Return the k-fold partitioning of `data[column]` as a list of k arrays."""
+    values = data[column].unique()
     np.random.seed(seed)
-    np.random.shuffle(keys)
-    return keys.reshape(k, -1)
+    np.random.shuffle(values)
+
+    fold_size = len(values) // k
+    remainder = len(values) % k
+
+    folds = []
+    start_idx = 0
+
+    for i in range(k):
+        current_fold_size = fold_size + (1 if i < remainder else 0)
+        end_idx = start_idx + current_fold_size
+        folds.append(values[start_idx:end_idx])
+        start_idx = end_idx
+
+    return folds
 
 
 def split_data(
     data: pd.DataFrame,
-    target_dir: Path ,
+    target_dir: Path = DATA / "processed",
     k: int = 5,
     random_valset: bool = False,
-    columns: list[str] = [ASSAY],
-    seed: int = 0,
+    columns: str = [ASSAY],
 ):
-    logger.info(f"computing split along {columns} and saving to {target_dir}")
+    if len(columns) != 1:
+        logger.error(f"split along multiple columns not implemented")
+        raise NotImplementedError(f"split along multiple columns not implemented")
+    col = columns[0]
+    logger.info(f"computing split along {col} and saving to {target_dir}")
     if (target_dir / "0").exists():
         return target_dir
     target_dir.mkdir(exist_ok=True, parents=True)
-
-    key_col = "_split_key"
-    data = data.copy()
-    data[key_col] = data[columns].astype(str).agg("§".join, axis=1)
-    partition = split_kfold_by(data, k=k, columns=columns)
+    partition = split_kfold_by(data, column=col, k=k)
 
     for index in range(k):
         split_dir = target_dir / f"{index}"
         split_dir.mkdir()
+        test_data = data[data[col].isin(partition[index])]
+        test_data.to_csv(split_dir / "test.csv")
+        rest = data[~data[col].isin(partition[index])]
 
-        test_keys = partition[index]
-        test_keys = test_keys[test_keys != "__DUMMY__"]
-        test_keys_set = set(test_keys)
-
-        test = data[data[key_col].isin(test_keys)]
-        test.drop(columns=[key_col]).to_csv(split_dir / "test.csv", index=False)
-
-        rest = data[~data[key_col].isin(test_keys)]
+        assert set(test_data[col]) & set(rest[col]) == set(), (
+            f"Overlap found between test and rest data in fold {index}"
+        )
 
         if random_valset:
             logger.info(f"random validation set for split {index}")
             idcs = np.arange(len(rest))
             np.random.shuffle(idcs)
-            split_idx = len(rest) // 8
-            rest.iloc[idcs[:split_idx]].drop(columns=[key_col]).to_csv(
-                split_dir / "val.csv", index=False
+            split = len(rest) // 8
+            val_data = rest.iloc[idcs[:split]]
+            train_data = rest.iloc[idcs[split:]]
+
+            val_data.to_csv(split_dir / "val.csv")
+            train_data.to_csv(split_dir / "train.csv")
+
+            assert set(val_data.index) & set(train_data.index) == set(), (
+                f"Overlap found between train and val indices in fold {index}"
             )
-            rest.iloc[idcs[split_idx:]].drop(columns=[key_col]).to_csv(
-                split_dir / "train.csv", index=False
-            )
+
         else:
-            logger.info(f"key-split validation set for split {index}")
+            logger.info(f"col-split validation set for split {index}")
+            val_fold_idx = (index + 1) % k
+            val_assays = partition[val_fold_idx][: len(partition[val_fold_idx]) // 2]
 
-            # Find all keys that overlap with test keys
-            all_keys = data[key_col].unique()
-            overlapping_with_test = get_overlapping_keys(test_keys_set, all_keys)
+            val_data = rest[rest[col].isin(val_assays)]
+            train_data = rest[~rest[col].isin(val_assays)]
 
-            # Get available keys for validation (exclude those overlapping with test)
-            available_for_val = rest[~rest[key_col].isin(overlapping_with_test)]
+            val_data.to_csv(split_dir / "val.csv")
+            train_data.to_csv(split_dir / "train.csv")
 
-            if len(available_for_val) > 0:
-                # Use available keys for validation
-                available_keys = available_for_val[key_col].unique()
-                val_size = min(
-                    len(available_keys) // 4, len(available_keys)
-                )  # Use 1/4 for validation
+            assert set(val_data[col]) & set(train_data[col]) == set(), (
+                f"Overlap found between train and val data in fold {index}"
+            )
 
-                np.random.seed(seed + index)  # Different seed for each fold
-                val_keys = np.random.choice(
-                    available_keys, size=val_size, replace=False
-                )
-
-                overlapping_with_val = get_overlapping_keys(set(val_keys), all_keys)
-
-                val = rest[rest[key_col].isin(val_keys)]
-                train = rest[
-                    ~rest[key_col].isin(overlapping_with_test | overlapping_with_val)
-                ]
-            else:
-                # if no non-overlapping keys available, crash
-                logger.error(
-                    f"No non-overlapping keys available for validation in fold {index}"
-                )
-
-            val.drop(columns=[key_col]).to_csv(split_dir / "val.csv", index=False)
-            train.drop(columns=[key_col]).to_csv(split_dir / "train.csv", index=False)
+        assert set(test_data[col]) & set(val_data[col]) == set(), (
+            f"Overlap found between test and val data in fold {index}"
+        )
+        assert set(test_data[col]) & set(train_data[col]) == set(), (
+            f"Overlap found between test and train data in fold {index}"
+        )
 
     return target_dir
 
