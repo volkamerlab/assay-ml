@@ -67,6 +67,8 @@ def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
             data, mol_only = load_lipo, True
         case "clearance":
             data, mol_only = load_clearance, True
+        case "cell_line":
+            data, mol_only = partial(load_lipo, DATA / "raw" / "cell_line.csv"), True
         case "atcc" | "ovcar":
             data, mol_only = (
                 partial(load_nci, DATA / "raw" / f"{dataset.lower()}.csv"),
