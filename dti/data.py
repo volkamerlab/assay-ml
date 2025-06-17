@@ -827,12 +827,24 @@ def load_solubility(path: Path = DATA / "raw" / "solubility.csv") -> pd.DataFram
     assert all(k in data.columns for k in col_map.keys()), data.columns
     return data.rename(columns=col_map)
 
-def load_lipo(path: Path = DATA / "raw" / "solubility.csv") -> pd.DataFrame:
+def load_lipo(path: Path = DATA / "raw" / "lipo.csv") -> pd.DataFrame:
     logger.info(f"loading ChEMBL solubility data")
     data = pd.read_csv(path)
     col_map = {
         "molregno": COMPOUND,
         "standard_value": ACT,
+        "canonical_smiles": SMILES,
+        "assay_id": ASSAY,
+    }
+    assert all(k in data.columns for k in col_map.keys()), data.columns
+    return data.rename(columns=col_map)
+
+def load_clearance(path: Path = DATA / "raw" / "clearance.csv") -> pd.DataFrame:
+    logger.info(f"loading ChEMBL solubility data")
+    data = pd.read_csv(path)
+    col_map = {
+        "molregno": COMPOUND,
+        "value_mL_per_min_kg": ACT,
         "canonical_smiles": SMILES,
         "assay_id": ASSAY,
     }
