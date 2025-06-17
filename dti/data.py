@@ -814,3 +814,15 @@ def load_nci(path: Path = DATA / "raw" / "atcc.csv") -> pd.DataFrame:
     }
     assert all(k in data.columns for k in col_map.keys()), data.columns
     return data.rename(columns=col_map)
+
+def load_solubility(path: Path = DATA / "raw" / "solubility.csv") -> pd.DataFrame:
+    logger.info(f"loading ChEMBL solubility data")
+    data = pd.read_csv(path)
+    col_map = {
+        "molregno": COMPOUND,
+        "harmonized_nM": ACT,
+        "canonical_smiles": SMILES,
+        "assay_id": ASSAY,
+    }
+    assert all(k in data.columns for k in col_map.keys()), data.columns
+    return data.rename(columns=col_map)

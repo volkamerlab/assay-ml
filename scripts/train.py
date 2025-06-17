@@ -28,6 +28,7 @@ from dti.data import (
     load_landrum,
     load_kinodata,
     load_nci,
+    load_solubility,
     load_split,
 )
 from dti.training import (
@@ -58,6 +59,8 @@ def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
             data, mol_only = partial(load_landrum, data_path), False
         case "omnivore":
             data, mol_only = partial(load_landrum, DATA / "raw" / "omnivore.csv"), False
+        case "solubility":
+            data, mol_only = load_solubility, True
         case "atcc" | "ovcar":
             data, mol_only = (
                 partial(load_nci, DATA / "raw" / f"{dataset.lower()}.csv"),
