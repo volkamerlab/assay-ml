@@ -86,7 +86,8 @@ def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
 
 
 def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]:
-    shuffled_multiset = partial(MultiSetActivityDataset, inter_assay=True)
+    msa = partial(MultiSetActivityDataset, max_set_size=1000)
+    shuffled_multiset = partial(msa, inter_assay=True)
     match method:
         case Method.PAIRS if mol_only:
             return PairMolecularModel, PairDataset, PairDataset
@@ -97,21 +98,21 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
         case Method.ALLPAIRS:
             return PairCombinedModel, ActivityDataset, PairDataset
         case Method.IC50CORR if mol_only:
-            return MolecularModel, SetActivityDataset, MultiSetActivityDataset
+            return MolecularModel, SetActivityDataset, msa
         case Method.IC50CORR:
-            return CombinedModel, SetActivityDataset, MultiSetActivityDataset
+            return CombinedModel, SetActivityDataset, msa
         case Method.HODGE | Method.IC50 if mol_only:
-            return MolecularModel, ActivityDataset, MultiSetActivityDataset
+            return MolecularModel, ActivityDataset, msa
         case Method.HODGE | Method.IC50:
-            return CombinedModel, ActivityDataset, MultiSetActivityDataset
+            return CombinedModel, ActivityDataset, msa
         case Method.IC50SETS | Method.SETS if mol_only:
-            return MoleculeSetRank, MultiSetActivityDataset, MultiSetActivityDataset
+            return MoleculeSetRank, msa, msa
         case Method.IC50SETS | Method.SETS:
-            return SetRankModel, MultiSetActivityDataset, MultiSetActivityDataset
+            return SetRankModel, msa, msa
         case Method.IC50ALLSETS | Method.ALLSETS if mol_only:
-            return MoleculeSetRank, shuffled_multiset, MultiSetActivityDataset
+            return MoleculeSetRank, shuffled_multiset, msa
         case Method.IC50ALLSETS | Method.ALLSETS:
-            return SetRankModel, shuffled_multiset, MultiSetActivityDataset
+            return SetRankModel, shuffled_multiset, msa
         case _:
             logger.error(f"No model and dataset configuration for method: {method}")
             sys.exit(1)
