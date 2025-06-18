@@ -70,13 +70,13 @@ class AssayRankAccuracy:
         """
         key_sffx = "_a" if self.pair_predictions else ""
 
-        def process_assay(assay, data):
-            if len(data) <= 4 or assay not in self.reference_data:
-                return 0, 0  # No valid data for this assay
+        def process_assay(assay, data, reference_data):
+            # if len(data) <= 4 or assay not in self.reference_data:
+            #     return 0, 0  # No valid data for this assay
 
             scores = assay_ranks(data) if self.pair_predictions else data
             scores = scores.set_index(COMPOUND)
-            reference = self.reference_data.loc[assay].reindex(scores.index)
+            reference = reference_data.reindex(scores.index)
 
             if len(scores) <= 1 or reference.nunique() <= 1:
                 return 0, 0  # Skip invalid assays
@@ -98,8 +98,12 @@ class AssayRankAccuracy:
                 return 0, 0
 
         results = Parallel(n_jobs=8)(
-            delayed(process_assay)(assay, data)
-            for assay, data in prediction_data.groupby(ASSAY + key_sffx)
+            delayed(process_assay)(assay, data, self.reference_data.loc[assay])
+            for assay, data in [
+                (a, d)
+                for a, d in prediction_data.groupby(ASSAY + key_sffx)
+                if a in self.reference_data and len(d) > 4
+            ]
         )
 
         corr_sum, count = map(sum, zip(*results))
