@@ -815,6 +815,7 @@ def load_activities(path: Path = DATA / "raw" / "activities.csv") -> pd.DataFram
         "assay_id": ASSAY,
     }
     assert all(k in data.columns for k in col_map.keys()), data.columns
+    data = data[~data[ACT].isna()]
     return data.rename(columns=col_map)
 
 
@@ -842,6 +843,7 @@ def load_solubility(path: Path = DATA / "raw" / "solubility.csv") -> pd.DataFram
         "assay_id": ASSAY,
     }
     assert all(k in data.columns for k in col_map.keys()), data.columns
+    data = data[~data[ACT].isna()]
     return data.rename(columns=col_map)
 
 
@@ -855,6 +857,7 @@ def load_lipo(path: Path = DATA / "raw" / "lipo.csv") -> pd.DataFrame:
         "assay_id": ASSAY,
     }
     assert all(k in data.columns for k in col_map.keys()), data.columns
+    data = data[~data[ACT].isna()]
     return data.rename(columns=col_map)
 
 
@@ -868,4 +871,5 @@ def load_clearance(path: Path = DATA / "raw" / "clearance.csv") -> pd.DataFrame:
         "assay_id": ASSAY,
     }
     assert all(k in data.columns for k in col_map.keys()), data.columns
+    data = data[~data[ACT].isna()]
     return data.rename(columns=col_map)
