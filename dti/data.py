@@ -802,6 +802,22 @@ def load_landrum(landrum_path: Path = DATA / "raw" / "landrum.csv") -> pd.DataFr
     return data.rename(columns=col_map)
 
 
+def load_activities(path: Path = DATA / "raw" / "activities.csv") -> pd.DataFrame:
+    logger.info(f"loading activities from {path}")
+    data = pd.read_csv(path)
+    data = data[~data["canonical_smiles"].isna()]
+    col_map = {
+        "molregno": COMPOUND,
+        "binding_score": ACT,
+        "canonical_smiles": SMILES,
+        "protein_sequence": SEQUENCE,
+        "uniprot_accession": TID,
+        "assay_id": ASSAY,
+    }
+    assert all(k in data.columns for k in col_map.keys()), data.columns
+    return data.rename(columns=col_map)
+
+
 def load_nci(path: Path = DATA / "raw" / "atcc.csv") -> pd.DataFrame:
     logger.info(f"loading NCI ATCC data from {path}")
     data = pd.read_csv(path, index_col=0)
@@ -815,6 +831,7 @@ def load_nci(path: Path = DATA / "raw" / "atcc.csv") -> pd.DataFrame:
     assert all(k in data.columns for k in col_map.keys()), data.columns
     return data.rename(columns=col_map)
 
+
 def load_solubility(path: Path = DATA / "raw" / "solubility.csv") -> pd.DataFrame:
     logger.info(f"loading ChEMBL solubility data")
     data = pd.read_csv(path)
@@ -827,8 +844,9 @@ def load_solubility(path: Path = DATA / "raw" / "solubility.csv") -> pd.DataFram
     assert all(k in data.columns for k in col_map.keys()), data.columns
     return data.rename(columns=col_map)
 
+
 def load_lipo(path: Path = DATA / "raw" / "lipo.csv") -> pd.DataFrame:
-    logger.info(f"loading ChEMBL solubility data")
+    logger.info(f"loading ChEMBL data from {path}")
     data = pd.read_csv(path)
     col_map = {
         "molregno": COMPOUND,
@@ -838,6 +856,7 @@ def load_lipo(path: Path = DATA / "raw" / "lipo.csv") -> pd.DataFrame:
     }
     assert all(k in data.columns for k in col_map.keys()), data.columns
     return data.rename(columns=col_map)
+
 
 def load_clearance(path: Path = DATA / "raw" / "clearance.csv") -> pd.DataFrame:
     logger.info(f"loading ChEMBL solubility data")
