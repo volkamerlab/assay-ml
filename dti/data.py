@@ -764,6 +764,14 @@ def prepare_datasets(
     split_data(data, data_dir, columns=columns, k=k, random_valset=random_valset)
 
 
+def _process(data, col_map):
+    assert all(k in data.columns for k in col_map.keys()), data.columns
+    data = data.rename(columns=col_map)
+    data = data[~data[SMILES].isna()]
+    data = data[~data[ACT].isna()]
+    return data
+
+
 def load_kinodata(
     kinodata_path: Path = DATA / "raw" / "activities-chembl33_v0.5.csv",
     activity_types: List[str] = ["pIC50"],
@@ -776,47 +784,47 @@ def load_kinodata(
     # strip CHEMBL prefixes
     data[ASSAY] = data["assays.chembl_id"].str[6:].astype(int)
     data[COMPOUND] = data["molecule_dictionary.chembl_id"].str[6:].astype(int)
-    col_map = {
-        "activities.standard_value": ACT,
-        "compound_structures.canonical_smiles": SMILES,
-        "component_sequences.sequence": SEQUENCE,
-        "UniprotID": TID,
-    }
-    assert all(k in data.columns for k in col_map.keys()), data.columns
-    return data.rename(columns=col_map)
+    return _process(
+        data,
+        {
+            "activities.standard_value": ACT,
+            "compound_structures.canonical_smiles": SMILES,
+            "component_sequences.sequence": SEQUENCE,
+            "UniprotID": TID,
+        },
+    )
 
 
 def load_landrum(landrum_path: Path = DATA / "raw" / "landrum.csv") -> pd.DataFrame:
     logger.info(f"loading data from {landrum_path}")
     data = pd.read_csv(landrum_path, index_col=0)
-    data = data[~data["canonical_smiles"].isna()]
-    col_map = {
-        "molregno": COMPOUND,
-        "pchembl_value": ACT,
-        "canonical_smiles": SMILES,
-        "component_sequence": SEQUENCE,
-        "tid": TID,
-        "assay_id": ASSAY,
-    }
-    assert all(k in data.columns for k in col_map.keys()), data.columns
-    return data.rename(columns=col_map)
+    return _process(
+        data,
+        {
+            "molregno": COMPOUND,
+            "pchembl_value": ACT,
+            "canonical_smiles": SMILES,
+            "component_sequence": SEQUENCE,
+            "tid": TID,
+            "assay_id": ASSAY,
+        },
+    )
 
 
 def load_activities(path: Path = DATA / "raw" / "activities.csv") -> pd.DataFrame:
     logger.info(f"loading activities from {path}")
     data = pd.read_csv(path)
-    data = data[~data["canonical_smiles"].isna()]
-    col_map = {
-        "molregno": COMPOUND,
-        "binding_score": ACT,
-        "canonical_smiles": SMILES,
-        "protein_sequence": SEQUENCE,
-        "uniprot_accession": TID,
-        "assay_id": ASSAY,
-    }
-    assert all(k in data.columns for k in col_map.keys()), data.columns
-    data = data[~data[ACT].isna()]
-    return data.rename(columns=col_map)
+    return _process(
+        data,
+        {
+            "molregno": COMPOUND,
+            "binding_score": ACT,
+            "canonical_smiles": SMILES,
+            "protein_sequence": SEQUENCE,
+            "uniprot_accession": TID,
+            "assay_id": ASSAY,
+        },
+    )
 
 
 def load_nci(path: Path = DATA / "raw" / "atcc.csv") -> pd.DataFrame:
@@ -824,52 +832,53 @@ def load_nci(path: Path = DATA / "raw" / "atcc.csv") -> pd.DataFrame:
     data = pd.read_csv(path, index_col=0)
     assay_ids = {exp: i for i, exp in enumerate(data["EXPID"].unique())}
     data[ASSAY] = data["EXPID"].map(assay_ids.get)
-    col_map = {
-        "NSC": COMPOUND,
-        "IC50": ACT,
-        "SMILES": SMILES,
-    }
-    assert all(k in data.columns for k in col_map.keys()), data.columns
-    return data.rename(columns=col_map)
+    return _process(
+        data,
+        {
+            "NSC": COMPOUND,
+            "IC50": ACT,
+            "SMILES": SMILES,
+        },
+    )
 
 
 def load_solubility(path: Path = DATA / "raw" / "solubility.csv") -> pd.DataFrame:
     logger.info(f"loading ChEMBL solubility data")
     data = pd.read_csv(path)
-    col_map = {
-        "molregno": COMPOUND,
-        "harmonized_nM": ACT,
-        "canonical_smiles": SMILES,
-        "assay_id": ASSAY,
-    }
-    assert all(k in data.columns for k in col_map.keys()), data.columns
-    data = data[~data[ACT].isna()]
-    return data.rename(columns=col_map)
+    return _process(
+        data,
+        {
+            "molregno": COMPOUND,
+            "harmonized_nM": ACT,
+            "canonical_smiles": SMILES,
+            "assay_id": ASSAY,
+        },
+    )
 
 
 def load_lipo(path: Path = DATA / "raw" / "lipo.csv") -> pd.DataFrame:
     logger.info(f"loading ChEMBL data from {path}")
     data = pd.read_csv(path)
-    col_map = {
-        "molregno": COMPOUND,
-        "standard_value": ACT,
-        "canonical_smiles": SMILES,
-        "assay_id": ASSAY,
-    }
-    assert all(k in data.columns for k in col_map.keys()), data.columns
-    data = data[~data[ACT].isna()]
-    return data.rename(columns=col_map)
+    return _process(
+        data,
+        {
+            "molregno": COMPOUND,
+            "standard_value": ACT,
+            "canonical_smiles": SMILES,
+            "assay_id": ASSAY,
+        },
+    )
 
 
 def load_clearance(path: Path = DATA / "raw" / "clearance.csv") -> pd.DataFrame:
     logger.info(f"loading ChEMBL solubility data")
     data = pd.read_csv(path)
-    col_map = {
-        "molregno": COMPOUND,
-        "value_mL_per_min_kg": ACT,
-        "canonical_smiles": SMILES,
-        "assay_id": ASSAY,
-    }
-    assert all(k in data.columns for k in col_map.keys()), data.columns
-    data = data[~data[ACT].isna()]
-    return data.rename(columns=col_map)
+    return _process(
+        data,
+        {
+            "molregno": COMPOUND,
+            "value_mL_per_min_kg": ACT,
+            "canonical_smiles": SMILES,
+            "assay_id": ASSAY,
+        },
+    )
