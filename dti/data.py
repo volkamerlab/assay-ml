@@ -537,7 +537,7 @@ def extract_embeddings(
     if len(data) == 0:
         return
 
-    logger.info("setting up ESM model '{model_name}'")
+    logger.info(f"setting up ESM model '{model_name}'")
     model, alphabet = pretrained.load_model_and_alphabet(model_name)
     model.eval()
 
