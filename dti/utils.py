@@ -212,14 +212,19 @@ def par_compute_fp(smiles: Iterable[str], n_jobs=16):
         return p.map(compute_fp, smiles)
 
 
+def add_scaffold_col(
+    data: pd.DataFrame, name: str = "_scaffold", progress: bool = True
+):
+    smiles_it = tqdm.tqdm(data[SMILES], desc="scaffold") if progress else data[SMILES]
+    data[name] = [get_scaffold(smi) for smi in smiles_it]
+
+
 def scaffold_split(
     data: pd.DataFrame, proportion: float = 0.8, seed: int = 0, progress: bool = True
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     np.random.seed(seed)
-    smiles_it = tqdm.tqdm(data[SMILES], desc="scaffold") if progress else data[SMILES]
     _scaffold_key = "_scaffold"
-    data[_scaffold_key] = [get_scaffold(smi) for smi in smiles_it]
-
+    add_scaffold_col(data, _scaffold_key, progress=progress)
     data = data[~data[_scaffold_key].isna()]
 
     all_scaffolds = data[_scaffold_key].unique()
