@@ -769,6 +769,8 @@ def _process(data, col_map):
     data = data.rename(columns=col_map)
     data = data[~data[SMILES].isna()]
     data = data[~data[ACT].isna()]
+    if SEQUENCE in data.columns:
+        data = data[~data[SEQUENCE].isna()]
     return data
 
 
