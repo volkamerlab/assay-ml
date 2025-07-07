@@ -17,6 +17,8 @@ import tqdm.auto as tqdm
 from rdkit import Chem
 from rdkit.Chem.Scaffolds import MurckoScaffold
 from rdkit.Chem import rdFingerprintGenerator
+from rdkit import DataStructs
+from rdkit.ML.Cluster import Butina
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.decomposition import PCA
 
@@ -198,18 +200,25 @@ def get_scaffold(smiles: str, generic: bool = True) -> str:
         return None
 
 
-def compute_fp(smi: str, radius: int = 3, fp_dim: int = 2048):
+@functools.cache
+def compute_fp(smi: str, radius: int = 3, fp_dim: int = 2048, target: str = "numpy"):
     mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=fp_dim)
     try:
-        return mfpgen.GetFingerprintAsNumPy(Chem.MolFromSmiles(smi))
+        match target:
+            case "numpy":
+                return mfpgen.GetFingerprintAsNumPy(Chem.MolFromSmiles(smi))
+            case "native":
+                return mfpgen.GetFingerprint(Chem.MolFromSmiles(smi))
+            case _:
+                raise ValueError(f"unkown fingerpritn target: '{target}'")
     except TypeError:
         logger.warn(f"No fp for SMILES={smi}")
         return None
 
 
-def par_compute_fp(smiles: Iterable[str], n_jobs=16):
+def par_compute_fp(smiles: Iterable[str], n_jobs=16, target: str = "numpy"):
     with Pool(n_jobs) as p:
-        return p.map(compute_fp, smiles)
+        return p.map(functools.partial(compute_fp, target=target), smiles)
 
 
 def add_scaffold_col(
@@ -237,6 +246,47 @@ def scaffold_split(
     return df_train, df_test
 
 
+def butina_clusters(
+    data: pd.DataFrame, cutoff: float = 0.2, label_col: str = "_butina"
+):
+    logger.info("Butina split: compute fingerprints")
+    fp_list = par_compute_fp(data[SMILES].values, target="native")
+    clusters = cluster_fingerprints(fp_list, cutoff=cutoff)
+    labels = -np.ones(len(data), dtype=np.int64)
+    for i, cluster in enumerate(clusters):
+        labels[list(cluster)] = i
+    data[label_col] = labels
+
+
+def tanimoto_distance_matrix(fp_list):
+    """Calculate distance matrix for fingerprint list"""
+    dissimilarity_matrix = []
+    # Notice how we are deliberately skipping the first and last items in the list
+    # because we don't need to compare them against themselves
+    for i in range(1, len(fp_list)):
+        # Compare the current fingerprint against all the previous ones in the list
+        similarities = DataStructs.BulkTanimotoSimilarity(fp_list[i], fp_list[:i])
+        # Since we need a distance matrix, calculate 1-x for every element in similarity matrix
+        dissimilarity_matrix.extend([1 - x for x in similarities])
+    return dissimilarity_matrix
+
+
+def cluster_fingerprints(fingerprints, cutoff=0.2):
+    """Cluster fingerprints
+    Parameters:
+        fingerprints
+        cutoff: threshold for the clustering
+    """
+    # Calculate Tanimoto distance matrix
+    distance_matrix = tanimoto_distance_matrix(fingerprints)
+    # Now cluster the data with the implemented Butina algorithm:
+    clusters = Butina.ClusterData(
+        distance_matrix, len(fingerprints), cutoff, isDistData=True
+    )
+    clusters = sorted(clusters, key=len, reverse=True)
+    return clusters
+
+
 def umap_split(
     data: pd.DataFrame,
     n_jobs: int = 6,
@@ -248,7 +298,7 @@ def umap_split(
     import umap
 
     logger.info("umap split: compute fingerprints")
-    fp_list = par_compute_fp(data[SMILES].values, n_jobs=6)
+    fp_list = par_compute_fp(data[SMILES].values)
 
     data = data[[fp is not None for fp in fp_list]]
 
