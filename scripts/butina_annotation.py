@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from functools import namedtuple
+from functools import namedtuple, partial
 
 import pandas as pd
 import numpy as np
@@ -9,7 +9,7 @@ import tqdm.auto as tqdm
 
 from dti import data
 from dti.data import split_data
-from dti.utils import butina_clusters
+from dti.utils import butina_clusters, init_logging
 from dti.constants import ACT, ASSAY
 
 
@@ -20,14 +20,14 @@ def main():
     data_path = Path(".") / "data"
     raw_data_path = data_path / "raw"
 
-    for target_file, df in [
-        (
-            "kinodata_butina.csv",
-            data.load_kinodata(raw_data_path / "activities-chembl33_v0.5.csv"),
-        ),
-        ("landrum_butina.csv", data.load_landrum(raw_data_path / "landrum.csv")),
-        ("omnivore_butina.csv", data.load_landrum(raw_data_path / "omnivore.csv")),
+    for target_file, loader, path in [
+        ("kinodata_butina.csv", data.load_kinodata, "activities-chembl33_v0.5.csv"),
+        ("landrum_butina.csv", data.load_landrum, "landrum.csv"),
+        ("omnivore_butina.csv", data.load_landrum, "omnivore.csv"),
     ]:
+        path = raw_data_path / path
+        logger.info(f"dataset: {path}")
+        df = loader(path)
         logger.info("computing fingerprints")
         butina_clusters(df)
 
