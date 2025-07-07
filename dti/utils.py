@@ -263,7 +263,7 @@ def tanimoto_distance_matrix(fp_list):
     dissimilarity_matrix = []
     # Notice how we are deliberately skipping the first and last items in the list
     # because we don't need to compare them against themselves
-    for i in range(1, len(fp_list)):
+    for i in tqdm.tqdm(range(1, len(fp_list)), desc="Tanimoto similarity"):
         # Compare the current fingerprint against all the previous ones in the list
         similarities = DataStructs.BulkTanimotoSimilarity(fp_list[i], fp_list[:i])
         # Since we need a distance matrix, calculate 1-x for every element in similarity matrix
