@@ -624,6 +624,7 @@ def split_data(
     k: int = 5,
     random_valset: bool = False,
     columns: str = [ASSAY],
+    random_seed: int = 1,
 ):
     if len(columns) != 1:
         logger.error("split along multiple columns not implemented")
@@ -633,7 +634,7 @@ def split_data(
     if (target_dir / "0").exists():
         return target_dir
     target_dir.mkdir(exist_ok=True, parents=True)
-    partition = split_kfold_by(data, column=col, k=k)
+    partition = split_kfold_by(data, column=col, k=k, seed=random_seed)
 
     for index in range(k):
         split_dir = target_dir / f"{index}"
