@@ -258,17 +258,49 @@ def butina_clusters(
     data[label_col] = labels
 
 
-def tanimoto_distance_matrix(fp_list):
-    """Calculate distance matrix for fingerprint list"""
-    dissimilarity_matrix = []
-    # Notice how we are deliberately skipping the first and last items in the list
-    # because we don't need to compare them against themselves
-    for i in tqdm.tqdm(range(1, len(fp_list)), desc="Tanimoto similarity"):
-        # Compare the current fingerprint against all the previous ones in the list
-        similarities = DataStructs.BulkTanimotoSimilarity(fp_list[i], fp_list[:i])
-        # Since we need a distance matrix, calculate 1-x for every element in similarity matrix
-        dissimilarity_matrix.extend([1 - x for x in similarities])
-    return dissimilarity_matrix
+def _row_dissim_mp(args):
+    """Helper function for a row: compute 1 - Tanimoto similarities for fp[i] vs fp[:i]"""
+    i, fps = args
+    sims = DataStructs.BulkTanimotoSimilarity(fps[i], fps[:i])
+    return [1.0 - s for s in sims]
+
+
+def tanimoto_distance_matrix(fp_list, n_processes: int = None, chunksize: int = 1000):
+    """
+    Parallel Tanimoto distance matrix using multiprocessing.
+
+    Parameters
+    ----------
+    fp_list : list[ExplicitBitVect]
+        List of fingerprints.
+    n_processes : int, optional
+        Number of processes. Defaults to number of CPU cores.
+    chunksize : int
+        Controls load balancing; higher is faster but uses more memory.
+
+    Returns
+    -------
+    list[float]
+        Flattened lower-triangular distance matrix.
+    """
+    n = len(fp_list)
+    pool = Pool(processes=n_processes)
+
+    # Prepare argument tuples: (i, fp_list)
+    task_args = [(i, fp_list) for i in range(1, n)]
+
+    # tqdm requires manual update when using imap
+    results = []
+    with tqdm.tqdm(total=n - 1, desc="Tanimoto (multiprocessing)") as pbar:
+        for row in pool.imap(_row_dissim_mp, task_args, chunksize=chunksize):
+            results.append(row)
+            pbar.update(1)
+
+    pool.close()
+    pool.join()
+
+    # Flatten list of lists
+    return [d for row in results for d in row]
 
 
 def cluster_fingerprints(fingerprints, cutoff=0.2):
