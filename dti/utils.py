@@ -251,7 +251,7 @@ def butina_clusters(
     data: pd.DataFrame,
     cutoff: float = 0.2,
     label_col: str = "_butina",
-    smiles_col: str = SMILES,          # keeps the old constant/name flexible
+    smiles_col: str = SMILES,  # keeps the old constant/name flexible
 ):
     """
     Cluster unique SMILES with Butina and annotate the full DataFrame.
@@ -273,19 +273,18 @@ def butina_clusters(
       (‑1 for anything that failed fingerprinting).
     """
     uniq_smiles = data[smiles_col].drop_duplicates().values
-    logger.info("Butina split: compute fingerprints for %d unique SMILES", len(uniq_smiles))
-
+    logger.info(f"Butina: compute {len(uniq_smiles)} fingerprints")
     fp_list = par_compute_fp(uniq_smiles, target="native")
-
     clusters = cluster_fingerprints(fp_list, cutoff=cutoff)
 
     uniq_labels = np.full(len(uniq_smiles), -1, dtype=np.int64)
     for cid, cluster in enumerate(clusters):
-        uniq_labels[cluster] = cid
+        uniq_labels[list(cluster)] = cid
 
     smiles_to_cluster = pd.Series(uniq_labels, index=uniq_smiles)
 
     data[label_col] = data[smiles_col].map(smiles_to_cluster).astype(np.int64)
+
 
 _FP_LIST = None  # will become read‑only global inside each process
 
@@ -324,9 +323,9 @@ def cluster_fingerprints(fingerprints, cutoff=0.2):
         fingerprints
         cutoff: threshold for the clustering
     """
-    # Calculate Tanimoto distance matrix
+    logger.info("Butina: Calculate Tanimoto distance matrix")
     distance_matrix = tanimoto_distance_matrix(fingerprints)
-    # Now cluster the data with the implemented Butina algorithm:
+    logger.info("Butina: Clustering")
     clusters = Butina.ClusterData(
         distance_matrix, len(fingerprints), cutoff, isDistData=True
     )
