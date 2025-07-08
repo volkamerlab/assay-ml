@@ -9,11 +9,12 @@ from enum import Enum, unique
 import random
 from multiprocessing import Pool
 import shutil
+import os, multiprocessing as mp
 
 import torch
 import pandas as pd
 import numpy as np
-import tqdm.auto as tqdm
+from tqdm.auto import tqdm
 from rdkit import Chem
 from rdkit.Chem.Scaffolds import MurckoScaffold
 from rdkit.Chem import rdFingerprintGenerator
@@ -224,7 +225,7 @@ def par_compute_fp(smiles: Iterable[str], n_jobs=16, target: str = "numpy"):
 def add_scaffold_col(
     data: pd.DataFrame, name: str = "_scaffold", progress: bool = True
 ):
-    smiles_it = tqdm.tqdm(data[SMILES], desc="scaffold") if progress else data[SMILES]
+    smiles_it = tqdm(data[SMILES], desc="scaffold") if progress else data[SMILES]
     data[name] = [get_scaffold(smi) for smi in smiles_it]
 
 
@@ -258,48 +259,34 @@ def butina_clusters(
     data[label_col] = labels
 
 
-def _row_dissim_mp(args):
-    """Helper function for a row: compute 1 - Tanimoto similarities for fp[i] vs fp[:i]"""
-    i, fps = args
-    sims = DataStructs.BulkTanimotoSimilarity(fps[i], fps[:i])
+_FP_LIST = None  # will become read‑only global inside each process
+
+
+def _init_pool(fps):
+    global _FP_LIST
+    _FP_LIST = fps  # no pickling → shared (copy‑on‑write) memory
+
+
+def _row_dissim_worker(i):
+    sims = DataStructs.BulkTanimotoSimilarity(_FP_LIST[i], _FP_LIST[:i])
     return [1.0 - s for s in sims]
 
 
-def tanimoto_distance_matrix(fp_list, n_processes: int = None, chunksize: int = 1000):
-    """
-    Parallel Tanimoto distance matrix using multiprocessing.
+def tanimoto_distance_matrix(fp_list, n_processes=None, chunksize=20):
+    n_processes = n_processes or os.cpu_count()
 
-    Parameters
-    ----------
-    fp_list : list[ExplicitBitVect]
-        List of fingerprints.
-    n_processes : int, optional
-        Number of processes. Defaults to number of CPU cores.
-    chunksize : int
-        Controls load balancing; higher is faster but uses more memory.
+    with mp.get_context("fork").Pool(
+        processes=n_processes, initializer=_init_pool, initargs=(fp_list,)
+    ) as pool:
+        work = pool.imap_unordered(
+            _row_dissim_worker, range(1, len(fp_list)), chunksize
+        )
+        results = [None] * (len(fp_list) - 1)
+        with tqdm(total=len(fp_list) - 1, desc="Tanimoto (mp‑fork)") as bar:
+            for i, row in enumerate(work, 1):
+                results[i - 1] = row
+                bar.update()
 
-    Returns
-    -------
-    list[float]
-        Flattened lower-triangular distance matrix.
-    """
-    n = len(fp_list)
-    pool = Pool(processes=n_processes)
-
-    # Prepare argument tuples: (i, fp_list)
-    task_args = [(i, fp_list) for i in range(1, n)]
-
-    # tqdm requires manual update when using imap
-    results = []
-    with tqdm.tqdm(total=n - 1, desc="Tanimoto (multiprocessing)") as pbar:
-        for row in pool.imap(_row_dissim_mp, task_args, chunksize=chunksize):
-            results.append(row)
-            pbar.update(1)
-
-    pool.close()
-    pool.join()
-
-    # Flatten list of lists
     return [d for row in results for d in row]
 
 
@@ -356,7 +343,7 @@ def read_predictions(
     methods: list[str] = [Method.IC50, Method.ALLSETS, Method.SETS],
 ) -> pd.DataFrame:
     predictions = list()
-    for run in tqdm.tqdm(p.iterdir()):
+    for run in tqdm(p.iterdir()):
         preds = run / "predictions.csv.gz"
         if not preds.exists():
             preds = run / "predictions.csv"
