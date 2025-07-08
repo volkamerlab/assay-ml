@@ -248,16 +248,44 @@ def scaffold_split(
 
 
 def butina_clusters(
-    data: pd.DataFrame, cutoff: float = 0.2, label_col: str = "_butina"
+    data: pd.DataFrame,
+    cutoff: float = 0.2,
+    label_col: str = "_butina",
+    smiles_col: str = SMILES,          # keeps the old constant/name flexible
 ):
-    logger.info("Butina split: compute fingerprints")
-    fp_list = par_compute_fp(data[SMILES].values, target="native")
-    clusters = cluster_fingerprints(fp_list, cutoff=cutoff)
-    labels = -np.ones(len(data), dtype=np.int64)
-    for i, cluster in enumerate(clusters):
-        labels[list(cluster)] = i
-    data[label_col] = labels
+    """
+    Cluster unique SMILES with Butina and annotate the full DataFrame.
 
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Your full dataset (may contain duplicate SMILES).
+    cutoff : float, default 0.2
+        Tanimoto cut‑off for Butina clustering.
+    label_col : str, default "_butina"
+        Name of the column that will hold cluster IDs.
+    smiles_col : str, default global `SMILES`
+        Column containing canonical SMILES strings.
+
+    Side effects
+    ------------
+    * Adds/overwrites ``data[label_col]`` with int64 cluster IDs
+      (‑1 for anything that failed fingerprinting).
+    """
+    uniq_smiles = data[smiles_col].drop_duplicates().values
+    logger.info("Butina split: compute fingerprints for %d unique SMILES", len(uniq_smiles))
+
+    fp_list = par_compute_fp(uniq_smiles, target="native")
+
+    clusters = cluster_fingerprints(fp_list, cutoff=cutoff)
+
+    uniq_labels = np.full(len(uniq_smiles), -1, dtype=np.int64)
+    for cid, cluster in enumerate(clusters):
+        uniq_labels[cluster] = cid
+
+    smiles_to_cluster = pd.Series(uniq_labels, index=uniq_smiles)
+
+    data[label_col] = data[smiles_col].map(smiles_to_cluster).astype(np.int64)
 
 _FP_LIST = None  # will become read‑only global inside each process
 
