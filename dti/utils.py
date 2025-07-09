@@ -1,3 +1,4 @@
+from array import array
 from typing import Union, Iterable
 import functools
 import subprocess
@@ -286,51 +287,22 @@ def butina_clusters(
     data[label_col] = data[smiles_col].map(smiles_to_cluster).astype(np.int64)
 
 
-_FP_LIST = None  # will become read‑only global inside each process
-
-
-def _init_pool(fps):
-    global _FP_LIST
-    _FP_LIST = fps  # no pickling → shared (copy‑on‑write) memory
-
-
-def _row_dissim_worker(i):
-    sims = DataStructs.BulkTanimotoSimilarity(_FP_LIST[i], _FP_LIST[:i])
-    return [1.0 - s for s in sims]
-
-
-def tanimoto_distance_matrix(fp_list, n_processes=None, chunksize=20):
-    n_processes = n_processes or os.cpu_count()
-
-    with mp.get_context("fork").Pool(
-        processes=n_processes, initializer=_init_pool, initargs=(fp_list,)
-    ) as pool:
-        work = pool.imap_unordered(
-            _row_dissim_worker, range(1, len(fp_list)), chunksize
-        )
-        results = [None] * (len(fp_list) - 1)
-        with tqdm(total=len(fp_list) - 1, desc="Tanimoto (mp‑fork)") as bar:
-            for i, row in enumerate(work, 1):
-                results[i - 1] = row
-                bar.update()
-
-    return [d for row in results for d in row]
+def tanimoto_distance_vector(fp_list):
+    distances = array("f")
+    for i in tqdm(range(1, len(fp_list)), desc="Tanimoto"):
+        sims = DataStructs.BulkTanimotoSimilarity(fp_list[i], fp_list[:i])
+        distances.extend(1.0 - s for s in sims)
+    return distances
 
 
 def cluster_fingerprints(fingerprints, cutoff=0.2):
-    """Cluster fingerprints
-    Parameters:
-        fingerprints
-        cutoff: threshold for the clustering
-    """
-    logger.info("Butina: Calculate Tanimoto distance matrix")
-    distance_matrix = tanimoto_distance_matrix(fingerprints)
+    logger.info("Butina: Calculating distances row-by-row")
+    distance_vector = tanimoto_distance_vector(fingerprints)
     logger.info("Butina: Clustering")
     clusters = Butina.ClusterData(
-        distance_matrix, len(fingerprints), cutoff, isDistData=True
+        distance_vector, len(fingerprints), cutoff, isDistData=True
     )
-    clusters = sorted(clusters, key=len, reverse=True)
-    return clusters
+    return sorted(clusters, key=len, reverse=True)
 
 
 def umap_split(
