@@ -288,12 +288,12 @@ def butina_clusters(
 
 
 def tanimoto_distance_vector(fp_list):
-    distances = array("f")
+    """Compute upper-triangle distance matrix as a flat list (Butina-compatible)"""
+    distances = []
     for i in tqdm(range(1, len(fp_list)), desc="Tanimoto"):
         sims = DataStructs.BulkTanimotoSimilarity(fp_list[i], fp_list[:i])
         distances.extend(1.0 - s for s in sims)
     return distances
-
 
 def cluster_fingerprints(fingerprints, cutoff=0.2):
     logger.info("Butina: Calculating distances row-by-row")
