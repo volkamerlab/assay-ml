@@ -192,8 +192,8 @@ def main():
     method = Method.from_string(sys.argv[4])
     fold = int(sys.argv[5])
 
-    run_name = f"{dataset_name}_{fold}_{repr(method)}_{ident}"
-    init_logging(testing_run_name)
+    run_name = f"test_{dataset_name}_{fold}_{repr(method)}_{ident}"
+    init_logging(run_name)
     logger = logging.getLogger(run_name)
     logger.info(f"seed={seed} method={repr(method)} dataset={dataset_name} fold={fold}")
     set_random_seeds(seed)
