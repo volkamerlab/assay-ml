@@ -135,8 +135,6 @@ def run_split(
     msa = partial(MultiSetActivityDataset, max_set_size=1000)
     shuffled_multiset = partial(msa, inter_assay=True)
 
-    val_dataset_cls = msa
-
     data = load_data()
 
     model = model_cls(
@@ -150,32 +148,38 @@ def run_split(
     )
     model.eval()
 
+
+
+
     _, _, test_data = load_split(
         fold, data_dir, tgt_name, inter_assay_weight=inter_assay_weight
     )
-    test_dataset = val_dataset_cls(test_data, target=tgt_name, info_cols=info_cols)
+    
+    for (name, val_dataset_cls) in [('shuffled', shuffled), ('assays', msa)]:
+        val_dataset_cls = msa
+        test_dataset = val_dataset_cls(test_data, target=tgt_name, info_cols=info_cols)
 
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=test_batch(method, batch_size),
-        shuffle=False,
-        num_workers=0,
-    )
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=test_batch(method, batch_size),
+            shuffle=False,
+            num_workers=0,
+        )
 
-    rstat = pearsonr
-    assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
+        rstat = pearsonr
+        assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
 
-    _, test_rank_corr = eval_with_batched_sets(
-        model,
-        test_loader,
-        criterion=nn.L1Loss(),
-        rank_corr_fn=assay_rank,
-        fisher_transform=True,
-    )
+        _, test_rank_corr = eval_with_batched_sets(
+            model,
+            test_loader,
+            criterion=nn.L1Loss(),
+            rank_corr_fn=assay_rank,
+            fisher_transform=True,
+        )
 
-    logger.info(
-        f"[{run_name}] Epoch: 0 Fold: {fold} Test Rank Corr: {test_rank_corr:.4f}"
-    )
+        logger.info(
+            f"[{run_name}] Epoch: 0 Fold: {fold} Test Rank Corr: {test_rank_corr:.4f} name"
+        )
 
     logger.info(f"{run_name} finished")
 
@@ -189,7 +193,7 @@ def main():
     fold = int(sys.argv[5])
 
     run_name = f"{dataset_name}_{fold}_{repr(method)}_{ident}"
-    init_logging(run_name)
+    init_logging(testing_run_name)
     logger = logging.getLogger(run_name)
     logger.info(f"seed={seed} method={repr(method)} dataset={dataset_name} fold={fold}")
     set_random_seeds(seed)
