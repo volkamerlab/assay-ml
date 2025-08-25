@@ -1,15 +1,12 @@
 import logging
-import traceback
-import uuid
 import sys
 from functools import partial
 from typing import Tuple, Callable
 
-import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from scipy.stats import spearmanr, pearsonr
+from scipy.stats import pearsonr
 
 from dti.model import (
     CombinedModel,
@@ -20,11 +17,7 @@ from dti.model import (
     MoleculeSetRank,
 )
 from dti.data import (
-    ActivityDataset,
-    SetActivityDataset,
     MultiSetActivityDataset,
-    PairDataset,
-    prepare_datasets,
     load_landrum,
     load_kinodata,
     load_nci,
@@ -37,17 +30,14 @@ from dti.data import (
 from dti.training import (
     AssayRankAccuracy,
     eval_with_batched_sets,
-    batch_pair_loss,
-    corr_loss,
 )
 from dti.utils import (
     Method,
     init_logging,
     set_random_seeds,
-    save_code_snapshot,
     device,
 )
-from dti.constants import DATA, ASSAY, COMPOUND, HODGE
+from dti.constants import DATA, ASSAY, COMPOUND, OUTPUT
 
 
 logger = logging.getLogger(__name__)
@@ -114,26 +104,20 @@ def test_batch(method: Method, default: int) -> int:
 
 def run_split(
     run_name: str,
+    test_run_name: str,
     method: Method,
     dataset_name: str,
     fold: int,
     seed: int,
 ):
     batch_size = 512
-    num_epochs = 50_000  # early stopping in place
     info_cols = [COMPOUND, ASSAY]
     data_dir = DATA / "processed" / dataset_name
-    train_tgt = tgt_name = "scaled_ic50"
-    aggregate = True
-    inter_assay_weight = None
-
-    if method == Method.HODGE:
-        inter_assay_weight = 0.0
-        train_tgt = HODGE
+    tgt_name = "scaled_ic50"
 
     model_cls, load_data = setup(method, dataset_name)
     msa = partial(MultiSetActivityDataset, max_set_size=1000)
-    shuffled_multiset = partial(msa, inter_assay=True)
+    shuffled_msa = partial(msa, inter_assay=True)
 
     data = load_data()
 
@@ -144,19 +128,17 @@ def run_split(
         cosine_agg=True,
     ).to(device)
     model.load_state_dict(
-        torch.load(OUTPUT / run_name / f"model{index}.pt", weights_only=True)
+        torch.load(
+            OUTPUT / run_name / f"model{fold}.pt",
+            weights_only=True,
+            map_location=device,
+        )
     )
     model.eval()
 
+    _, _, test_data = load_split(fold, data_dir, tgt_name)
 
-
-
-    _, _, test_data = load_split(
-        fold, data_dir, tgt_name, inter_assay_weight=inter_assay_weight
-    )
-    
-    for (name, val_dataset_cls) in [('shuffled', shuffled), ('assays', msa)]:
-        val_dataset_cls = msa
+    for name, val_dataset_cls in [("shuffled", shuffled_msa), ("assays", msa)]:
         test_dataset = val_dataset_cls(test_data, target=tgt_name, info_cols=info_cols)
 
         test_loader = DataLoader(
@@ -178,10 +160,10 @@ def run_split(
         )
 
         logger.info(
-            f"[{run_name}] Epoch: 0 Fold: {fold} Test Rank Corr: {test_rank_corr:.4f} name"
+            f"[{test_run_name}] Epoch: 0 Fold: {fold} Test Rank Corr: {test_rank_corr:.4f} {name}"
         )
 
-    logger.info(f"{run_name} finished")
+    logger.info(f"{test_run_name} finished")
 
 
 def main():
@@ -192,10 +174,16 @@ def main():
     method = Method.from_string(sys.argv[4])
     fold = int(sys.argv[5])
 
-    run_name = f"test_{dataset_name}_{fold}_{repr(method)}_{ident}"
-    init_logging(run_name)
-    logger = logging.getLogger(run_name)
+    run_name = f"{dataset_name}_{fold}_{repr(method)}_{ident}"
+    test_run_name = "test_" + run_name
+    init_logging(test_run_name)
+
+    logger = logging.getLogger(test_run_name)
     logger.info(f"seed={seed} method={repr(method)} dataset={dataset_name} fold={fold}")
     set_random_seeds(seed)
 
-    run_split(run_name, method, dataset_name, fold, seed)
+    run_split(run_name, test_run_name, method, dataset_name, fold, seed)
+
+
+if __name__ == "__main__":
+    main()
