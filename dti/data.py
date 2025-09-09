@@ -413,12 +413,22 @@ class MultiSetActivityDataset(ActivityDataset):
         logger.debug(f"Number of unused examples: {num_unused} / {len(self.data)}")
 
     def _shuffle_data(self):
-        idcs = torch.randperm(self.ligand_features.shape[0])
-        self.ligand_features = self.ligand_features[idcs]
-        self.labels = self.labels[idcs]
-        self.info = self.info[idcs]
-        if self.protein_features is not None:
-            self.protein_features = self.protein_features[idcs]
+        """Shuffle data only within groups of identical protein features."""
+        prot_array = self.protein_features.cpu().numpy()
+        _, group_ids = np.unique(prot_array, axis=0, return_inverse=True)
+
+        all_indices = np.arange(self.ligand_features.shape[0])
+        new_order = np.empty_like(all_indices)
+
+        for gid in np.unique(group_ids):
+            mask = group_ids == gid
+            idxs = all_indices[mask]
+            shuffled = self.random.permutation(idxs)
+            new_order[mask] = shuffled
+
+        self.ligand_features = self.ligand_features[new_order]
+        self.labels = self.labels[new_order]
+        self.info = self.info[new_order]
 
     def _make_batches(self):
         """Create batches of multiple sets for processing."""
