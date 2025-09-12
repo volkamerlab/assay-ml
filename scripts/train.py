@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from scipy.stats import spearmanr, pearsonr
+from scipy.stats import pearsonr
 
 from dti.model import (
     CombinedModel,
@@ -34,6 +34,7 @@ from dti.data import (
     load_activities,
     load_split,
 )
+from dti.featurization import MolFingerprint
 from dti.training import (
     AssayRankAccuracy,
     train_and_evaluate_model,
@@ -145,6 +146,7 @@ def test_batch(method: Method, default: int) -> int:
 
 def run_split(
     run_name: str,
+    mol_feat: str,
     method: Method,
     dataset_name: str,
     fold: int,
@@ -177,11 +179,12 @@ def run_split(
     train_data, val_data, test_data = load_split(
         fold, data_dir, tgt_name, inter_assay_weight=inter_assay_weight
     )
-    val_dataset = val_dataset_cls(val_data, target=tgt_name, info_cols=info_cols)
-    test_dataset = val_dataset_cls(test_data, target=tgt_name, info_cols=info_cols)
+    data_kwargs = dict(mol_featurizer=MolFingerprint(mol_feat), info_cols=info_cols)
+    val_dataset = val_dataset_cls(val_data, target=tgt_name, **data_kwargs)
+    test_dataset = val_dataset_cls(test_data, target=tgt_name, **data_kwargs)
 
     logger.info(f"training target: {train_tgt}")
-    train_dataset = dataset_cls(train_data, target=train_tgt, info_cols=info_cols)
+    train_dataset = dataset_cls(train_data, target=train_tgt, **data_kwargs)
 
     assert len(train_dataset) > 0
     train_loader = DataLoader(
@@ -241,8 +244,14 @@ def main():
     dataset_name = sys.argv[2].lower()
     method = Method.from_string(sys.argv[3])
     fold = int(sys.argv[4])
+    if len(sys.argv) > 5:
+        mol_feat = sys.argv[5].lower()
+    else:
+        mol_feat = "morgan"
 
-    run_name = f"{dataset_name}_{fold}_{repr(method)}_" + uuid.uuid4().hex[:4]
+    run_name = "_".join(
+        map(str, [dataset_name, mol_feat, fold, repr(method), uuid.uuid4().hex[:4]])
+    )
     init_logging(run_name)
     logger = logging.getLogger(run_name)
     logger.info(f"seed={seed} method={repr(method)} dataset={dataset_name} fold={fold}")
@@ -250,7 +259,7 @@ def main():
 
     set_random_seeds(seed)
 
-    run_split(run_name, method, dataset_name, fold, seed)
+    run_split(run_name, mol_feat, method, dataset_name, fold, seed)
 
 
 if __name__ == "__main__":
