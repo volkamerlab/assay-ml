@@ -7,6 +7,7 @@ from multiprocessing import Pool
 from enum import StrEnum, auto
 
 import torch
+import tqdm.auto as tqdm
 from esm import FastaBatchedDataset, pretrained
 from rdkit import Chem
 from rdkit.Chem import rdFingerprintGenerator
@@ -23,8 +24,8 @@ _mfpgen_cache: dict[Tuple, object] = {}
 class MolFingerprint(StrEnum):
     MORGAN = auto()
     RDKIT = auto()
-    TOPOLOGICAL_TORSION = auto()
-    ATOM_PAIR = auto()
+    TOPOTORSION = auto()
+    ATOMPAIR = auto()
     CHEMBERTA = auto()
 
     def _get_mfpgen(
@@ -41,11 +42,11 @@ class MolFingerprint(StrEnum):
                 _mfpgen_cache[key] = rdFingerprintGenerator.GetRDKitFPGenerator(
                     fpSize=fpSize
                 )
-            elif self is MolFingerprint.TOPOLOGICAL_TORSION:
+            elif self is MolFingerprint.TOPOTORSION:
                 _mfpgen_cache[key] = (
                     rdFingerprintGenerator.GetTopologicalTorsionGenerator(fpSize=fpSize)
                 )
-            elif self is MolFingerprint.ATOM_PAIR:
+            elif self is MolFingerprint.ATOMPAIR:
                 _mfpgen_cache[key] = rdFingerprintGenerator.GetAtomPairGenerator(
                     fpSize=fpSize
                 )
@@ -90,10 +91,17 @@ class MolFingerprint(StrEnum):
     def compute_parallel(self, smiles: Iterable[str], n_jobs: int = 16, **kwargs):
         if self is MolFingerprint.CHEMBERTA:
             logger.warning("Parallel compute not supported for ChemBERTa")
-            return [self.compute(s, **kwargs) for s in smiles]
+            return [self.compute(s, **kwargs) for s in tqdm.tqdm(smiles)]
 
         with Pool(n_jobs) as p:
             return p.map(functools.partial(self.compute, **kwargs), smiles)
+
+
+@functools.cache
+def _get_tokenizer_and_model(model_name: str) -> Tuple[object, object]:
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name)
+    return tokenizer, model
 
 
 def smiles_to_dl_embedding(
@@ -102,8 +110,7 @@ def smiles_to_dl_embedding(
     pooling: str = "mean",
 ):
     """Convert a list of SMILES strings into embeddings using ChemBERTa."""
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name)
+    tokenizer, model = _get_tokenizer_and_model(model_name)
     encoded = tokenizer(smiles_list, padding=True, truncation=True, return_tensors="pt")
 
     with torch.no_grad():
