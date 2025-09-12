@@ -354,6 +354,8 @@ class MultiSetActivityDataset(ActivityDataset):
         data (pd.DataFrame): DataFrame containing activity data.
         target (str): Column name for target values.
         info_cols (List[str]): Column names to include as information.
+        inter_assay (bool): Compute inter-assay sets (same target).
+        shuffle_within_target (bool): Retain target for inter-assay sets.
         model_name (str): Name of the protein language model.
         min_batch_size (int): Minimum size of a set to be included.
         max_set_size (int): Maximum samples per set (0 for no limit).
@@ -366,8 +368,9 @@ class MultiSetActivityDataset(ActivityDataset):
         data,
         target=...,
         info_cols=...,
-        inter_assay=False,
-        model_name="esm2_t33_650M_UR50D",
+        inter_assay: bool = False,
+        shuffle_within_target: bool = True,
+        model_name: str = "esm2_t33_650M_UR50D",
         min_batch_size: int = 3,
         max_set_size: int = 0,
         sets_per_batch: int = 20,
@@ -378,6 +381,7 @@ class MultiSetActivityDataset(ActivityDataset):
         self.max_set_size = max_set_size
         self.sets_per_batch = sets_per_batch
         self.inter_assay = inter_assay
+        self.shuffle_within_target = shuffle_within_target
         self.random = np.random.default_rng(random_seed)
 
         # Process and organize sets
@@ -414,17 +418,20 @@ class MultiSetActivityDataset(ActivityDataset):
 
     def _shuffle_data(self):
         """Shuffle data only within groups of identical protein features."""
-        prot_array = self.protein_features.cpu().numpy()
+        prot_array = self.data[TID].values.astype(str)
         _, group_ids = np.unique(prot_array, axis=0, return_inverse=True)
 
         all_indices = np.arange(self.ligand_features.shape[0])
         new_order = np.empty_like(all_indices)
 
-        for gid in np.unique(group_ids):
-            mask = group_ids == gid
-            idxs = all_indices[mask]
-            shuffled = self.random.permutation(idxs)
-            new_order[mask] = shuffled
+        if self.shuffle_within_target:
+            for gid in np.unique(group_ids):
+                mask = group_ids == gid
+                idxs = all_indices[mask]
+                shuffled = self.random.permutation(idxs)
+                new_order[mask] = shuffled
+        else:
+            new_order = self.random.permutation(np.arange(len(self.labels)))
 
         self.ligand_features = self.ligand_features[new_order]
         self.labels = self.labels[new_order]
