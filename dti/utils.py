@@ -23,6 +23,7 @@ from rdkit import DataStructs
 from rdkit.ML.Cluster import Butina
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.decomposition import PCA
+from rdkit.DataStructs.cDataStructs import TanimotoSimilarity
 
 from .constants import OUTPUT, SMILES
 
@@ -174,7 +175,7 @@ def init_logging(run_name: Union[str, None] = str(time.time())):
     console_handler = logging.StreamHandler()
     file_handler = logging.FileHandler(log_file)
 
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(logging.DEBUG)
     file_handler.setLevel(logging.DEBUG)
 
     formatter = logging.Formatter(
@@ -295,12 +296,19 @@ def tanimoto_distance_vector(fp_list):
         distances.extend(1.0 - s for s in sims)
     return distances
 
+
+def tanimoto(x, y):
+    return TanimotoSimilarity(x, y)
+
+
 def cluster_fingerprints(fingerprints, cutoff=0.2):
-    logger.info("Butina: Calculating distances row-by-row")
-    distance_vector = tanimoto_distance_vector(fingerprints)
     logger.info("Butina: Clustering")
     clusters = Butina.ClusterData(
-        distance_vector, len(fingerprints), cutoff, isDistData=True
+        fingerprints,
+        len(fingerprints),
+        cutoff,
+        isDistData=False,
+        distFunc=TanimotoSimilarity,
     )
     return sorted(clusters, key=len, reverse=True)
 
