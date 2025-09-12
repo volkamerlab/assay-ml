@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pandas as pd
 import numpy as np
-import tqdm.auto as tqdm
 
 
 import torch
@@ -14,7 +13,7 @@ from sklearn.preprocessing import StandardScaler
 
 from .constants import DATA, SMILES, ACT, TID, SEQUENCE, ASSAY, COMPOUND, HODGE
 from .utils import device
-from .featurization import par_compute_fp, esm2_features
+from .featurization import MolFingerprint, esm2_features
 from .hodge_ranking import parallel_hodge_rank
 
 logger = logging.getLogger(__name__)
@@ -34,15 +33,15 @@ class ActivityDataset(Dataset):
     def __init__(
         self,
         data: pd.DataFrame,
+        mol_featurizer: MolFingerprint,
         target: str = ACT,
         info_cols: List[str] = [],
         model_name: str = "esm2_t33_650M_UR50D",
-        n_jobs: int = 16,
     ):
         super().__init__()
         logger.info(f"creating dataset of size {len(data)}")
         logger.info("computing fingerprints")
-        fps = par_compute_fp(data[SMILES].values, n_jobs=n_jobs)
+        fps = mol_featurizer.compute_parallel(data[SMILES].values)
         mask = [fp is not None for fp in fps]
         if len(mask) - sum(mask) > 0:
             logger.info(
@@ -321,13 +320,13 @@ class MultiSetActivityDataset(ActivityDataset):
         info_cols=...,
         inter_assay: bool = False,
         shuffle_within_target: bool = True,
-        model_name: str = "esm2_t33_650M_UR50D",
         min_batch_size: int = 3,
         max_set_size: int = 0,
         sets_per_batch: int = 20,
         random_seed: int = 0,
+        **kwargs,
     ):
-        super().__init__(data, target, info_cols, model_name)
+        super().__init__(data, target=target, info_cols=info_cols, **kwargs)
         self.min_batch_size = min_batch_size
         self.max_set_size = max_set_size
         self.sets_per_batch = sets_per_batch
@@ -749,7 +748,7 @@ def load_nci(path: Path = DATA / "raw" / "atcc.csv") -> pd.DataFrame:
 
 
 def load_solubility(path: Path = DATA / "raw" / "solubility.csv") -> pd.DataFrame:
-    logger.info(f"loading ChEMBL solubility data")
+    logger.info("loading ChEMBL solubility data")
     data = pd.read_csv(path)
     return _process(
         data,
@@ -777,7 +776,7 @@ def load_lipo(path: Path = DATA / "raw" / "lipo.csv") -> pd.DataFrame:
 
 
 def load_clearance(path: Path = DATA / "raw" / "clearance.csv") -> pd.DataFrame:
-    logger.info(f"loading ChEMBL solubility data")
+    logger.info("loading ChEMBL solubility data")
     data = pd.read_csv(path)
     return _process(
         data,

@@ -1,5 +1,4 @@
-from array import array
-from typing import Union, Iterable
+from typing import Union
 import functools
 import subprocess
 import time
@@ -8,9 +7,7 @@ import tarfile
 from pathlib import Path
 from enum import Enum, unique
 import random
-from multiprocessing import Pool
 import shutil
-import os, multiprocessing as mp
 
 import torch
 import pandas as pd
@@ -18,7 +15,6 @@ import numpy as np
 from tqdm.auto import tqdm
 from rdkit import Chem
 from rdkit.Chem.Scaffolds import MurckoScaffold
-from rdkit.Chem import rdFingerprintGenerator
 from rdkit import DataStructs
 from rdkit.ML.Cluster import Butina
 from sklearn.cluster import AgglomerativeClustering
@@ -201,27 +197,6 @@ def get_scaffold(smiles: str, generic: bool = True) -> str:
     except Exception as e:
         logger.error(f"error processing SMILES {smiles}: {e}")
         return None
-
-
-@functools.cache
-def compute_fp(smi: str, radius: int = 3, fp_dim: int = 2048, target: str = "numpy"):
-    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=fp_dim)
-    try:
-        match target:
-            case "numpy":
-                return mfpgen.GetFingerprintAsNumPy(Chem.MolFromSmiles(smi))
-            case "native":
-                return mfpgen.GetFingerprint(Chem.MolFromSmiles(smi))
-            case _:
-                raise ValueError(f"unkown fingerpritn target: '{target}'")
-    except TypeError:
-        logger.warn(f"No fp for SMILES={smi}")
-        return None
-
-
-def par_compute_fp(smiles: Iterable[str], n_jobs=16, target: str = "numpy"):
-    with Pool(n_jobs) as p:
-        return p.map(functools.partial(compute_fp, target=target), smiles)
 
 
 def add_scaffold_col(

@@ -2,40 +2,125 @@ import logging
 import functools
 import pandas as pd
 from pathlib import Path
-from typing import Union, Iterable, List
+from typing import Union, Iterable, List, Tuple
 from multiprocessing import Pool
+from enum import StrEnum, auto
 
 import torch
 from esm import FastaBatchedDataset, pretrained
 from rdkit import Chem
 from rdkit.Chem import rdFingerprintGenerator
+from transformers import AutoTokenizer, AutoModel
 
-from .constants import DATA, SMILES, ACT, TID, SEQUENCE, ASSAY, COMPOUND
+from .constants import DATA, TID, SEQUENCE
 from .utils import device
 
 
 logger = logging.getLogger(__name__)
+_mfpgen_cache: dict[Tuple, object] = {}
 
 
-@functools.cache
-def compute_fp(smi: str, radius: int = 3, fp_dim: int = 2048, target: str = "numpy"):
-    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=fp_dim)
-    try:
+class MolFingerprint(StrEnum):
+    MORGAN = auto()
+    RDKIT = auto()
+    TOPOLOGICAL_TORSION = auto()
+    ATOM_PAIR = auto()
+    CHEMBERTA = auto()
+
+    def _get_mfpgen(
+        self,
+        fpSize: int = 2048,
+    ):
+        key = (self.value, fpSize)
+        if key not in _mfpgen_cache:
+            if self is MolFingerprint.MORGAN:
+                _mfpgen_cache[key] = rdFingerprintGenerator.GetMorganGenerator(
+                    radius=3, fpSize=fpSize
+                )
+            elif self is MolFingerprint.RDKIT:
+                _mfpgen_cache[key] = rdFingerprintGenerator.GetRDKitFPGenerator(
+                    fpSize=fpSize
+                )
+            elif self is MolFingerprint.TOPOLOGICAL_TORSION:
+                _mfpgen_cache[key] = (
+                    rdFingerprintGenerator.GetTopologicalTorsionGenerator(fpSize=fpSize)
+                )
+            elif self is MolFingerprint.ATOM_PAIR:
+                _mfpgen_cache[key] = rdFingerprintGenerator.GetAtomPairGenerator(
+                    fpSize=fpSize
+                )
+            else:
+                raise ValueError(f"{self} does not support RDKit generators")
+        return _mfpgen_cache[key]
+
+    @functools.cache
+    def compute(
+        self,
+        smi: str,
+        target: str = "numpy",
+        radius: int = 3,
+        fpSize: int = 2048,
+        minPath: int = 1,
+        maxPath: int = 7,
+        useHs: bool = True,
+        model_name: str = "DeepChem/ChemBERTa-77M-MLM",
+        pooling: str = "mean",
+    ):
+        """Compute fingerprint or embedding for a single SMILES."""
+        if self is MolFingerprint.CHEMBERTA:
+            return smiles_to_dl_embedding(
+                [smi], model_name=model_name, pooling=pooling
+            )[0]
+
+        mol = Chem.MolFromSmiles(smi)
+        if mol is None:
+            logger.warning(f"No fp for SMILES={smi}")
+            return None
+
+        mfpgen = self._get_mfpgen(fpSize)
+
         match target:
             case "numpy":
-                return mfpgen.GetFingerprintAsNumPy(Chem.MolFromSmiles(smi))
+                return mfpgen.GetFingerprintAsNumPy(mol)
             case "native":
-                return mfpgen.GetFingerprint(Chem.MolFromSmiles(smi))
+                return mfpgen.GetFingerprint(mol)
             case _:
-                raise ValueError(f"unkown fingerprint target: '{target}'")
-    except TypeError:
-        logger.warn(f"No fp for SMILES={smi}")
-        return None
+                raise ValueError(f"Unknown fingerprint target: '{target}'")
+
+    def compute_parallel(self, smiles: Iterable[str], n_jobs: int = 16, **kwargs):
+        if self is MolFingerprint.CHEMBERTA:
+            logger.warning("Parallel compute not supported for ChemBERTa")
+            return [self.compute(s, **kwargs) for s in smiles]
+
+        with Pool(n_jobs) as p:
+            return p.map(functools.partial(self.compute, **kwargs), smiles)
 
 
-def par_compute_fp(smiles: Iterable[str], n_jobs=16, target: str = "numpy"):
-    with Pool(n_jobs) as p:
-        return p.map(functools.partial(compute_fp, target=target), smiles)
+def smiles_to_dl_embedding(
+    smiles_list: Iterable[str],
+    model_name: str = "DeepChem/ChemBERTa-77M-MLM",
+    pooling: str = "mean",
+):
+    """Convert a list of SMILES strings into embeddings using ChemBERTa."""
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name)
+    encoded = tokenizer(smiles_list, padding=True, truncation=True, return_tensors="pt")
+
+    with torch.no_grad():
+        outputs = model(**encoded)
+        hidden_states = outputs.last_hidden_state  # (batch_size, seq_len, hidden_dim)
+
+    if pooling == "mean":
+        attention_mask = encoded["attention_mask"].unsqueeze(-1)
+        summed = torch.sum(hidden_states * attention_mask, dim=1)
+        counts = torch.clamp(attention_mask.sum(dim=1), min=1e-9)
+        embeddings = summed / counts
+    elif pooling == "cls":
+        embeddings = hidden_states[:, 0]
+    else:
+        raise ValueError("Pooling must be 'mean' or 'cls'")
+
+    return embeddings.detach().numpy()
 
 
 def esm2_features(
