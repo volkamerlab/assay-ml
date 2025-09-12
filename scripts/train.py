@@ -179,7 +179,8 @@ def run_split(
     train_data, val_data, test_data = load_split(
         fold, data_dir, tgt_name, inter_assay_weight=inter_assay_weight
     )
-    data_kwargs = dict(mol_featurizer=MolFingerprint(mol_feat), info_cols=info_cols)
+    mol_feat = MolFingerprint(mol_feat)
+    data_kwargs = dict(mol_featurizer=mol_feat, info_cols=info_cols)
     val_dataset = val_dataset_cls(val_data, target=tgt_name, **data_kwargs)
     test_dataset = val_dataset_cls(test_data, target=tgt_name, **data_kwargs)
 
@@ -221,6 +222,7 @@ def run_split(
         test_loader,
         method,
         fold,
+        ligand_dim=mol_feat.dim,
         multi_batch=multi_batch,
         batch_size=batch_size,
         rank_corr_fn=assay_rank,

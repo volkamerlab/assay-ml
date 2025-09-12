@@ -54,16 +54,18 @@ class MolFingerprint(StrEnum):
                 raise ValueError(f"{self} does not support RDKit generators")
         return _mfpgen_cache[key]
 
+    @property
+    def dim(self):
+        if self == MolFingerprint.CHEMBERTA:
+            return 384
+        else:
+            return 2048
+
     @functools.cache
     def compute(
         self,
         smi: str,
         target: str = "numpy",
-        radius: int = 3,
-        fpSize: int = 2048,
-        minPath: int = 1,
-        maxPath: int = 7,
-        useHs: bool = True,
         model_name: str = "DeepChem/ChemBERTa-77M-MLM",
         pooling: str = "mean",
     ):
@@ -78,7 +80,7 @@ class MolFingerprint(StrEnum):
             logger.warning(f"No fp for SMILES={smi}")
             return None
 
-        mfpgen = self._get_mfpgen(fpSize)
+        mfpgen = self._get_mfpgen()
 
         match target:
             case "numpy":
