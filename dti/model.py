@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Iterable
 import torch
 from torch import Tensor, tensor, randn
 from torch.nn import (
@@ -29,16 +29,11 @@ class MolecularModel(nn.Module):
 
         self.molecule_input_size = ligand_input_size
         self.embedding_size = embedding_size
-        self.embed = nn.Sequential(
-            nn.Linear(self.molecule_input_size, embedding_size),
-            nn.SiLU(),
-            nn.Linear(embedding_size, embedding_size),
-            nn.SiLU(),
-            nn.Linear(embedding_size, embedding_size),
-            nn.SiLU(),
-            nn.Linear(embedding_size, embedding_size),
-            nn.SiLU(),
-            nn.Linear(embedding_size, embedding_size),
+        self.embed = _mlp(
+            input_size=self.molecule_input_size,
+            hidden_size=embedding_size,
+            output_size=embedding_size,
+            hidden_layers=4,
         )
         scaled_hidden_dim = embedding_size // 2
         self.readout = nn.Sequential(
@@ -51,7 +46,7 @@ class MolecularModel(nn.Module):
             nn.Linear(scaled_hidden_dim, 1),
         )
 
-    def forward(self, _protein, molecule):
+    def forward(self, _protein, molecule, **kwargs):
         # the  first argument (protein embeddings) is ignored
         if molecule.dim() == 3:
             molecule = molecule.squeeze()
@@ -64,7 +59,7 @@ class PairMolecularModel(MolecularModel):
     def __init__(self, ligand_input_size, embedding_size, **kwargs):
         super().__init__(ligand_input_size, embedding_size, **kwargs)
 
-    def forward(self, _protein, molecule: Tensor):
+    def forward(self, _protein, molecule: Tensor, **kwargs):
         x = self.embed(molecule)
         if x.dim() == 2:  # full (b, b) pairs
             n, d = molecule.size(0), self.embedding_size
@@ -90,28 +85,17 @@ class CombinedModel(nn.Module):
         self.ligand_input_size = ligand_input_size
         self.cosine_agg = cosine_agg
         self.embedding_size = embedding_size
-        self.protein_mlp = nn.Sequential(
-            nn.Linear(protein_input_size, hidden_layer_size),
-            nn.SiLU(),
-            nn.Linear(hidden_layer_size, hidden_layer_size),
-            nn.SiLU(),
-            nn.Linear(hidden_layer_size, hidden_layer_size),
-            nn.SiLU(),
-            nn.Linear(hidden_layer_size, hidden_layer_size),
-            nn.SiLU(),
-            nn.Linear(hidden_layer_size, embedding_size),
+        self.protein_mlp = _mlp(
+            input_size=protein_input_size,
+            hidden_size=hidden_layer_size,
+            output_size=embedding_size,
+            hidden_layers=4,
         )
-
-        self.ligand_mlp = nn.Sequential(
-            nn.Linear(self.ligand_input_size, hidden_layer_size),
-            nn.SiLU(),
-            nn.Linear(hidden_layer_size, hidden_layer_size),
-            nn.SiLU(),
-            nn.Linear(hidden_layer_size, hidden_layer_size),
-            nn.SiLU(),
-            nn.Linear(hidden_layer_size, hidden_layer_size),
-            nn.SiLU(),
-            nn.Linear(hidden_layer_size, embedding_size),
+        self.ligand_mlp = _mlp(
+            input_size=ligand_input_size,
+            hidden_size=hidden_layer_size,
+            output_size=embedding_size,
+            hidden_layers=4,
         )
 
         scaled_hidden_dim = hidden_layer_size // 2
@@ -125,7 +109,7 @@ class CombinedModel(nn.Module):
             nn.Linear(scaled_hidden_dim, 1),
         )
 
-    def forward(self, protein, ligand):
+    def forward(self, protein, ligand, **kwargs):
         if ligand.dim() == 3:
             ligand = ligand.squeeze()
             protein = protein.squeeze()
@@ -161,7 +145,7 @@ class PairCombinedModel(CombinedModel):
             cosine_agg=False,
         )
 
-    def forward(self, protein, ligand):
+    def forward(self, protein, ligand, **kwargs):
         protein_emb = self.protein_mlp(protein)
         x = self.ligand_mlp(ligand)
         if x.dim() == 2:  # all pairs
@@ -215,7 +199,7 @@ class MoleculeSetRank(Module):
         self,
         _protein: Tensor,
         ligand: Tensor,
-        attn_mask: Tensor | None = None,
+        set_ids: Tensor,
     ) -> Tensor:
         """
         Only supports batch size 1 (ie 1 intra assay group of molecule)
@@ -228,11 +212,74 @@ class MoleculeSetRank(Module):
             Tensor: unnormalized ranking scores (N, 1)
         """
         x_ligand = self.embed_ligand(ligand.squeeze())
+        attn_mask = make_block_diag_mask(set_ids, num_heads=self.num_heads)
         h = self.set_transformer(x_ligand, attn_mask=attn_mask)
         return self.ouput(h).squeeze()
 
 
-class SetRankModel(MoleculeSetRank):
+class BayesianSetRankModel(MoleculeSetRank):
+    def __init__(
+        self,
+        n_bins: int,
+        ligand_input_size: int,
+        hidden_channels: int = 512,
+        p_dropout: float = 0.05,
+        num_heads: int = 8,
+        **kwargs,
+    ):
+        super().__init__()
+        self.n_bins = n_bins
+        self.distribution_encoder = _mlp(
+            input_size=self.n_bins,
+            hidden_size=self.n_bins * 2,
+            output_size=hidden_channels,
+            hidden_layers=1,
+        )
+        self.embed_ligand = _mlp(
+            input_size=ligand_input_size,
+            hidden_size=hidden_channels,
+            output_size=hidden_channels,
+            hidden_layers=4,
+        )
+        self.num_heads = num_heads
+        self.combine_repr = Sequential(
+            Linear(hidden_channels * 2, hidden_channels * 2),
+            SiLU(),
+            Linear(hidden_channels * 2, hidden_channels),
+        )
+        self.set_transformer = SetTransformer(
+            hidden_channels=hidden_channels,
+            num_heads=self.num_heads,
+            ffn_hidden_layers=2,
+            num_blocks=8,
+            dropout=p_dropout,
+        )
+        self.ouput = Sequential(
+            Linear(hidden_channels, hidden_channels),
+            SiLU(),
+            BatchNorm1d(hidden_channels),
+            Linear(hidden_channels, hidden_channels),
+            SiLU(),
+            Linear(hidden_channels, n_bins),
+        )
+
+    def forward(
+        self,
+        ligand: Tensor,
+        dist: Tensor,
+        sample_mask: Tensor,
+        set_ids: Tensor,
+    ) -> Tensor:
+        attn_mask = make_block_diag_mask(set_ids, num_heads=self.num_heads)
+        attn_mask = torch.logical_or(make_asymmetric_mask(sample_mask))
+        x_ligand = self.embed_ligand(ligand)
+        x_dist = self.embed_dist(dist)
+        x = self.combine_repr(torch.cat(x_ligand, x_dist, axis=1))
+        h = self.set_transformer(x, attn_mask=attn_mask)
+        return self.ouput(h).squeeze()
+
+
+class ComplexSetRank(MoleculeSetRank):
     def __init__(
         self,
         ligand_input_size: int,
@@ -256,7 +303,7 @@ class SetRankModel(MoleculeSetRank):
         self,
         protein: Tensor,
         ligand: Tensor,
-        attn_mask: Tensor | None = None,
+        set_ids: Tensor,
     ) -> Tensor:
         """
         Only supports batch size 1 (ie 1 intra assay group of molecule)
@@ -271,6 +318,7 @@ class SetRankModel(MoleculeSetRank):
         x_ligand = self.embed_ligand(ligand)
         x_protein = self.embed_protein(protein)
         x = self.combine_with_query(x_ligand, x_protein)
+        attn_mask = make_block_diag_mask(set_ids, num_heads=self.num_heads)
         h = self.set_transformer(x, attn_mask=attn_mask)
         return self.ouput(h).squeeze()
 
@@ -390,24 +438,23 @@ def digitize_labels(y: torch.Tensor, edges: torch.Tensor) -> torch.Tensor:
     return torch.bucketize(y, edges[1:-1], right=False).long()
 
 
-class BayesianSetTransformer(SetTransformer):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-
-def make_block_diag_mask(set_sizes: list[int]) -> torch.Tensor:
+def make_block_diag_mask(set_ids: torch.Tensor, num_heads: int = None) -> torch.Tensor:
     """
-    Construct a block-diagonal attention mask such that tokens
-    from different sets cannot attend to each other.
+    Create a mask where elements can only attend within their set.
+
+    Args:
+        set_ids: Tensor of shape (N,) with set identifier for each element
+        num_heads: Number of attention heads (if None, returns 2D mask)
+
+    Returns:
+        Attention mask of shape (N, N) or (num_heads, N, N) where True means "mask out" (no attention)
     """
-    total = sum(set_sizes)
-    mask = torch.zeros(total, total, dtype=torch.bool)
-    start = 0
-    for size in set_sizes:
-        # block for this set is False (no mask), others are True (masked out)
-        mask[start : start + size, :start] = True
-        mask[start : start + size, start + size :] = True
-        start += size
+    set_ids = set_ids.flatten()
+    mask = set_ids.unsqueeze(0) != set_ids.unsqueeze(1)  # (N, N)
+
+    if num_heads is not None:
+        mask = mask.unsqueeze(0).expand(num_heads, -1, -1)  # (num_heads, N, N)
+
     return mask
 
 
@@ -474,7 +521,7 @@ def test_no_mask_all_to_all():
     x = randn(4, 8)
     block = SetAttentionBlock(8, 4, 1, dropout=0)
     out_no_mask = block(x, attn_mask=None)
-    mask = make_block_diag_mask([4])
+    mask = make_block_diag_mask([1, 1, 1, 1])
     out_masked = block(x, attn_mask=mask)
     torch.testing.assert_close(out_no_mask, out_masked)
 
@@ -482,7 +529,7 @@ def test_no_mask_all_to_all():
 def test_block_diag_mask_independent_sets():
     x = randn(8, 16)
     block = SetAttentionBlock(16, 2, 1, dropout=0)
-    mask = make_block_diag_mask([4, 4])
+    mask = make_block_diag_mask([1, 1, 1, 1, 2, 2, 2, 2])
     out, weights = block(x, attn_mask=mask, need_weights=True)
     torch.isclose(
         (mask.type(torch.float64) * weights).sum(), tensor(0.0, dtype=torch.float64)

@@ -237,14 +237,10 @@ def train_with_batched_sets(
         num_sets = metadata["num_sets"].squeeze()
         set_ids_tensor = metadata["set_ids_tensor"].to(device)
 
-        model_kwargs = dict()
-        if hasattr(model, "num_heads"):
-            model_kwargs["attn_mask"] = create_set_attention_mask_from_ids(
-                set_ids_tensor, model.num_heads
-            )
-
         predictions = model(
-            protein_features.squeeze(), ligand_features.squeeze(), **model_kwargs
+            protein_features.squeeze(),
+            ligand_features.squeeze(),
+            set_ids=set_ids_tensor,
         ).squeeze()
 
         labels = labels.squeeze()
@@ -309,14 +305,10 @@ def eval_with_batched_sets(
         labels = labels.squeeze()
         set_ids_tensor = metadata["set_ids_tensor"].to(device)
 
-        model_kwargs = dict()
-        if hasattr(model, "num_heads"):
-            model_kwargs["attn_mask"] = create_set_attention_mask_from_ids(
-                set_ids_tensor, model.num_heads
-            )
-
         predictions = model(
-            protein_features.squeeze(), ligand_features.squeeze(), **model_kwargs
+            protein_features.squeeze(),
+            ligand_features.squeeze(),
+            set_ids=set_ids_tensor,
         ).squeeze()
 
         all_preds.extend(predictions.detach().cpu().numpy().flatten())

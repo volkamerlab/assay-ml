@@ -16,7 +16,7 @@ from dti.model import (
     MolecularModel,
     PairCombinedModel,
     PairMolecularModel,
-    SetRankModel,
+    ComplexSetRank,
     MoleculeSetRank,
 )
 from dti.data import (
@@ -109,11 +109,11 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
         case Method.IC50SETS | Method.SETS if mol_only:
             return MoleculeSetRank, msa, msa
         case Method.IC50SETS | Method.SETS:
-            return SetRankModel, msa, msa
+            return ComplexSetRank, msa, msa
         case Method.IC50ALLSETS | Method.ALLSETS if mol_only:
             return MoleculeSetRank, shuffled_multiset, msa
         case Method.IC50ALLSETS | Method.ALLSETS:
-            return SetRankModel, shuffled_multiset, msa
+            return ComplexSetRank, shuffled_multiset, msa
         case _:
             logger.error(f"No model and dataset configuration for method: {method}")
             sys.exit(1)
