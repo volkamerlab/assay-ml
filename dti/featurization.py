@@ -27,7 +27,6 @@ class MolFingerprint(StrEnum):
     TOPOTORSION = auto()
     ATOMPAIR = auto()
     CHEMBERTA = auto()
-    MOLBERT = auto()
 
     def _get_mfpgen(
         self,
@@ -72,10 +71,6 @@ class MolFingerprint(StrEnum):
         if self is MolFingerprint.CHEMBERTA:
             return smiles_to_dl_embedding(
                 [smi], model_name="DeepChem/ChemBERTa-77M-MLM", pooling="mean"
-            )[0]
-        elif self is MolFingerprint.MOLBERT:
-            return smiles_to_dl_embedding(
-                [smi], model_name="ibm/SMILES-Transformer", pooling="mean"
             )[0]
 
         mol = Chem.MolFromSmiles(smi)
