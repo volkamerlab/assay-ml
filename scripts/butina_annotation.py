@@ -1,16 +1,9 @@
 import logging
 from pathlib import Path
-from functools import namedtuple, partial
 
-import pandas as pd
-import numpy as np
-
-import tqdm.auto as tqdm
 
 from dti import data
-from dti.data import split_data
 from dti.utils import butina_clusters, init_logging
-from dti.constants import ACT, ASSAY
 
 
 def main():

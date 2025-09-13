@@ -1,24 +1,17 @@
 import logging
-import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import functools
 from pathlib import Path
-import itertools as itt
 from multiprocessing import Pool
 from dti.utils import compute_fp
 
-import distinctipy
-from scipy.stats import pearsonr, spearmanr, kendalltau
 import umap
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.decomposition import PCA
 from sklearn.neighbors import kneighbors_graph
 
 from dti import data
-from dti.utils import scaffold_split, umap_split, init_logging
-from dti.constants import SMILES, ASSAY, ACT
+from dti.utils import init_logging
+from dti.constants import SMILES
 
 
 def main():

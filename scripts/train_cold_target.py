@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from scipy.stats import spearmanr, pearsonr
+from scipy.stats import pearsonr
 
 from dti.model import (
     CombinedModel,
@@ -42,7 +42,7 @@ from dti.utils import (
     set_random_seeds,
     save_code_snapshot,
 )
-from dti.constants import DATA, ASSAY, COMPOUND, HODGE, TID, SEQUENCE
+from dti.constants import DATA, ASSAY, COMPOUND, HODGE, TID
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +231,9 @@ def main():
     method = Method.from_string(sys.argv[3])
     fold = int(sys.argv[4])
 
-    run_name = f"{dataset_name}_{fold}_{repr(method)}_" + uuid.uuid4().hex[:4] + "_coldtgt"
+    run_name = (
+        f"{dataset_name}_{fold}_{repr(method)}_" + uuid.uuid4().hex[:4] + "_coldtgt"
+    )
     init_logging(run_name)
     logger = logging.getLogger(run_name)
     logger.info(f"seed={seed} method={repr(method)} dataset={dataset_name} fold={fold}")
