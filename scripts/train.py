@@ -1,3 +1,4 @@
+import argparse
 import logging
 import traceback
 import uuid
@@ -18,6 +19,8 @@ from dti.model import (
     PairMolecularModel,
     ComplexSetRank,
     MoleculeSetRank,
+    MoleculeBayesianSetRankModel,
+    ComplexBayesianSetRankModel,
 )
 from dti.data import (
     ActivityDataset,
@@ -38,6 +41,7 @@ from dti.featurization import MolFingerprint
 from dti.training import (
     AssayRankAccuracy,
     train_and_evaluate_model,
+    train_and_evaluate_pfn_model,
     batch_pair_loss,
     corr_loss,
 )
@@ -52,7 +56,7 @@ from dti.constants import DATA, ASSAY, COMPOUND, HODGE
 logger = logging.getLogger(__name__)
 
 
-def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
+def setup(method: Method, dataset: str) -> Tuple[type, type, type, Callable]:
     match dataset.lower():
         case "kinodata":
             data, mol_only = load_kinodata, False
@@ -90,6 +94,10 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
     msa = partial(MultiSetActivityDataset, max_set_size=1000)
     shuffled_multiset = partial(msa, inter_assay=True)
     match method:
+        case Method.PFN if mol_only:
+            return MoleculeBayesianSetRankModel, msa, msa
+        case Method.PFN:
+            return ComplexBayesianSetRankModel, msa, msa
         case Method.PAIRS if mol_only:
             return PairMolecularModel, PairDataset, PairDataset
         case Method.PAIRS:
@@ -144,17 +152,15 @@ def test_batch(method: Method, default: int) -> int:
     return default if method.on_pairs else 1
 
 
-def run_split(
-    run_name: str,
-    mol_feat: str,
-    method: Method,
+def prepare_dataset_splits(
     dataset_name: str,
     fold: int,
-    seed: int,
+    method: Method,
+    mol_feat: str,
+    info_cols: list[str],
+    batch_size: int,
 ):
-    batch_size = 512
-    num_epochs = 50_000  # early stopping in place
-    info_cols = [COMPOUND, ASSAY]
+    """Prepare and return model class, dataloaders, ligand_dim, and raw data."""
     data_dir = DATA / "processed" / dataset_name
     train_tgt = tgt_name = "scaled_ic50"
     aggregate = True
@@ -181,13 +187,13 @@ def run_split(
     )
     mol_feat = MolFingerprint(mol_feat)
     data_kwargs = dict(mol_featurizer=mol_feat, info_cols=info_cols)
+
+    train_dataset = dataset_cls(train_data, target=train_tgt, **data_kwargs)
     val_dataset = val_dataset_cls(val_data, target=tgt_name, **data_kwargs)
     test_dataset = val_dataset_cls(test_data, target=tgt_name, **data_kwargs)
 
-    logger.info(f"training target: {train_tgt}")
-    train_dataset = dataset_cls(train_data, target=train_tgt, **data_kwargs)
-
     assert len(train_dataset) > 0
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=train_batch(method, batch_size),
@@ -208,60 +214,105 @@ def run_split(
         num_workers=0,
     )
 
-    # rstat = partial(spearmanr, nan_policy="raise")  # , variant="c")
-    rstat = pearsonr
-    assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
-    multi_batch = method in [Method.SETS, Method.IC50CORR]
-    training_loss = loss_fn(method, nn.SmoothL1Loss(reduction="none"))
-    train_short = method.on_sets or method.on_pairs
-    train_and_evaluate_model(
+    return (
         model_cls,
-        run_name,
         train_loader,
         val_loader,
         test_loader,
-        method,
-        fold,
-        ligand_dim=mol_feat.dim,
-        multi_batch=multi_batch,
+        mol_feat.dim,
+        data,
+        train_tgt,
+    )
+
+
+def run_split(
+    run_name: str,
+    mol_feat: str,
+    method: Method,
+    dataset_name: str,
+    fold: int,
+    seed: int,
+):
+    batch_size = 512
+    num_epochs = 50_000  # early stopping in place
+    info_cols = [COMPOUND, ASSAY]
+
+    (
+        model_cls,
+        train_loader,
+        val_loader,
+        test_loader,
+        ligand_dim,
+        data,
+        train_tgt,
+    ) = prepare_dataset_splits(
+        dataset_name, fold, method, mol_feat, info_cols, batch_size
+    )
+
+    rstat = pearsonr
+    assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
+    training_loss = loss_fn(method, nn.SmoothL1Loss(reduction="none"))
+    train_short = method.on_sets or method.on_pairs
+
+    logger.info(f"training target: {train_tgt}")
+
+    args = [model_cls, run_name, train_loader, val_loader, test_loader, method, fold]
+    kwargs = dict(
+        ligand_dim=ligand_dim,
+        multi_batch=method in [Method.SETS, Method.IC50CORR],
         batch_size=batch_size,
         rank_corr_fn=assay_rank,
-        embedding_size=512,
         num_epochs=num_epochs,
-        cosine_agg=True,
         training_loss=training_loss,
         patience_termination=100 if train_short else 1000,
         patience_lr=10 if train_short else 100,
-        normalize_training_batches=False,  # method.on_sets,
-        lr=1e-4,
         fisher_transform=method not in [Method.IC50SETS, Method.IC50ALLSETS],
     )
+    if model_cls in [ComplexBayesianSetRankModel, MoleculeBayesianSetRankModel]:
+        train_and_evaluate_pfn_model(*args, **kwargs)
+    else:
+        train_and_evaluate_model(*args, **kwargs)
 
     logger.info(f"{run_name} finished")
 
 
 def main():
     torch.cuda.empty_cache()
-    seed = int(sys.argv[1])
-    dataset_name = sys.argv[2].lower()
-    method = Method.from_string(sys.argv[3])
-    fold = int(sys.argv[4])
-    if len(sys.argv) > 5:
-        mol_feat = sys.argv[5].lower()
-    else:
-        mol_feat = "morgan"
+
+    parser = argparse.ArgumentParser(
+        description="Run experiment with given parameters."
+    )
+    parser.add_argument("--dataset", type=str, required=True, help="Dataset name")
+    parser.add_argument("--method", type=str, required=True, help="Method to use")
+    parser.add_argument("--fold", type=int, required=True, help="Fold number")
+    parser.add_argument("--seed", type=int, default=1, help="Random seed (default: 1)")
+    parser.add_argument(
+        "--mol-feat",
+        type=str,
+        default="morgan",
+        help="Molecular features (default: morgan)",
+    )
+
+    args = parser.parse_args()
+
+    dataset_name = args.dataset.lower()
+    method = Method(args.method)
+    mol_feat = args.mol_feat.lower()
 
     run_name = "_".join(
-        map(str, [dataset_name, mol_feat, fold, repr(method), uuid.uuid4().hex[:4]])
+        map(
+            str, [dataset_name, mol_feat, args.fold, repr(method), uuid.uuid4().hex[:4]]
+        )
     )
     init_logging(run_name)
     logger = logging.getLogger(run_name)
-    logger.info(f"seed={seed} method={repr(method)} dataset={dataset_name} fold={fold}")
+    logger.info(
+        f"seed={args.seed} method={repr(method)} dataset={dataset_name} fold={args.fold}"
+    )
     save_code_snapshot(run_name)
 
-    set_random_seeds(seed)
-
-    run_split(run_name, mol_feat, method, dataset_name, fold, seed)
+    set_random_seeds(args.seed)
+    run_split(run_name, mol_feat, method, dataset_name, args.fold, args.seed)
 
 
 if __name__ == "__main__":

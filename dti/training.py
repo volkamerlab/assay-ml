@@ -10,8 +10,10 @@ import torch
 from torch import nn, Tensor
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
+from torch.nn import BCEWithLogitsLoss
+import torch.nn.functional as F
 from scipy.stats import spearmanr
-
+from sklearn.metrics import roc_auc_score
 import logging
 from functools import namedtuple
 
@@ -19,8 +21,30 @@ from .utils import device
 from .constants import ASSAY, OUTPUT, ACT, COMPOUND, PREDICTION, TID
 from .hodge_ranking import assay_ranks
 from .data import MultiSetActivityDataset
+from .model import (
+    MoleculeBayesianSetRankModel,
+    ComplexBayesianSetRankModel,
+    fit_quantile_bins,
+    digitize_labels,
+)
 
 logger = logging.getLogger(__name__)
+
+_defaults = dict(
+    protein_dim=1280,
+    ligand_dim=2048,
+    embedding_size=512,
+    hidden_channels=512,
+    num_epochs=500,
+    patience_termination=100,
+    patience_lr=20,
+    rank_corr_fn=None,
+    training_loss=nn.MSELoss(),
+    cosine_agg=True,
+    normalize_training_batches=False,
+    lr=1e-4,
+    fisher_transform=True,
+)
 
 
 class AssayRankAccuracy:
@@ -214,6 +238,155 @@ def create_set_attention_mask_from_ids(
         mask = mask.unsqueeze(0).expand(num_heads, -1, -1)  # (num_heads, N, N)
 
     return mask
+
+
+def train_with_batched_masked_sets(
+    model, loader, optimizer, mask_fraction: float = 0.2, **kwargs
+):
+    """
+    Vectorized version: one forward per batch, per-set binning, losses masked.
+    """
+    model.train()
+    total_loss = 0.0
+    steps = 0
+    loss_fn = BCEWithLogitsLoss()
+
+    for protein_features, ligand_features, labels, info, metadata in tqdm.tqdm(
+        loader, desc="training"
+    ):
+        set_boundaries = metadata["set_boundaries"].squeeze()
+        num_sets = metadata["num_sets"].squeeze()
+        set_ids_tensor = metadata["set_ids_tensor"].to(device)
+
+        ligand_features = ligand_features.squeeze().to(device)
+        protein_features = protein_features.squeeze().to(device)
+        labels = labels.squeeze().to(device)
+        batch_size = labels.size(0)
+
+        sample_mask = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        dist = torch.zeros(batch_size, model.n_bins, device=device)
+        set_sizes = torch.zeros(num_sets, device=device)
+
+        for i in range(num_sets):
+            start_idx = set_boundaries[i]
+            end_idx = set_boundaries[i + 1]
+            set_size = end_idx - start_idx
+            set_sizes[i] = set_size
+            if set_size < 2:
+                continue
+
+            mask = torch.rand(set_size, device=device) < mask_fraction
+            sample_mask[start_idx:end_idx] = mask
+
+            edges = fit_quantile_bins(
+                labels[start_idx:end_idx][~mask], num_classes=model.n_bins
+            )
+            class_labels = digitize_labels(labels[start_idx:end_idx], edges)
+
+            dist[start_idx:end_idx] = F.one_hot(
+                class_labels, num_classes=model.n_bins
+            ).float()
+
+        preds = model(
+            ligand_features, protein_features, dist, sample_mask, set_ids_tensor
+        )  # (batch_size, model.n_bins)
+
+        batch_loss = loss_fn(preds, dist)
+
+        optimizer.zero_grad()
+        batch_loss.backward()
+        optimizer.step()
+        total_loss += batch_loss.item()
+        steps += 1
+
+    return total_loss / max(1, steps)
+
+
+@torch.no_grad()
+def evaluate_with_batched_masked_sets(
+    model,
+    loader,
+    mask_fraction: float = 0.2,
+):
+    """
+    Evaluate model on batched masked sets.
+    Computes BCE loss (overall) and AUROC (macro, one-vs-rest).
+    """
+    model.eval()
+    loss_fn = BCEWithLogitsLoss(reduction="sum")
+
+    total_loss = 0.0
+    total_samples = 0
+
+    all_targets = []
+    all_preds = []
+
+    for protein_features, ligand_features, labels, info, metadata in tqdm.tqdm(
+        loader, desc="evaluating"
+    ):
+        set_boundaries = metadata["set_boundaries"].squeeze()
+        num_sets = metadata["num_sets"].squeeze()
+        set_ids_tensor = metadata["set_ids_tensor"].to(device)
+
+        ligand_features = ligand_features.squeeze().to(device)
+        protein_features = protein_features.squeeze().to(device)
+        labels = labels.squeeze().to(device)
+        batch_size = labels.size(0)
+
+        sample_mask = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        dist = torch.zeros(batch_size, model.n_bins, device=device)
+
+        for i in range(num_sets):
+            start_idx = set_boundaries[i]
+            end_idx = set_boundaries[i + 1]
+            set_size = end_idx - start_idx
+            if set_size < 2:
+                continue
+
+            mask = torch.rand(set_size, device=device) < mask_fraction
+            sample_mask[start_idx:end_idx] = mask
+            labeled_mask = ~mask
+            if labeled_mask.sum() < 1:
+                continue
+
+            edges = fit_quantile_bins(
+                labels[start_idx:end_idx][labeled_mask], num_classes=model.n_bins
+            )
+            class_labels = digitize_labels(labels[start_idx:end_idx], edges)
+
+            dist[start_idx:end_idx] = F.one_hot(
+                class_labels, num_classes=model.n_bins
+            ).float()
+
+        preds = model(
+            ligand_features, protein_features, dist, sample_mask, set_ids_tensor
+        )  # (batch_size, n_bins)
+
+        batch_loss = loss_fn(preds, dist)
+        total_loss += batch_loss.item()
+        total_samples += batch_size
+
+        if sample_mask.any():
+            all_targets.append(dist[sample_mask].detach().cpu())
+            all_preds.append(torch.sigmoid(preds[sample_mask]).detach().cpu())
+
+    if all_targets:
+        y_true = torch.cat(all_targets).numpy()
+        y_score = torch.cat(all_preds).numpy()
+
+        try:
+            auroc = roc_auc_score(y_true, y_score, multi_class="ovr")
+        except ValueError:
+            auroc = float("nan")
+    else:
+        auroc = float("nan")
+
+    avg_loss = total_loss / max(1, total_samples)
+
+    return {
+        "loss": avg_loss,
+        "auroc": auroc,
+    }
 
 
 def train_with_batched_sets(
@@ -538,23 +711,7 @@ def train_and_evaluate_model(
         ],
     )
 
-    opts: Dict[str, Any] = (
-        dict(
-            protein_dim=1280,
-            ligand_dim=2048,
-            embedding_size=512,
-            num_epochs=500,
-            patience_termination=100,
-            patience_lr=20,
-            rank_corr_fn=None,
-            training_loss=nn.MSELoss(),
-            cosine_agg=True,
-            normalize_training_batches=False,
-            lr=1e-4,
-            fisher_transform=True,
-        )
-        | kwargs
-    )
+    opts: Dict[str, Any] = _defaults | kwargs
 
     logger.info("training options:")
     for k, v in opts.items():
@@ -562,25 +719,24 @@ def train_and_evaluate_model(
 
     model = model_cls(
         ligand_input_size=opts["ligand_dim"],
-        embedding_size=opts["embedding_size"],
         protein_input_size=opts["protein_dim"],
-        cosine_agg=opts["cosine_agg"],
+        **opts,
     ).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=opts["lr"])
     scheduler = ReduceLROnPlateau(
         optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
     )
-    train_fn = (
-        partial(train_with_batched_sets, fisher_transform=opts["fisher_transform"])
-        if isinstance(train_loader.dataset, MultiSetActivityDataset)
-        else train_epoch
-    )
-    eval_fn = (
-        eval_with_batched_sets
-        if isinstance(test_loader.dataset, MultiSetActivityDataset)
-        else evaluate_epoch
-    )
+
+    train_fn = train_epoch
+    if isinstance(train_loader.dataset, MultiSetActivityDataset):
+        train_fn = partial(
+            train_with_batched_sets, fisher_transform=opts["fisher_transform"]
+        )
+
+    eval_fn = evaluate_epoch
+    if isinstance(test_loader.dataset, MultiSetActivityDataset):
+        eval_fn = eval_with_batched_sets
 
     best_corr = 0.0
     epochs_without_improvement = 0
@@ -639,3 +795,109 @@ def train_and_evaluate_model(
                     f"[{run_name}] Early stopping triggered after {epoch + 1} epochs."
                 )
                 break
+
+
+def train_and_evaluate_pfn_model(
+    model_cls: Type[nn.Module],
+    run_name: str,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    test_loader: DataLoader,
+    target_name: str,
+    index: int,
+    **kwargs: Dict[str, Any],
+) -> None:
+    """
+    Train and evaluate the model with learning rate adjustment and early stopping.
+
+    This function handles the complete training pipeline including model instantiation,
+    optimization, learning rate scheduling, early stopping, and model persistence.
+
+    Args:
+        model_cls (Type[nn.Module]): Model class to instantiate.
+        run_name (str): Name of the training run for logging and file naming.
+        train_loader (DataLoader): DataLoader for training data.
+        val_loader (DataLoader): DataLoader for validation data.
+        test_loader (DataLoader): DataLoader for test data.
+        target_name (str): Name of the target being predicted.
+        index (int): Index/fold number for cross-validation.
+
+    Returns:
+        None: The function saves the model and training statistics but doesn't return a value.
+    """
+    logger.info(f"training model for target: {target_name}")
+    Epoch = namedtuple(
+        "Epoch",
+        [
+            "epoch",
+            "lr",
+            "train_loss",
+            "test_loss",
+        ],
+    )
+
+    opts: Dict[str, Any] = _defaults | kwargs
+
+    logger.info("training options:")
+    for k, v in opts.items():
+        logger.info(f" - {k}={v}")
+
+    model = model_cls(
+        ligand_input_size=opts["ligand_dim"],
+        protein_input_size=opts["protein_dim"],
+        **opts,
+    ).to(device)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=opts["lr"])
+    scheduler = ReduceLROnPlateau(
+        optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
+    )
+
+    best_corr = 0.0
+    epochs_without_improvement = 0
+    optimization = []
+
+    for epoch in range(opts["num_epochs"]):
+        train_loss = train_with_batched_masked_sets(
+            model,
+            train_loader,
+            optimizer,
+            criterion=opts["training_loss"],
+        )
+        val_results = evaluate_with_batched_masked_sets(model, val_loader)
+        logger.info(f"{val_results}")
+        val_loss = val_results["loss"]
+
+        scheduler.step(val_loss)
+        lr = scheduler.get_last_lr()
+        logger.debug(f"Learning rate: {lr}")
+
+        logger.info(
+            f"[{run_name}] Epoch: {epoch + 1} "
+            f"Fold: {index} "
+            f"Train Loss: {train_loss:.4e} "
+            f"Validation Loss: {val_loss:.4e} "
+        )
+
+        optimization.append(Epoch(epoch, lr, train_loss, val_loss))
+        pd.DataFrame(optimization).to_csv(
+            OUTPUT / run_name / "optimization.csv", index=False
+        )
+
+        # if val_rank_corr > best_corr:
+        #     logger.info(f"[{run_name}] updating test set predictions")
+        #     best_corr = val_rank_corr
+        #     epochs_without_improvement = 0
+        #     # torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")
+        #     logger.info(
+        #         f"[{run_name}] Epoch: {epoch + 1} "
+        #         f"Fold: {index} "
+        #         f"Test Rank Corr: {test_rank_corr:.4f}"
+        #     )
+        # else:
+        #     epochs_without_improvement += 1
+        #     if epochs_without_improvement >= opts["patience_termination"]:
+        #         logger.info(
+        #             f"[{run_name}] Early stopping triggered after {epoch + 1} epochs."
+        #         )
+        #         break

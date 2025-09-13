@@ -5,7 +5,7 @@ import time
 import logging
 import tarfile
 from pathlib import Path
-from enum import Enum, unique
+from enum import unique, StrEnum, auto
 import random
 import shutil
 
@@ -30,50 +30,27 @@ logger = logging.getLogger(__name__)
 
 @functools.total_ordering
 @unique
-class Method(Enum):
-    IC50 = "ic50"
-    IC50CORR = "ic50corr"
-    HODGE = "hodge"
-    ALLPAIRS = "allpairs"
-    PAIRS = "pairs"
-    ALLSETS = "allsets"
-    SETS = "sets"
-    IC50ALLSETS = "ic50allsets"
-    IC50SETS = "ic50sets"
-
-    @staticmethod
-    def from_string(m: str):
-        m_cleaned = m.upper().replace("_", "")
-        match m_cleaned:
-            case "IC50":
-                return Method.IC50
-            case "IC50CORR":
-                return Method.IC50CORR
-            case "HODGE":
-                return Method.HODGE
-            case "ALLPAIRS" | "PAIRALL":
-                return Method.ALLPAIRS
-            case "PAIR" | "PAIRS":
-                return Method.PAIRS
-            case "SET" | "SETS":
-                return Method.SETS
-            case "SETALL" | "ALLSETS":
-                return Method.ALLSETS
-            case "IC50SETS":
-                return Method.IC50SETS
-            case "IC50ALLSETS":
-                return Method.IC50ALLSETS
-            case _:
-                raise ValueError(f"Unknown method '{m_cleaned}'")
+class Method(StrEnum):
+    IC50 = auto()
+    IC50CORR = auto()
+    HODGE = auto()
+    ALLPAIRS = auto()
+    PAIRS = auto()
+    ALLSETS = auto()
+    SETS = auto()
+    IC50ALLSETS = auto()
+    IC50SETS = auto()
+    PFN = auto()
 
     @property
     def on_sets(self) -> bool:
-        return self in [
+        return self in {
+            Method.PFN,
             Method.SETS,
             Method.ALLSETS,
             Method.IC50SETS,
             Method.IC50ALLSETS,
-        ]
+        }
 
     @property
     def on_pairs(self) -> bool:
@@ -81,7 +58,13 @@ class Method(Enum):
 
     @property
     def assay_based(self) -> bool:
-        return self in [Method.PAIRS, Method.SETS, Method.HODGE, Method.IC50SETS]
+        return self in [
+            Method.PFN,
+            Method.PAIRS,
+            Method.SETS,
+            Method.HODGE,
+            Method.IC50SETS,
+        ]
 
     @property
     def point_prediction(self):
@@ -89,6 +72,8 @@ class Method(Enum):
 
     def __str__(self):
         match self:
+            case Method.PFN:
+                return "PFN"
             case Method.IC50:
                 return "IC50"
             case Method.IC50CORR:
@@ -160,7 +145,7 @@ def save_code_snapshot(run_name: str):
         for py_file in python_files:
             tar.add(py_file, arcname=py_file)
 
-    logger.info(f"code archive created: {archive_name}")
+    logger.info("code archive created: [archive_name]")
 
 
 def init_logging(run_name: Union[str, None] = str(time.time())):

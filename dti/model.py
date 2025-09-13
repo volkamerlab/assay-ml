@@ -1,8 +1,9 @@
-from typing import Literal, Iterable
+from typing import Literal
 import torch
 from torch import Tensor, tensor, randn
 from torch.nn import (
     Dropout,
+    Parameter,
     LayerNorm,
     Linear,
     Module,
@@ -217,17 +218,22 @@ class MoleculeSetRank(Module):
         return self.ouput(h).squeeze()
 
 
-class BayesianSetRankModel(MoleculeSetRank):
+class MoleculeBayesianSetRankModel(MoleculeSetRank):
     def __init__(
         self,
-        n_bins: int,
         ligand_input_size: int,
+        n_bins: int = 10,
         hidden_channels: int = 512,
         p_dropout: float = 0.05,
         num_heads: int = 8,
         **kwargs,
     ):
-        super().__init__()
+        super().__init__(
+            ligand_input_size=ligand_input_size,
+            hidden_channels=hidden_channels,
+            p_dropout=p_dropout,
+            num_heads=num_heads,
+        )
         self.n_bins = n_bins
         self.distribution_encoder = _mlp(
             input_size=self.n_bins,
@@ -242,6 +248,7 @@ class BayesianSetRankModel(MoleculeSetRank):
             hidden_layers=4,
         )
         self.num_heads = num_heads
+        self.default_dist_emb = Parameter(torch.zeros(hidden_channels))
         self.combine_repr = Sequential(
             Linear(hidden_channels * 2, hidden_channels * 2),
             SiLU(),
@@ -273,8 +280,9 @@ class BayesianSetRankModel(MoleculeSetRank):
         attn_mask = make_block_diag_mask(set_ids, num_heads=self.num_heads)
         attn_mask = torch.logical_or(make_asymmetric_mask(sample_mask))
         x_ligand = self.embed_ligand(ligand)
-        x_dist = self.embed_dist(dist)
-        x = self.combine_repr(torch.cat(x_ligand, x_dist, axis=1))
+        x_dist = self.distribution_encoder(dist)
+        x_dist[~mask] = self.default_dist_emb
+        x = self.combine_repr(torch.cat((x_ligand, x_dist), 1))
         h = self.set_transformer(x, attn_mask=attn_mask)
         return self.ouput(h).squeeze()
 
@@ -337,6 +345,52 @@ def _mlp(
         layers.extend([Linear(hidden_size, hidden_size), act()])
     layers.append(Linear(hidden_size, output_size))
     return Sequential(*layers)
+
+
+class ComplexBayesianSetRankModel(MoleculeBayesianSetRankModel):
+    def __init__(
+        self,
+        ligand_input_size: int,
+        protein_input_size: int,
+        hidden_channels: int,
+        n_bins: int = 10,
+        **kwargs,
+    ):
+        super().__init__(
+            n_bins=n_bins,
+            ligand_input_size=ligand_input_size,
+            protein_input_size=protein_input_size,
+            **kwargs,
+        )
+        self.embed_protein = _mlp(
+            input_size=protein_input_size,
+            hidden_size=hidden_channels,
+            output_size=hidden_channels,
+            hidden_layers=4,
+        )
+        self.combine_repr = Sequential(
+            Linear(hidden_channels * 3, hidden_channels * 3),
+            SiLU(),
+            Linear(hidden_channels * 3, hidden_channels),
+        )
+
+    def forward(
+        self,
+        ligand: Tensor,
+        protein: Tensor,
+        dist: Tensor,
+        sample_mask: Tensor,
+        set_ids: Tensor,
+    ) -> Tensor:
+        attn_mask = make_block_diag_mask(set_ids, num_heads=self.num_heads)
+        attn_mask = torch.logical_or(attn_mask, make_asymmetric_mask(sample_mask))
+        x_ligand = self.embed_ligand(ligand)
+        x_protein = self.embed_protein(protein)
+        x_dist = self.distribution_encoder(dist)
+        x_dist[sample_mask] = self.default_dist_emb
+        x = self.combine_repr(torch.cat((x_ligand, x_protein, x_dist), 1))
+        h = self.set_transformer(x, attn_mask=attn_mask)
+        return self.ouput(h).squeeze()
 
 
 class MHABlock(Module):
