@@ -27,6 +27,7 @@ class MolFingerprint(StrEnum):
     TOPOTORSION = auto()
     ATOMPAIR = auto()
     CHEMBERTA = auto()
+    MOLBERT = auto()
 
     def _get_mfpgen(
         self,
@@ -66,13 +67,15 @@ class MolFingerprint(StrEnum):
         self,
         smi: str,
         target: str = "numpy",
-        model_name: str = "DeepChem/ChemBERTa-77M-MLM",
-        pooling: str = "mean",
     ):
         """Compute fingerprint or embedding for a single SMILES."""
         if self is MolFingerprint.CHEMBERTA:
             return smiles_to_dl_embedding(
-                [smi], model_name=model_name, pooling=pooling
+                [smi], model_name="DeepChem/ChemBERTa-77M-MLM", pooling="mean"
+            )[0]
+        elif self is MolFingerprint.MOLBERT:
+            return smiles_to_dl_embedding(
+                [smi], model_name="ibm/SMILES-Transformer", pooling="mean"
             )[0]
 
         mol = Chem.MolFromSmiles(smi)
