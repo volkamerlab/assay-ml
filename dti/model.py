@@ -1,4 +1,5 @@
 from typing import Literal
+
 import torch
 from torch import Tensor, tensor, randn
 from torch.nn import (
@@ -12,12 +13,12 @@ from torch.nn import (
     ModuleList,
 )
 from torch.nn import MultiheadAttention as MHA
-
-import pytest
-
 from torch import nn
 from torch.nn import SiLU, BatchNorm1d
 
+import pytest
+
+from .utils import device
 
 import logging
 
