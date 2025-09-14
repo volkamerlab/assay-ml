@@ -409,7 +409,7 @@ class MultiSetActivityDataset(ActivityDataset):
 
         self.used = np.full(len(self.batches), False, dtype=bool)
         logger.debug(
-            f"Created {len(self.batches)} batches with up to {self.sets_per_batch} sets each"
+            f"created {len(self.batches)} batches with up to {self.sets_per_batch} sets each"
         )
 
     def _get_next_batch(self, idx: int):

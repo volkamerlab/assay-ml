@@ -526,7 +526,7 @@ def eval_with_batched_sets(
 
     prediction_data = pd.DataFrame(content)
     if prediction_file is not None:
-        logger.info(f"Writing predictions to {prediction_file}")
+        logger.info(f"writing predictions to {prediction_file}")
         prediction_data.to_csv(prediction_file)
 
     mean_rank_corr = -1 if rank_corr_fn is None else rank_corr_fn(prediction_data)
@@ -649,7 +649,7 @@ def evaluate_epoch(
 
     prediction_data = pd.DataFrame(content)
     if prediction_file is not None:
-        logger.info(f"Writing predictions to {prediction_file}")
+        logger.info(f"writing predictions to {prediction_file}")
         prediction_data.to_csv(prediction_file)
 
     mean_rank_corr = -1 if rank_corr_fn is None else rank_corr_fn(prediction_data)
@@ -759,11 +759,11 @@ def train_and_evaluate_model(
         logger.debug(f"Learning rate: {lr}")
 
         logger.info(
-            f"[{run_name}] Epoch: {epoch + 1} "
-            f"Fold: {index} "
-            f"Train Loss: {train_loss:.4f} "
-            f"Val Loss: {val_loss:.4f} "
-            f"Val Rank Corr: {val_rank_corr:.4f}"
+            f"epoch: {epoch + 1} "
+            f"fold: {index} "
+            f"train loss: {train_loss:.4f} "
+            f"val loss: {val_loss:.4f} "
+            f"val rank corr: {val_rank_corr:.4f}"
         )
 
         optimization.append(Epoch(epoch, lr, train_loss, val_loss, val_rank_corr))
@@ -772,7 +772,7 @@ def train_and_evaluate_model(
         )
 
         if val_rank_corr > best_corr:
-            logger.info(f"[{run_name}] updating test set predictions")
+            logger.info(f"updating test set predictions")
             best_corr = val_rank_corr
             epochs_without_improvement = 0
             torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")
@@ -784,15 +784,15 @@ def train_and_evaluate_model(
                 prediction_file=pred_file,
             )
             logger.info(
-                f"[{run_name}] Epoch: {epoch + 1} "
-                f"Fold: {index} "
-                f"Test Rank Corr: {test_rank_corr:.4f}"
+                f"epoch: {epoch + 1} "
+                f"fold: {index} "
+                f"test rank corr: {test_rank_corr:.4f}"
             )
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= opts["patience_termination"]:
                 logger.info(
-                    f"[{run_name}] Early stopping triggered after {epoch + 1} epochs."
+                    f"early stopping triggered after {epoch + 1} epochs."
                 )
                 break
 
@@ -853,7 +853,7 @@ def train_and_evaluate_pfn_model(
         optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
     )
 
-    best_loss = 0.0
+    best_loss = 1000
     epochs_without_improvement = 0
     optimization = []
 
@@ -869,13 +869,12 @@ def train_and_evaluate_pfn_model(
 
         scheduler.step(val_loss)
         lr = scheduler.get_last_lr()
-        logger.debug(f"Learning rate: {lr}")
+        logger.debug(f"learning rate: {lr:.4e}")
 
         logger.info(
-            f"[{run_name}] Epoch: {epoch + 1} "
-            f"Fold: {index} "
-            f"Train Loss: {train_loss:.4e} "
-            f"Validation Loss: {val_loss:.4e} "
+            f"epoch: {epoch + 1} "
+            f"train loss: {train_loss:.4e} "
+            f"validation loss: {val_loss:.4e} "
         )
 
         optimization.append(Epoch(epoch, lr, train_loss, val_loss))
@@ -883,22 +882,21 @@ def train_and_evaluate_pfn_model(
             OUTPUT / run_name / "optimization.csv", index=False
         )
 
-        if val_loss > best_loss:
-            logger.info(f"[{run_name}] updating test set predictions")
+        if val_loss < best_loss:
+            logger.info(f"updating test set predictions")
             best_loss = val_loss
             epochs_without_improvement = 0
             torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")
             test_results = evaluate_with_batched_masked_sets(model, test_loader)
             logger.info(
-                f"[{run_name}] Epoch: {epoch + 1} "
-                f"Fold: {index} "
-                f"Test Loss: {test_results["loss"]:.4f}"
-                f"Test AUROC: {test_results["auroc"]:.4f}"
+                f"epoch: {epoch + 1} "
+                f"test loss: {test_results["loss"]:.4f} "
+                f"test AUROC: {test_results["auroc"]:.4f} "
             )
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= opts["patience_termination"]:
                 logger.info(
-                    f"[{run_name}] Early stopping triggered after {epoch + 1} epochs."
+                    f"early stopping triggered after {epoch + 1} epochs."
                 )
                 break
