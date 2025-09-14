@@ -484,7 +484,7 @@ class SetTransformer(Module):
 def fit_quantile_bins(y: torch.Tensor, num_classes: int) -> torch.Tensor:
     if y.ndim != 1:
         y = y.flatten()
-    probs = torch.linspace(0, 1, num_classes + 1)
+    probs = torch.linspace(0, 1, num_classes + 1, device=device)
     return torch.quantile(y, probs, interpolation="linear")
 
 
