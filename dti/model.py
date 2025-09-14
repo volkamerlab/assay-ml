@@ -249,7 +249,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             hidden_layers=4,
         )
         self.num_heads = num_heads
-        self.default_dist_emb = Parameter(torch.zeros(hidden_channels))
+        self.default_dist_emb = Parameter(torch.zeros(hidden_channels, device=device))
         self.combine_repr = Sequential(
             Linear(hidden_channels * 2, hidden_channels * 2),
             SiLU(),
@@ -524,7 +524,7 @@ def make_asymmetric_mask(masked: torch.Tensor) -> torch.Tensor:
         attn_mask: Bool tensor of shape (N, N)
     """
     N = masked.shape[0]
-    attn_mask = torch.zeros(N, N, dtype=torch.bool)
+    attn_mask = torch.zeros(N, N, dtype=torch.bool, device=device)
 
     for i in range(N):  # query index
         if masked[i]:
