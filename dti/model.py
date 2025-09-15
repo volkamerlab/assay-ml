@@ -280,10 +280,10 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
     ) -> Tensor:
         attn_mask = make_block_diag_mask(set_ids, num_heads=self.num_heads)
         attn_mask = torch.logical_or(make_asymmetric_mask(sample_mask))
+        sample_mask = sample_mask.float().unsqueeze(1)
         x_ligand = self.embed_ligand(ligand)
-        x_dist = (1 - sample_mask.float()) * self.distribution_encoder(
-            dist
-        ) + sample_mask.float() * self.default_dist_emb
+        x_dist = self.distribution_encoder(dist)
+        x_dist = (1 - sample_mask) * x_dist + sample_mask * self.default_dist_emb
         x = self.combine_repr(torch.cat((x_ligand, x_dist), 1))
         h = self.set_transformer(x, attn_mask=attn_mask)
         return self.ouput(h).squeeze()
@@ -386,11 +386,11 @@ class ComplexBayesianSetRankModel(MoleculeBayesianSetRankModel):
     ) -> Tensor:
         attn_mask = make_block_diag_mask(set_ids, num_heads=self.num_heads)
         attn_mask = torch.logical_or(attn_mask, make_asymmetric_mask(sample_mask))
+        sample_mask = sample_mask.float().unsqueeze(1)
         x_ligand = self.embed_ligand(ligand)
         x_protein = self.embed_protein(protein)
-        x_dist = (1 - sample_mask.float()) * self.distribution_encoder(
-            dist
-        ) + sample_mask.float() * self.default_dist_emb
+        x_dist = self.distribution_encoder(dist)
+        x_dist = (1 - sample_mask) * x_dist + sample_mask * self.default_dist_emb
         x = self.combine_repr(torch.cat((x_ligand, x_protein, x_dist), 1))
         h = self.set_transformer(x, attn_mask=attn_mask)
         return self.ouput(h).squeeze()

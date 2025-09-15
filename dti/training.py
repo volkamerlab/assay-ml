@@ -869,7 +869,7 @@ def train_and_evaluate_pfn_model(
 
         scheduler.step(val_loss)
         lr = scheduler.get_last_lr()
-        logger.debug(f"learning rate: {lr:.4e}")
+        logger.debug(f"learning rate: {lr}")
 
         logger.info(
             f"epoch: {epoch + 1} "
