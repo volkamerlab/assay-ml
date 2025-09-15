@@ -145,7 +145,7 @@ def save_code_snapshot(run_name: str):
         for py_file in python_files:
             tar.add(py_file, arcname=py_file)
 
-    logger.info("code archive created: [archive_name]")
+    logger.info(f"code archive created: {archive_name}")
 
 
 def init_logging(run_name: Union[str, None] = str(time.time())):
