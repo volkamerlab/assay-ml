@@ -81,6 +81,7 @@ class CombinedModel(nn.Module):
         embedding_size,
         hidden_layer_size=512,
         cosine_agg=True,
+        **kwargs
     ):
         super().__init__()
 
@@ -138,6 +139,7 @@ class PairCombinedModel(CombinedModel):
         embedding_size,
         hidden_layer_size=512,
         cosine_agg=True,
+        **kwargs
     ):
         super().__init__(
             protein_input_size,
