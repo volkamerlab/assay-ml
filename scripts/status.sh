@@ -6,7 +6,7 @@ remote=$MBHPC/hodge-dti/data/output/
 rsync -a --exclude='*.pt' --exclude='*.csv' $remote $output_dir  # > /dev/null
 
 output_files=$(find $output_dir -name output.log | sort)
-line_length=82
+line_length=74
 
 bar () {
     printf "${1}%.0s" $(seq 1 $2)
@@ -19,8 +19,8 @@ print_table () {
     local old_dataset=""
 
     bar '━' $line_length
-    printf "%-6s %-10s %-20s %-11s %-6s %-5s %-10s %-10s\n" \
-        "Ident" "Dataset" "Fingerprint" "Method" "Epoch" "Fold" "Test Corr" "State"
+    printf "%-6s %-10s %-10s %-10s %-9s %-5s %-9s %-10s\n" \
+        "Ident" "Dataset" "FP" "Method" "Epoch" "Fold" "Corr" "State"
     bar '━' $line_length
 
     for f in "${files[@]}"; do
@@ -48,6 +48,7 @@ print_table () {
 
         ident="${ident:0:4}"   # trim ident
         epoch=$(echo "$line" | awk '{print $4}')
+        cur_epoch=$(rg "epoch:" "$f"| tail -n 1 | awk '{print $4}')
         rank_corr=$(echo "$line" | awk '{print $10}')
 
         if [ "$old_fold" != "$fold" ] || [ "$old_dataset" != "$dataset" ]; then
@@ -70,8 +71,8 @@ print_table () {
         fi
 
         if [ "$state" != "Error" ]; then
-            printf "%-6s %-10s %-20s %-11s %-6s %-5s %-10s %-10s\n" \
-                "$ident" "$dataset" "$fingerprint" "$method" "$epoch" "$fold" "$rank_corr" "$state"
+            printf "%-6s %-10s %-10s %-10s %-4s/%-4s %-5s %-10s %-10s\n" \
+                "$ident" "$dataset" "$fingerprint" "$method" "$epoch" "$cur_epoch" "$fold" "$rank_corr" "$state"
         fi
     done
 
