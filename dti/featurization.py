@@ -10,7 +10,7 @@ import torch
 import tqdm.auto as tqdm
 from esm import FastaBatchedDataset, pretrained
 from rdkit import Chem
-from rdkit.Chem import rdFingerprintGenerator
+from rdkit.Chem import rdFingerprintGenerator as fpgen
 from transformers import AutoTokenizer, AutoModel
 
 from .constants import DATA, TID, SEQUENCE
@@ -35,21 +35,13 @@ class MolFingerprint(StrEnum):
         key = (self.value, fpSize)
         if key not in _mfpgen_cache:
             if self is MolFingerprint.MORGAN:
-                _mfpgen_cache[key] = rdFingerprintGenerator.GetMorganGenerator(
-                    radius=3, fpSize=fpSize
-                )
+                _mfpgen_cache[key] = fpgen.GetMorganGenerator(radius=3, fpSize=fpSize)
             elif self is MolFingerprint.RDKIT:
-                _mfpgen_cache[key] = rdFingerprintGenerator.GetRDKitFPGenerator(
-                    fpSize=fpSize
-                )
+                _mfpgen_cache[key] = fpgen.GetRDKitFPGenerator(fpSize=fpSize)
             elif self is MolFingerprint.TOPOTORSION:
-                _mfpgen_cache[key] = (
-                    rdFingerprintGenerator.GetTopologicalTorsionGenerator(fpSize=fpSize)
-                )
+                _mfpgen_cache[key] = fpgen.GetTopologicalTorsionGenerator(fpSize=fpSize)
             elif self is MolFingerprint.ATOMPAIR:
-                _mfpgen_cache[key] = rdFingerprintGenerator.GetAtomPairGenerator(
-                    fpSize=fpSize
-                )
+                _mfpgen_cache[key] = fpgen.GetAtomPairGenerator(fpSize=fpSize)
             else:
                 raise ValueError(f"{self} does not support RDKit generators")
         return _mfpgen_cache[key]

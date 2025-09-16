@@ -294,7 +294,7 @@ def run_synthetic(
 
     model_cls, _, val_dataset_cls, load_data = setup(method, dataset_name)
     train_dataset = SyntheticMultiSetDataset(
-        "data/raw/cleaned_enamine.parquet", batches_per_epoch=10
+        "data/raw/cleaned_enamine.parquet", batches_per_epoch=1000
     )
     train_loader = DataLoader(
         train_dataset,

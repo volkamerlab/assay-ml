@@ -251,9 +251,9 @@ def train_with_batched_masked_sets(
     steps = 0
     loss_fn = BCEWithLogitsLoss()
 
-    for protein_features, ligand_features, labels, info, metadata in (pbar := tqdm.tqdm(
-        loader, desc="training"
-    )):
+    for protein_features, ligand_features, labels, info, metadata in (
+        pbar := tqdm.tqdm(loader, desc="training")
+    ):
         set_boundaries = metadata["set_boundaries"].squeeze()
         num_sets = metadata["num_sets"].squeeze()
         set_ids_tensor = metadata["set_ids_tensor"].to(device)
@@ -785,16 +785,12 @@ def train_and_evaluate_model(
                 prediction_file=pred_file,
             )
             logger.info(
-                f"epoch: {epoch + 1} "
-                f"fold: {index} "
-                f"test rank corr: {test_rank_corr:.4f}"
+                f"epoch: {epoch + 1} fold: {index} test rank corr: {test_rank_corr:.4f}"
             )
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= opts["patience_termination"]:
-                logger.info(
-                    f"early stopping triggered after {epoch + 1} epochs."
-                )
+                logger.info(f"early stopping triggered after {epoch + 1} epochs.")
                 break
 
 
@@ -876,6 +872,7 @@ def train_and_evaluate_pfn_model(
             f"epoch: {epoch + 1} "
             f"train loss: {train_loss:.4e} "
             f"validation loss: {val_loss:.4e} "
+            f"validation AUROC: {val_results['auroc']:.4e} "
         )
 
         optimization.append(Epoch(epoch, lr, train_loss, val_loss))
@@ -891,13 +888,11 @@ def train_and_evaluate_pfn_model(
             test_results = evaluate_with_batched_masked_sets(model, test_loader)
             logger.info(
                 f"epoch: {epoch + 1} "
-                f"test loss: {test_results["loss"]:.4f} "
-                f"test AUROC: {test_results["auroc"]:.4f} "
+                f"test loss: {test_results['loss']:.4f} "
+                f"test AUROC: {test_results['auroc']:.4f} "
             )
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= opts["patience_termination"]:
-                logger.info(
-                    f"early stopping triggered after {epoch + 1} epochs."
-                )
+                logger.info(f"early stopping triggered after {epoch + 1} epochs.")
                 break
