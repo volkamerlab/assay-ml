@@ -27,6 +27,7 @@ from dti.data import (
     SetActivityDataset,
     MultiSetActivityDataset,
     PairDataset,
+    SyntheticMultiSetDataset,
     prepare_datasets,
     load_landrum,
     load_chembl_endpoints,
@@ -52,7 +53,7 @@ from dti.utils import (
     set_random_seeds,
     save_code_snapshot,
 )
-from dti.constants import DATA, ASSAY, COMPOUND, HODGE
+from dti.constants import DATA, ASSAY, COMPOUND, HODGE, ACT
 
 logger = logging.getLogger(__name__)
 
@@ -256,8 +257,6 @@ def run_split(
         dataset_name, fold, method, mol_feat, info_cols, batch_size
     )
 
-    rstat = pearsonr
-    assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
     training_loss = loss_fn(method, nn.SmoothL1Loss(reduction="none"))
     train_short = method.on_sets or method.on_pairs
 
@@ -268,7 +267,6 @@ def run_split(
         ligand_dim=ligand_dim,
         multi_batch=method in [Method.SETS, Method.IC50CORR],
         batch_size=batch_size,
-        rank_corr_fn=assay_rank,
         num_epochs=num_epochs,
         training_loss=training_loss,
         patience_termination=100 if train_short else 1000,
@@ -279,6 +277,59 @@ def run_split(
         train_and_evaluate_pfn_model(*args, **kwargs)
     else:
         train_and_evaluate_model(*args, **kwargs)
+
+    logger.info(f"{run_name} finished")
+
+
+def run_synthetic(
+    run_name: str,
+    mol_feat: str,
+    method: Method,
+    dataset_name: str,
+    fold: int,
+    seed: int,
+):
+    num_epochs = 50_000  # early stopping in place
+    info_cols = [COMPOUND, ASSAY]
+
+    model_cls, _, val_dataset_cls, load_data = setup(method, dataset_name)
+    train_dataset = SyntheticMultiSetDataset(
+        "data/raw/cleaned_enamine.parquet", batches_per_epoch=10
+    )
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=8,
+    )
+    val_loader = DataLoader(
+        MultiSetActivityDataset(
+            load_data(),
+            mol_featurizer=MolFingerprint("morgan"),
+            target=ACT,
+            info_cols=[],
+        ),
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
+    )
+
+    training_loss = loss_fn(method, nn.SmoothL1Loss(reduction="none"))
+    train_short = method.on_sets or method.on_pairs
+
+    args = [model_cls, run_name, train_loader, val_loader, val_loader, method, fold]
+    kwargs = dict(
+        ligand_dim=2048,
+        multi_batch=True,
+        batch_size=1,
+        num_epochs=num_epochs,
+        training_loss=training_loss,
+        patience_termination=100,
+        patience_lr=10,
+        fisher_transform=method not in [Method.IC50SETS, Method.IC50ALLSETS],
+    )
+    assert model_cls in [ComplexBayesianSetRankModel, MoleculeBayesianSetRankModel]
+    train_and_evaluate_pfn_model(*args, **kwargs)
 
     logger.info(f"{run_name} finished")
 
@@ -299,6 +350,9 @@ def main():
         default="morgan",
         help="Molecular features (default: morgan)",
     )
+    parser.add_argument(
+        "--synthetic", action="store_true", help="Synthetic dataset for training"
+    )
 
     args = parser.parse_args()
 
@@ -314,12 +368,16 @@ def main():
     init_logging(run_name)
     logger = logging.getLogger(run_name)
     logger.info(
-        f"seed={args.seed} method={repr(method)} dataset={dataset_name} fold={args.fold}"
+        f"seed={args.seed} method={repr(method)} synthetic={args.synthetic} dataset={dataset_name} fold={args.fold}"
     )
     save_code_snapshot(run_name)
 
     set_random_seeds(args.seed)
-    run_split(run_name, mol_feat, method, dataset_name, args.fold, args.seed)
+    if not args.synthetic:
+        run_split(run_name, mol_feat, method, dataset_name, args.fold, args.seed)
+    else:
+        logger.info("Synthetic training set")
+        run_synthetic(run_name, mol_feat, method, dataset_name, args.fold, args.seed)
 
 
 if __name__ == "__main__":

@@ -251,9 +251,9 @@ def train_with_batched_masked_sets(
     steps = 0
     loss_fn = BCEWithLogitsLoss()
 
-    for protein_features, ligand_features, labels, info, metadata in tqdm.tqdm(
+    for protein_features, ligand_features, labels, info, metadata in (pbar := tqdm.tqdm(
         loader, desc="training"
-    ):
+    )):
         set_boundaries = metadata["set_boundaries"].squeeze()
         num_sets = metadata["num_sets"].squeeze()
         set_ids_tensor = metadata["set_ids_tensor"].to(device)
@@ -292,6 +292,7 @@ def train_with_batched_masked_sets(
         )  # (batch_size, model.n_bins)
 
         batch_loss = loss_fn(preds, dist)
+        pbar.set_description(f"batch loss = {batch_loss:.4e}")
 
         optimizer.zero_grad()
         batch_loss.backward()
