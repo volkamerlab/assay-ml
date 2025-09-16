@@ -61,7 +61,7 @@ class MolFingerprint(StrEnum):
         else:
             return 2048
 
-    @functools.cache
+    @functools.lru_cache(maxsize=100_000)
     def compute(
         self,
         smi: str,
