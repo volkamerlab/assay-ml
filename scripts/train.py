@@ -96,8 +96,8 @@ def setup(method: Method, dataset: str) -> Tuple[type, type, type, Callable]:
 def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]:
     msa = partial(
         MultiSetActivityDataset,
-        max_set_size=1000,
         sets_per_batch=(10 if method == Method.PFN else 20),
+        max_set_size=(500 if method == Method.PFN else 1000)
     )
     shuffled_multiset = partial(msa, inter_assay=True)
     match method:

@@ -18,49 +18,9 @@ queue fold, script, seed, dataset, method, mol_feat from (
     2, scripts/train.py, 0, landrum, pfn, morgan
     3, scripts/train.py, 0, landrum, pfn, morgan
     4, scripts/train.py, 0, landrum, pfn, morgan
-    0, scripts/train.py, 0, omnivore, sets, morgan
-    1, scripts/train.py, 0, omnivore, sets, morgan
-    2, scripts/train.py, 0, omnivore, sets, morgan
-    3, scripts/train.py, 0, omnivore, sets, morgan
-    4, scripts/train.py, 0, omnivore, sets, morgan
-    0, scripts/train.py, 0, omnivore, ic50, morgan
-    1, scripts/train.py, 0, omnivore, ic50, morgan
-    2, scripts/train.py, 0, omnivore, ic50, morgan
-    3, scripts/train.py, 0, omnivore, ic50, morgan
-    4, scripts/train.py, 0, omnivore, ic50, morgan
-    0, scripts/train.py, 0, omnivore, allsets, morgan
-    1, scripts/train.py, 0, omnivore, allsets, morgan
-    2, scripts/train.py, 0, omnivore, allsets, morgan
-    3, scripts/train.py, 0, omnivore, allsets, morgan
-    4, scripts/train.py, 0, omnivore, allsets, morgan
-    0, scripts/train.py, 0, landrum, sets, morgan
-    1, scripts/train.py, 0, landrum, sets, morgan
-    2, scripts/train.py, 0, landrum, sets, morgan
-    3, scripts/train.py, 0, landrum, sets, morgan
-    4, scripts/train.py, 0, landrum, sets, morgan
-    0, scripts/train.py, 0, landrum, ic50, morgan
-    1, scripts/train.py, 0, landrum, ic50, morgan
-    2, scripts/train.py, 0, landrum, ic50, morgan
-    3, scripts/train.py, 0, landrum, ic50, morgan
-    4, scripts/train.py, 0, landrum, ic50, morgan
-    0, scripts/train.py, 0, landrum, allsets, morgan
-    1, scripts/train.py, 0, landrum, allsets, morgan
-    2, scripts/train.py, 0, landrum, allsets, morgan
-    3, scripts/train.py, 0, landrum, allsets, morgan
-    4, scripts/train.py, 0, landrum, allsets, morgan
-    0, scripts/train.py, 0, kinodata, sets, morgan
-    1, scripts/train.py, 0, kinodata, sets, morgan
-    2, scripts/train.py, 0, kinodata, sets, morgan
-    3, scripts/train.py, 0, kinodata, sets, morgan
-    4, scripts/train.py, 0, kinodata, sets, morgan
-    0, scripts/train.py, 0, kinodata, ic50, morgan
-    1, scripts/train.py, 0, kinodata, ic50, morgan
-    2, scripts/train.py, 0, kinodata, ic50, morgan
-    3, scripts/train.py, 0, kinodata, ic50, morgan
-    4, scripts/train.py, 0, kinodata, ic50, morgan
-    0, scripts/train.py, 0, kinodata, allsets, morgan
-    1, scripts/train.py, 0, kinodata, allsets, morgan
-    2, scripts/train.py, 0, kinodata, allsets, morgan
-    3, scripts/train.py, 0, kinodata, allsets, morgan
-    4, scripts/train.py, 0, kinodata, allsets, morgan
+    0, scripts/train.py, 0, chembl, pfn, morgan
+    1, scripts/train.py, 0, chembl, pfn, morgan
+    2, scripts/train.py, 0, chembl, pfn, morgan
+    3, scripts/train.py, 0, chembl, pfn, morgan
+    4, scripts/train.py, 0, chembl, pfn, morgan
 )

@@ -64,7 +64,6 @@ def main():
 
         df["cluster"] = ac.labels_
 
-        target_file = data_path / target_file
         logger.info(f"writing result to {target_file}")
         df.to_csv(target_file)
 

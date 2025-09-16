@@ -14,8 +14,8 @@ def main():
     raw_data_path = data_path / "raw"
 
     for target_file, loader, path in [
-        ("kinodata_butina.csv", data.load_kinodata, "activities-chembl33_v0.5.csv"),
-        ("landrum_butina.csv", data.load_landrum, "landrum.csv"),
+ #       ("kinodata_butina.csv", data.load_kinodata, "activities-chembl33_v0.5.csv"),
+ #       ("landrum_butina.csv", data.load_landrum, "landrum.csv"),
         ("omnivore_butina.csv", data.load_landrum, "omnivore.csv"),
     ]:
         path = raw_data_path / path
