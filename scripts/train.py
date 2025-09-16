@@ -29,6 +29,7 @@ from dti.data import (
     PairDataset,
     prepare_datasets,
     load_landrum,
+    load_chembl_endpoints,
     load_kinodata,
     load_nci,
     load_solubility,
@@ -58,6 +59,8 @@ logger = logging.getLogger(__name__)
 
 def setup(method: Method, dataset: str) -> Tuple[type, type, type, Callable]:
     match dataset.lower():
+        case "chembl":
+            data, mol_only = load_chembl_endpoints, True
         case "kinodata":
             data, mol_only = load_kinodata, False
         case "landrum":
@@ -163,7 +166,7 @@ def prepare_dataset_splits(
     """Prepare and return model class, dataloaders, ligand_dim, and raw data."""
     data_dir = DATA / "processed" / dataset_name
     train_tgt = tgt_name = "scaled_ic50"
-    aggregate = True
+    aggregate = dataset_name != "chembl"
     inter_assay_weight = None
 
     if method == Method.HODGE:

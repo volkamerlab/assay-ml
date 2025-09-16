@@ -94,7 +94,7 @@ class MolFingerprint(StrEnum):
             return [self.compute(s, **kwargs) for s in tqdm.tqdm(smiles)]
 
         with Pool(n_jobs) as p:
-            return p.map(functools.partial(self.compute, **kwargs), smiles)
+            return p.map(functools.partial(self.compute, **kwargs), tqdm.tqdm(smiles))
 
 
 @functools.cache

@@ -274,12 +274,13 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
     def forward(
         self,
         ligand: Tensor,
+        _protein: Tensor, # ignored
         dist: Tensor,
         sample_mask: Tensor,
         set_ids: Tensor,
     ) -> Tensor:
         attn_mask = make_block_diag_mask(set_ids, num_heads=self.num_heads)
-        attn_mask = torch.logical_or(make_asymmetric_mask(sample_mask))
+        attn_mask = torch.logical_or(attn_mask, make_asymmetric_mask(sample_mask))
         sample_mask = sample_mask.float().unsqueeze(1)
         x_ligand = self.embed_ligand(ligand)
         x_dist = self.distribution_encoder(dist)
@@ -287,7 +288,6 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         x = self.combine_repr(torch.cat((x_ligand, x_dist), 1))
         h = self.set_transformer(x, attn_mask=attn_mask)
         return self.ouput(h).squeeze()
-
 
 class ComplexSetRank(MoleculeSetRank):
     def __init__(

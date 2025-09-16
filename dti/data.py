@@ -1,4 +1,4 @@
-from typing import List, Union, Iterator, Tuple
+from typing import List, Union, Iterator, Tuple, Iterable
 import functools
 import logging
 from pathlib import Path
@@ -40,6 +40,7 @@ class ActivityDataset(Dataset):
     ):
         super().__init__()
         logger.info(f"creating dataset of size {len(data)}")
+        logger.debug(f"data types: {data.dtypes}")
         logger.info("computing fingerprints")
         fps = mol_featurizer.compute_parallel(data[SMILES].values)
         mask = [fp is not None for fp in fps]
@@ -462,7 +463,9 @@ class MultiSetActivityDataset(ActivityDataset):
         )
 
 
-def aggregate_multi_measurements(data: pd.DataFrame) -> pd.DataFrame:
+def aggregate_multi_measurements(
+    data: pd.DataFrame, keys: Iterable[str] = [COMPOUND, ASSAY]
+) -> pd.DataFrame:
     """Aggregate multiple measurements for the same compound and assay.
 
     Args:
@@ -471,9 +474,9 @@ def aggregate_multi_measurements(data: pd.DataFrame) -> pd.DataFrame:
     Returns:
         pd.DataFrame: DataFrame with aggregated measurements.
     """
-    keys = [COMPOUND, ASSAY]
     if TID in data.columns:
         keys += [TID]
+    logger.debug(f"aggregate multiple measurements per {keys}")
     non_numeric_cols = data.select_dtypes(exclude=["number"]).columns
     return (
         data.groupby(keys, as_index=False)
@@ -783,6 +786,24 @@ def load_clearance(path: Path = DATA / "raw" / "clearance.csv") -> pd.DataFrame:
         {
             "molregno": COMPOUND,
             "value_mL_per_min_kg": ACT,
+            "canonical_smiles": SMILES,
+            "assay_id": ASSAY,
+        },
+    )
+
+
+def load_chembl_endpoints(
+    path: Path = DATA / "raw" / "chembl_endpoints.csv",
+) -> pd.DataFrame:
+    logger.info("loading general ChEMBL endpoints")
+    data = pd.read_csv(path, index_col=False)
+    data["compound_id"] = data["compound_id"].str[6:].astype(int)
+    assert data["compound_id"].dtype == int
+    return _process(
+        data,
+        {
+            "compound_id": COMPOUND,
+            "standard_value": ACT,
             "canonical_smiles": SMILES,
             "assay_id": ASSAY,
         },

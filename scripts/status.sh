@@ -6,7 +6,7 @@ remote=$MBHPC/hodge-dti/data/output/
 rsync -a --exclude='*.pt' --exclude='*.csv' $remote $output_dir  # > /dev/null
 
 output_files=$(find $output_dir -name output.log | sort)
-line_length=74
+line_length=75
 
 bar () {
     printf "${1}%.0s" $(seq 1 $2)
@@ -19,7 +19,7 @@ print_table () {
     local old_dataset=""
 
     bar '━' $line_length
-    printf "%-6s %-10s %-10s %-10s %-9s %-5s %-9s %-10s\n" \
+    printf "%-6s %-10s %-10s %-10s %-9s %-5s %-10s %-10s\n" \
         "Ident" "Dataset" "FP" "Method" "Epoch" "Fold" "Corr" "State"
     bar '━' $line_length
 
