@@ -1,4 +1,6 @@
+import os
 from typing import List, Union, Iterator, Tuple, Iterable
+from concurrent.futures import ThreadPoolExecutor
 import functools
 import logging
 from pathlib import Path
@@ -465,37 +467,7 @@ class MultiSetActivityDataset(ActivityDataset):
         )
 
 
-def compute_entropy(series, bins=10):
-    """Compute Shannon entropy of a numeric column."""
-    hist, _ = np.histogram(series, bins=bins, density=True)
-    hist = hist[hist > 0]  # avoid log(0)
-    return entropy(hist)
-
-
-def generate_coeffs(df, rng):
-    """Generate coefficients based on entropy of physchem props in this set."""
-    coeffs = {}
-    for col in df.columns:
-        if col in ["fp", "smiles"]:  # skip non-numeric
-            continue
-        H = compute_entropy(df[col].values)
-        coeffs[col] = rng.uniform(-1.0, 1.0) * (H + 1e-3)  # scale by entropy
-    coeffs["homo_noise"] = rng.uniform(0.1, 2.0)
-    coeffs["hetero_noise"] = rng.uniform(0.1, 2.0)
-    return coeffs
-
-
-def generate_target(row, coeffs, rng):
-    y = 0.0
-    for col, val in row.items():
-        if col in coeffs:
-            y += coeffs[col] * val
-    y += rng.normal(0, coeffs["homo_noise"])
-    y *= rng.normal(0, coeffs["hetero_noise"])
-    return y
-
-
-class SyntheticMultiSetDataset(torch.utils.data.Dataset):
+class SyntheticMultiSetDataset(Dataset):
     def __init__(
         self,
         parquet_path,
@@ -505,84 +477,120 @@ class SyntheticMultiSetDataset(torch.utils.data.Dataset):
         sets_per_batch=20,
         batches_per_epoch=1000,
         random_seed=0,
+        features=[
+            "ExactMolWt",
+            "NumValenceElectrons",
+            "HeavyAtomCount",
+            "NumHAcceptors",
+            "NumHDonors",
+            "NumRotatableBonds",
+            "qed",
+            "MolLogP",
+            "MolMR",
+            "Phi",
+            "TPSA",
+            "RingCount",
+            "MaxPartialCharge",
+            "MinPartialCharge",
+            "Kappa1",
+            "Kappa2",
+            "Kappa3",
+        ],
     ):
         self.pf = pq.ParquetFile(parquet_path)
         self.batch_size = batch_size
         self.cur_data_iterator = self.pf.iter_batches(batch_size=self.batch_size)
         self.cur_batch = next(self.cur_data_iterator).to_pandas()
         self.cur_batch_idx = 0
+
+        self.features = features
         self.min_set_size = min_set_size
         self.max_set_size = max_set_size
         self.sets_per_batch = sets_per_batch
         self.batches_per_epoch = batches_per_epoch
-        self.rng = np.random.default_rng(random_seed)
+
+        self.rng = torch.Generator(device=device).manual_seed(random_seed)
 
     def __len__(self):
         return self.batches_per_epoch
 
     def _next_batch(self):
         try:
-            self.cur_batch = next(self.cur_data_iterator).to_pandas()
+            self.cur_batch = next(self.cur_data_iterator).to_pandas()[
+                self.features + ["fp"]
+            ]
             self.cur_batch_idx = 0
         except StopIteration:
-            self.pf.iter_batches(batch_size=self.batch_size)
+            self.cur_data_iterator = self.pf.iter_batches(batch_size=self.batch_size)
             self._next_batch()
 
     def _next_rows(self, num: int):
         remaining = len(self.cur_batch) - self.cur_batch_idx
-        if num > remaining:
+        if num <= remaining:
+            data = self.cur_batch.iloc[self.cur_batch_idx : self.cur_batch_idx + num]
+            self.cur_batch_idx += num
+            return data
+        else:
             rest = self.cur_batch.iloc[self.cur_batch_idx :]
             self._next_batch()
             self.cur_batch_idx = num - remaining
             return pd.concat([rest, self.cur_batch.iloc[: num - remaining]])
-        else:
-            data = self.cur_batch.iloc[self.cur_batch_idx : self.cur_batch_idx + num]
-            self.cur_batch_idx += num
-            return data
 
     def __getitem__(self, idx):
-        batch_sets = []
-        batch_ids = []
-        set_ids_tensor = []
-        all_features = []
-        all_labels = []
-        all_info = []
+        set_sizes = (
+            torch.distributions.Geometric(0.05).sample((self.sets_per_batch,)).int()
+        )
+        set_sizes = torch.clamp(set_sizes + self.min_set_size, max=self.max_set_size)
+        total_size = int(set_sizes.sum().item())
 
-        set_boundaries = [0]
+        df_all = self._next_rows(total_size)
 
-        set_sizes = np.minimum(
-            self.rng.geometric(0.05, self.sets_per_batch) + self.min_set_size,
-            self.max_set_size,
+        X = torch.stack(
+            [
+                torch.tensor(df_all[c].values, dtype=torch.float32, device=device)
+                for c in self.features
+            ],
+            dim=1,
+        )  # [N, D]
+        N, D = X.shape
+
+        set_ids = torch.repeat_interleave(
+            torch.arange(self.sets_per_batch, device=device), set_sizes
+        )  # [N]
+
+        coeffs = 2 * torch.rand((self.sets_per_batch, D), device=device) - 1  # [S, D]
+        homo_noise = torch.empty(self.sets_per_batch, device=device).uniform_(0.1, 2.0)
+        hetero_noise = torch.empty(self.sets_per_batch, device=device).uniform_(
+            0.1, 2.0
         )
 
-        for set_idx, set_size in enumerate(set_sizes):
-            df = self._next_rows(set_size)
+        row_coeffs = coeffs[set_ids]  # [N, D]
+        y = (X * row_coeffs).sum(1)  # [N]
+        y = y + torch.normal(0, homo_noise[set_ids])  # homoscedastic noise
+        y = y * torch.normal(1, hetero_noise[set_ids])  # heteroscedastic noise
 
-            coeffs = generate_coeffs(df, self.rng)
-            labels = np.array(
-                [generate_target(row, coeffs, self.rng) for _, row in df.iterrows()],
-                dtype=np.float32,
-            )
+        ligand_features = (
+            torch.stack([torch.from_numpy(fp) for fp in df_all["fp"]])
+            .float()
+            .to(device)
+        )
 
-            all_features.append(np.stack(df["fp"].values).astype(np.float32))
-            all_labels.append(labels.astype(np.float32))
-            all_info.append([])
-            set_ids_tensor.extend([set_idx] * set_size)
-            batch_ids.append(idx * self.sets_per_batch + set_idx)
-            set_boundaries.append(set_boundaries[-1] + set_size)
+        set_ids_tensor = set_ids
+        set_boundaries = torch.cat(
+            [torch.tensor([0], device=device), set_sizes.cumsum(0)], dim=0
+        )
 
-        ligand_features = torch.from_numpy(np.concatenate(all_features, axis=0))
-        labels = torch.from_numpy(np.concatenate(all_labels, axis=0))
-        set_ids_tensor = torch.tensor(set_ids_tensor, dtype=torch.long)
-        prot_feats = torch.ones(1)  # placeholder (no protein features)
+        batch_ids = [idx * self.sets_per_batch + i for i in range(self.sets_per_batch)]
+
+        prot_feats = torch.ones(1, device=device)  # placeholder (no proteins)
 
         return (
             prot_feats,
             ligand_features,
-            labels,
-            all_info,
+            y,
+            [],  # info
             {
-                "set_boundaries": np.array(set_boundaries),
+                "set_boundaries": set_boundaries,
                 "set_ids": batch_ids,
                 "set_ids_tensor": set_ids_tensor,
                 "num_sets": self.sets_per_batch,
