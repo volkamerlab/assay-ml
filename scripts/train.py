@@ -308,11 +308,11 @@ def run_synthetic(
             mol_featurizer=MolFingerprint("morgan"),
             target=ACT,
             info_cols=[],
+            max_set_size=1000,
         ),
         batch_size=1,
         shuffle=False,
         num_workers=0,
-        max_set_size=1000,
     )
 
     training_loss = loss_fn(method, nn.SmoothL1Loss(reduction="none"))
