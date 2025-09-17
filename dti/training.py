@@ -245,61 +245,107 @@ def train_with_batched_masked_sets(
 ):
     """
     Vectorized version: one forward per batch, per-set binning, losses masked.
+    Learn only on masked samples by optimizing posterior probabilities directly.
     """
     model.train()
     total_loss = 0.0
     steps = 0
-    loss_fn = BCEWithLogitsLoss()
-
+    
     for protein_features, ligand_features, labels, info, metadata in (
         pbar := tqdm.tqdm(loader, desc="training")
     ):
         set_boundaries = metadata["set_boundaries"].squeeze()
         num_sets = metadata["num_sets"].squeeze()
         set_ids_tensor = metadata["set_ids_tensor"].to(device)
-
         ligand_features = ligand_features.squeeze().to(device)
         protein_features = protein_features.squeeze().to(device)
         labels = labels.squeeze().to(device)
         batch_size = labels.size(0)
-
+        
         sample_mask = torch.zeros(batch_size, dtype=torch.bool, device=device)
         dist = torch.zeros(batch_size, model.n_bins, device=device)
-        set_sizes = torch.zeros(num_sets, device=device)
-
+        class_labels = torch.zeros(batch_size, dtype=torch.long, device=device)
+        
         for i in range(num_sets):
             start_idx = set_boundaries[i]
             end_idx = set_boundaries[i + 1]
             set_size = end_idx - start_idx
-            set_sizes[i] = set_size
             if set_size < 2:
                 continue
-
+                
+            # Create mask for this set
             mask = torch.rand(set_size, device=device) < mask_fraction
             sample_mask[start_idx:end_idx] = mask
-
-            edges = fit_quantile_bins(
-                labels[start_idx:end_idx][~mask], num_classes=model.n_bins
-            )
-            class_labels = digitize_labels(labels[start_idx:end_idx], edges)
-
-            dist[start_idx:end_idx] = F.one_hot(
-                class_labels, num_classes=model.n_bins
+            
+            # Fit bins on unmasked data only
+            edges = fit_quantile_bins(labels[start_idx:end_idx][~mask], num_classes=model.n_bins)
+            
+            # Get class labels for ALL samples in set (needed for loss on masked samples)
+            class_labels_set = digitize_labels(labels[start_idx:end_idx], edges)
+            class_labels[start_idx:end_idx] = class_labels_set
+            
+            # Compute prior distribution from unmasked samples
+            prior_counts = torch.bincount(
+                class_labels_set[~mask], minlength=model.n_bins
             ).float()
-
-        preds = model(
-            ligand_features, protein_features, dist, sample_mask, set_ids_tensor
-        )  # (batch_size, model.n_bins)
-
-        batch_loss = loss_fn(preds, dist)
-        pbar.set_description(f"batch loss = {batch_loss:.4e}")
-
-        optimizer.zero_grad()
-        batch_loss.backward()
-        optimizer.step()
-        total_loss += batch_loss.item()
-        steps += 1
-
+            prior_dist = prior_counts / (prior_counts.sum() + 1e-12)  # Add epsilon for stability
+            
+            # Broadcast prior to all samples in set
+            dist[start_idx:end_idx] = prior_dist.unsqueeze(0).repeat(set_size, 1)
+        
+        # Forward pass on all samples
+        preds_logits = model(ligand_features, protein_features, dist, sample_mask, set_ids_tensor)
+        
+        # Compute loss on both masked and unmasked samples
+        total_batch_loss = 0.0
+        loss_components = []
+        
+        # Loss on masked samples (posterior optimization)
+        if sample_mask.any():
+            masked_logits = preds_logits[sample_mask]
+            masked_targets = class_labels[sample_mask].detach()  # Detach targets
+            masked_priors = dist[sample_mask].detach()  # Detach prior to avoid gradient issues
+            
+            # Convert logits to probabilities (likelihood)
+            likelihood = torch.softmax(masked_logits, dim=-1)
+            
+            # Compute posterior: P(class|data) ∝ P(data|class) * P(class)
+            # Here likelihood represents P(data|class) and masked_priors is P(class)
+            posterior_unnorm = likelihood * masked_priors
+            posterior = posterior_unnorm / (posterior_unnorm.sum(dim=-1, keepdim=True) + 1e-12)
+            
+            # Negative log-likelihood of true class under posterior
+            target_posterior_probs = posterior[torch.arange(posterior.size(0)), masked_targets]
+            masked_loss = -torch.log(target_posterior_probs + 1e-12).mean()
+            
+            total_batch_loss += masked_loss
+            loss_components.append(f"masked: {masked_loss:.4e}")
+        
+        # Loss on unmasked samples (standard cross-entropy)
+        unmasked_mask = ~sample_mask
+        if unmasked_mask.any():
+            unmasked_logits = preds_logits[unmasked_mask]
+            unmasked_targets = class_labels[unmasked_mask].detach()
+            
+            # Standard cross-entropy loss for unmasked samples
+            unmasked_loss = torch.nn.functional.cross_entropy(unmasked_logits, unmasked_targets)
+            
+            total_batch_loss += unmasked_loss
+            loss_components.append(f"unmasked: {unmasked_loss:.4e}")
+        
+        if total_batch_loss > 0:
+            batch_loss = total_batch_loss
+            pbar.set_description(f"loss = {batch_loss:.4e} ({', '.join(loss_components)})")
+            
+            optimizer.zero_grad()
+            batch_loss.backward()
+            optimizer.step()
+            
+            total_loss += batch_loss.item()
+            steps += 1
+        else:
+            pbar.set_description("no samples to train on")
+    
     return total_loss / max(1, steps)
 
 
@@ -802,6 +848,7 @@ def train_and_evaluate_pfn_model(
     test_loader: DataLoader,
     target_name: str,
     index: int,
+    test: bool = True,
     **kwargs: Dict[str, Any],
 ) -> None:
     """
@@ -880,7 +927,7 @@ def train_and_evaluate_pfn_model(
             OUTPUT / run_name / "optimization.csv", index=False
         )
 
-        if val_loss < best_loss:
+        if test and val_loss < best_loss:
             logger.info(f"updating test set predictions")
             best_loss = val_loss
             epochs_without_improvement = 0

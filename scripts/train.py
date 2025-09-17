@@ -328,6 +328,7 @@ def run_synthetic(
         patience_termination=100,
         patience_lr=10,
         fisher_transform=method not in [Method.IC50SETS, Method.IC50ALLSETS],
+        test=False,
     )
     assert model_cls in [ComplexBayesianSetRankModel, MoleculeBayesianSetRankModel]
     train_and_evaluate_pfn_model(*args, **kwargs)
