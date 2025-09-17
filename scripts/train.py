@@ -300,7 +300,7 @@ def run_synthetic(
         train_dataset,
         batch_size=1,
         shuffle=False,
-        num_workers=8,
+        num_workers=0,
     )
     val_loader = DataLoader(
         MultiSetActivityDataset(

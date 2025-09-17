@@ -540,7 +540,7 @@ class SyntheticMultiSetDataset(Dataset):
         set_sizes = (
             torch.distributions.Geometric(0.05).sample((self.sets_per_batch,)).int()
         )
-        set_sizes = torch.clamp(set_sizes + self.min_set_size, max=self.max_set_size)
+        set_sizes = torch.clamp(set_sizes + self.min_set_size, max=self.max_set_size).to(device)
         total_size = int(set_sizes.sum().item())
 
         df_all = self._next_rows(total_size)
