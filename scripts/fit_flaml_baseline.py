@@ -1,41 +1,45 @@
-import pandas as pd
 import os
-import joblib
-from joblib import Parallel, delayed
-import numpy as np
+import sys
 import pandas as pd
+import numpy as np
+import joblib
 from flaml import AutoML
 from tqdm.auto import tqdm
-
 from dti.featurization import MolFingerprint
-from dti.constants import ASSAY, SMILES, ACT
 
-df = pd.read_csv("data/raw/chembl_endpoints_split.csv", index_col=False)
-
-MODEL_DIR = "chembl_flaml"
+CHUNK_ID = int(sys.argv[1])
+log = lambda message: print(f"[{CHUNK_ID}] {message}")
+CHUNK_FILE = f"data/raw/chembl_split_{CHUNK_ID}.csv"
+MODEL_DIR = "data/chembl_flaml"
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-fpgen = MolFingerprint("morgan")
+log(f"reading csv")
+df = pd.read_csv(CHUNK_FILE)
 
+fpgen = MolFingerprint("morgan")
 df["y_pred"] = np.nan
 df["model_path"] = None
 
 
 def train_assay(assay_id, group):
-    X_train = np.stack(
-        fpgen.compute_parallel(group.loc[~group["test"], "smiles"].values, pbar=False)
-    )
-    X_test = np.stack(fpgen.compute_parallel(group.loc[group["test"], "smiles"].values))
+    smiles_all = group["smiles"].values
+    fps_all = np.stack(fpgen.compute_parallel(smiles_all, pbar=False))
+
+    X_train = fps_all[~group["test"].values]
+    X_test = fps_all[group["test"].values]
 
     y_train = group.loc[~group["test"], "activity_value"].values
-    y_test = group.loc[group["test"], "activity_value"].values
 
-    if len(y_train) < 5 or len(y_test) < 1:
-        return assay_id, None, None, None  # skip
+    if len(y_train) < 5 or X_test.shape[0] < 1:
+        return assay_id, None, None, None
+
+    n_features = X_train.shape[1]
+    X_train = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(n_features)])
+    X_test = pd.DataFrame(X_test, columns=[f"f{i}" for i in range(n_features)])
 
     automl = AutoML()
     automl_settings = {
-        "time_budget": 60,
+        "time_budget": 30,
         "task": "regression",
         "metric": "rmse",
         "log_file_name": f"{MODEL_DIR}/assay_{assay_id}.log",
@@ -51,17 +55,13 @@ def train_assay(assay_id, group):
     return assay_id, group.loc[group["test"]].index, y_pred, model_path
 
 
-# Run in parallel across assays
-results = Parallel(n_jobs=-1)(  # set n_jobs=N for #CPUs you want
-    delayed(train_assay)(assay_id, group)
-    for assay_id, group in tqdm(df.groupby("assay_id"), total=df["assay_id"].nunique())
-)
+results = [train_assay(assay_id, group) for assay_id, group in tqdm(df.groupby("assay_id"))]
 
-# Write results back into df
+log("write results")
 for assay_id, test_idx, y_pred, model_path in results:
     if test_idx is None:
         continue
     df.loc[test_idx, "y_pred"] = y_pred
     df.loc[df["assay_id"] == assay_id, "model_path"] = model_path
 
-df.to_csv("data/raw/chembl_endpoints_split_flaml.csv", index_col=False)
+df.to_csv(f"data/raw/chembl_endpoints_split_flaml_chunk_{CHUNK_ID}.csv", index=False)
