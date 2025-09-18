@@ -22,6 +22,7 @@ df["model_path"] = None
 
 
 def train_assay(assay_id, group):
+    log(f"processing assay {assay_id}")
     smiles_all = group["smiles"].values
     fps_all = np.stack(fpgen.compute_parallel(smiles_all, pbar=False))
 
@@ -55,7 +56,7 @@ def train_assay(assay_id, group):
     return assay_id, group.loc[group["test"]].index, y_pred, model_path
 
 
-results = [train_assay(assay_id, group) for assay_id, group in tqdm(df.groupby("assay_id"))]
+results = [train_assay(assay_id, group) for assay_id, group in df.groupby("assay_id")]
 
 log("write results")
 for assay_id, test_idx, y_pred, model_path in results:
