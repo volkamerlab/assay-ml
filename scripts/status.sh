@@ -50,6 +50,11 @@ print_table () {
         epoch=$(echo "$line" | awk '{print $4}')
         cur_epoch=$(rg "epoch:" "$f"| tail -n 1 | awk '{print $4}')
         rank_corr=$(echo "$line" | awk '{print $10}')
+        if [ "$method" == "pfn" ]; then
+            line=$(rg AUROC "$f" | tail -n 1)
+            rank_corr=$(echo "$line" | awk '{print $10}')
+            epoch=$(echo "$line" | awk '{print $4}')
+        fi
 
         if [ "$old_fold" != "$fold" ] || [ "$old_dataset" != "$dataset" ]; then
             if [ "$fold" != "" -a "$old_dataset" != "" ]; then
