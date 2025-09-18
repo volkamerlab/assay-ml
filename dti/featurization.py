@@ -88,13 +88,18 @@ class MolFingerprint(StrEnum):
             case _:
                 raise ValueError(f"Unknown fingerprint target: '{target}'")
 
-    def compute_parallel(self, smiles: Iterable[str], n_jobs: int = 16, **kwargs):
+    def compute_parallel(
+        self, smiles: Iterable[str], n_jobs: int = 16, pbar: bool = True, **kwargs
+    ):
         if self is MolFingerprint.CHEMBERTA:
             logger.warning("Parallel compute not supported for ChemBERTa")
             return [self.compute(s, **kwargs) for s in tqdm.tqdm(smiles)]
 
         with Pool(n_jobs) as p:
-            return p.map(functools.partial(self.compute, **kwargs), tqdm.tqdm(smiles))
+            return p.map(
+                functools.partial(self.compute, **kwargs),
+                tqdm.tqdm(smiles) if pbar else smiles,
+            )
 
 
 @functools.cache

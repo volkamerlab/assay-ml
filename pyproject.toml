@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "distinctipy>=1.3.4",
     "fair-esm>=2.0.0",
+    "flaml[automl]>=2.3.6",
     "ipywidgets>=8.1.5",
     "jupyterlab>=4.3.5",
     "lightgbm>=4.6.0",
