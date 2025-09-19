@@ -251,8 +251,8 @@ def train_with_batched_masked_sets(
     steps = 0
     loss_fn = BCEWithLogitsLoss()
 
-    for protein_features, ligand_features, labels, info, metadata in tqdm.tqdm(
-        loader, desc="training"
+    for protein_features, ligand_features, labels, info, metadata in (
+        pbar := tqdm.tqdm(loader, desc="training")
     ):
         set_boundaries = metadata["set_boundaries"].squeeze()
         num_sets = metadata["num_sets"].squeeze()
@@ -262,6 +262,7 @@ def train_with_batched_masked_sets(
         protein_features = protein_features.squeeze().to(device)
         labels = labels.squeeze().to(device)
         batch_size = labels.size(0)
+        info = info.squeeze()
 
         sample_mask = torch.zeros(batch_size, dtype=torch.bool, device=device)
         dist = torch.zeros(batch_size, model.n_bins, device=device)
@@ -275,8 +276,12 @@ def train_with_batched_masked_sets(
             if set_size < 2:
                 continue
 
-            mask = torch.rand(set_size, device=device) < mask_fraction
-            sample_mask[start_idx:end_idx] = mask
+            info_batch = info[start_idx:end_idx, :]
+            if info_batch.size(1) == 3:
+                mask = info_batch[:, 0].flatten().type(torch.bool)
+            else:
+                mask = torch.rand(set_size, device=device) < mask_fraction
+            sample_mask[start_idx:end_idx] = mask.to(device)
 
             edges = fit_quantile_bins(
                 labels[start_idx:end_idx][~mask], num_classes=model.n_bins
@@ -292,6 +297,7 @@ def train_with_batched_masked_sets(
         )  # (batch_size, model.n_bins)
 
         batch_loss = loss_fn(preds, dist)
+        pbar.set_description(f"train batch loss={batch_loss:.4e}")
 
         optimizer.zero_grad()
         batch_loss.backward()
@@ -321,8 +327,8 @@ def evaluate_with_batched_masked_sets(
     all_targets = []
     all_preds = []
 
-    for protein_features, ligand_features, labels, info, metadata in tqdm.tqdm(
-        loader, desc="evaluating"
+    for protein_features, ligand_features, labels, info, metadata in (
+        pbar := tqdm.tqdm(loader, desc="evaluating")
     ):
         set_boundaries = metadata["set_boundaries"].squeeze()
         num_sets = metadata["num_sets"].squeeze()
@@ -363,6 +369,7 @@ def evaluate_with_batched_masked_sets(
         )  # (batch_size, n_bins)
 
         batch_loss = loss_fn(preds, dist)
+        pbar.set_description(f"eval batch loss={batch_loss:.4e}")
         total_loss += batch_loss.item()
         total_samples += batch_size
 
@@ -784,16 +791,12 @@ def train_and_evaluate_model(
                 prediction_file=pred_file,
             )
             logger.info(
-                f"epoch: {epoch + 1} "
-                f"fold: {index} "
-                f"test rank corr: {test_rank_corr:.4f}"
+                f"epoch: {epoch + 1} fold: {index} test rank corr: {test_rank_corr:.4f}"
             )
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= opts["patience_termination"]:
-                logger.info(
-                    f"early stopping triggered after {epoch + 1} epochs."
-                )
+                logger.info(f"early stopping triggered after {epoch + 1} epochs.")
                 break
 
 
@@ -875,6 +878,7 @@ def train_and_evaluate_pfn_model(
             f"epoch: {epoch + 1} "
             f"train loss: {train_loss:.4e} "
             f"validation loss: {val_loss:.4e} "
+            f"validation AUROC: {val_results['auroc']:.4e} "
         )
 
         optimization.append(Epoch(epoch, lr, train_loss, val_loss))
@@ -890,13 +894,11 @@ def train_and_evaluate_pfn_model(
             test_results = evaluate_with_batched_masked_sets(model, test_loader)
             logger.info(
                 f"epoch: {epoch + 1} "
-                f"test loss: {test_results["loss"]:.4f} "
-                f"test AUROC: {test_results["auroc"]:.4f} "
+                f"test loss: {test_results['loss']:.4f} "
+                f"test AUROC: {test_results['auroc']:.4f} "
             )
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= opts["patience_termination"]:
-                logger.info(
-                    f"early stopping triggered after {epoch + 1} epochs."
-                )
+                logger.info(f"early stopping triggered after {epoch + 1} epochs.")
                 break

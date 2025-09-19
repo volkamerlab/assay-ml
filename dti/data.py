@@ -11,7 +11,17 @@ import torch
 from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler
 
-from .constants import DATA, SMILES, ACT, TID, SEQUENCE, ASSAY, COMPOUND, HODGE
+from .constants import (
+    DATA,
+    SMILES,
+    ACT,
+    TID,
+    SEQUENCE,
+    ASSAY,
+    COMPOUND,
+    HODGE,
+    INTRA_ASSAY_TEST,
+)
 from .utils import device
 from .featurization import MolFingerprint, esm2_features
 from .hodge_ranking import parallel_hodge_rank
@@ -40,7 +50,8 @@ class ActivityDataset(Dataset):
     ):
         super().__init__()
         logger.info(f"creating dataset of size {len(data)}")
-        logger.debug(f"data types: {data.dtypes}")
+        for line in str(data.dtypes).split("\n"):
+            logger.debug(line)
         logger.info("computing fingerprints")
         fps = mol_featurizer.compute_parallel(data[SMILES].values)
         mask = [fp is not None for fp in fps]
@@ -59,9 +70,13 @@ class ActivityDataset(Dataset):
         self.labels = torch.tensor(
             self.data[target].values, dtype=torch.float32, device=device
         )
-        self.info_cols = info_cols
+        missing_info_cols = [c for c in info_cols if c not in data.columns]
+        if len(missing_info_cols) > 0:
+            logger.warn(f"missing info cols: {missing_info_cols}")
+            info_cols = [c for c in info_cols if c not in missing_info_cols]
         logger.info(f"info cols: {info_cols}")
-        self.info = torch.tensor(self.data[info_cols].values)
+        self.info_cols = info_cols
+        self.info = torch.tensor(self.data[info_cols].values.astype(np.int64))
 
     @functools.cached_property
     def weights(self):
@@ -793,18 +808,19 @@ def load_clearance(path: Path = DATA / "raw" / "clearance.csv") -> pd.DataFrame:
 
 
 def load_chembl_endpoints(
-    path: Path = DATA / "raw" / "chembl_endpoints.csv",
+    path: Path = DATA / "raw" / "chembl_endpoints_split.csv",
 ) -> pd.DataFrame:
     logger.info("loading general ChEMBL endpoints")
     data = pd.read_csv(path, index_col=False)
-    data["compound_id"] = data["compound_id"].str[6:].astype(int)
+    # data["compound_id"] = data["compound_id"].str[6:].astype(int)
     assert data["compound_id"].dtype == int
     return _process(
         data,
         {
             "compound_id": COMPOUND,
-            "standard_value": ACT,
-            "canonical_smiles": SMILES,
+            "activity_value": ACT,
+            "smiles": SMILES,
             "assay_id": ASSAY,
+            "test": INTRA_ASSAY_TEST,
         },
     )

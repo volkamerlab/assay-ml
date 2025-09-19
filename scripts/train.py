@@ -52,7 +52,7 @@ from dti.utils import (
     set_random_seeds,
     save_code_snapshot,
 )
-from dti.constants import DATA, ASSAY, COMPOUND, HODGE
+from dti.constants import DATA, ASSAY, COMPOUND, HODGE, INTRA_ASSAY_TEST
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
     msa = partial(
         MultiSetActivityDataset,
         sets_per_batch=(10 if method == Method.PFN else 20),
-        max_set_size=(500 if method == Method.PFN else 1000)
+        max_set_size=(500 if method == Method.PFN else 1000),
     )
     shuffled_multiset = partial(msa, inter_assay=True)
     match method:
@@ -242,7 +242,7 @@ def run_split(
 ):
     batch_size = 512
     num_epochs = 50_000  # early stopping in place
-    info_cols = [COMPOUND, ASSAY]
+    info_cols = [INTRA_ASSAY_TEST, COMPOUND, ASSAY]
 
     (
         model_cls,
