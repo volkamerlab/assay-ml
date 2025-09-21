@@ -808,17 +808,16 @@ def load_clearance(path: Path = DATA / "raw" / "clearance.csv") -> pd.DataFrame:
 
 
 def load_chembl_endpoints(
-    path: Path = DATA / "raw" / "chembl_endpoints_split.csv",
+    path: Path = DATA / "raw" / "chembl_endpoints_split_transformed.csv",
 ) -> pd.DataFrame:
     logger.info("loading general ChEMBL endpoints")
     data = pd.read_csv(path, index_col=False)
-    # data["compound_id"] = data["compound_id"].str[6:].astype(int)
     assert data["compound_id"].dtype == int
     return _process(
         data,
         {
             "compound_id": COMPOUND,
-            "activity_value": ACT,
+            "target_transformed": ACT,
             "smiles": SMILES,
             "assay_id": ASSAY,
             "test": INTRA_ASSAY_TEST,
