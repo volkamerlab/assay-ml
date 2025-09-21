@@ -808,7 +808,7 @@ def load_clearance(path: Path = DATA / "raw" / "clearance.csv") -> pd.DataFrame:
 
 
 def load_chembl_endpoints(
-    path: Path = DATA / "raw" / "chembl_endpoints_split_transformed.csv",
+    path: Path = DATA / "raw" / "chembl_endpoints_split_transformed.csv.gz",
 ) -> pd.DataFrame:
     logger.info("loading general ChEMBL endpoints")
     data = pd.read_csv(path, index_col=False)
@@ -816,6 +816,7 @@ def load_chembl_endpoints(
     return _process(
         data,
         {
+            ACT: ACT + "_orig",
             "compound_id": COMPOUND,
             "target_transformed": ACT,
             "smiles": SMILES,
