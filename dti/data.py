@@ -50,8 +50,8 @@ class ActivityDataset(Dataset):
     ):
         super().__init__()
         logger.info(f"creating dataset of size {len(data)}")
-        for line in str(data.dtypes).split("\n"):
-            logger.debug(line)
+        # for line in str(data.dtypes).split("\n"):
+        #     logger.debug(line)
         logger.info("computing fingerprints")
         fps = mol_featurizer.compute_parallel(data[SMILES].values)
         mask = [fp is not None for fp in fps]
@@ -613,6 +613,7 @@ def load_split(
     tgt_name: str,
     inter_assay_weight: Union[float, None] = None,
     scale_scores: bool = False,
+    scale_targets: bool = True,
 ) -> Tuple[pd.DataFrame, Union[pd.DataFrame, None], pd.DataFrame, pd.DataFrame]:
     split_dir = data_dir / f"{index}"
     logger.info(f"reading dataset from {split_dir}")
@@ -621,10 +622,17 @@ def load_split(
     train_data = pd.read_csv(split_dir / "train.csv", index_col=0)
     test_data = pd.read_csv(split_dir / "test.csv", index_col=0)
 
-    scaler = StandardScaler()
-    train_data[tgt_name] = scaler.fit_transform(train_data[ACT].values.reshape(-1, 1))
-    test_data[tgt_name] = scaler.transform(test_data[ACT].values.reshape(-1, 1))
-    val_data[tgt_name] = scaler.transform(val_data[ACT].values.reshape(-1, 1))
+    if scale_targets:
+        scaler = StandardScaler()
+        train_data[tgt_name] = scaler.fit_transform(
+            train_data[ACT].values.reshape(-1, 1)
+        )
+        test_data[tgt_name] = scaler.transform(test_data[ACT].values.reshape(-1, 1))
+        val_data[tgt_name] = scaler.transform(val_data[ACT].values.reshape(-1, 1))
+    else:
+        train_data[tgt_name] = train_data[ACT]
+        test_data[tgt_name] = test_data[ACT]
+        val_data[tgt_name] = val_data[ACT]
 
     if inter_assay_weight is not None:
         train_data = _load_hodge_ranking(
