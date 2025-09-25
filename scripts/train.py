@@ -52,7 +52,7 @@ from dti.utils import (
     set_random_seeds,
     save_code_snapshot,
 )
-from dti.constants import DATA, ASSAY, COMPOUND, HODGE, INTRA_ASSAY_TEST
+from dti.constants import ACT, DATA, ASSAY, COMPOUND, HODGE, INTRA_ASSAY_TEST
 
 logger = logging.getLogger(__name__)
 
@@ -166,16 +166,16 @@ def prepare_dataset_splits(
     mol_feat: str,
     info_cols: list[str],
     batch_size: int,
+    train_target: str = "scaled_ic50",
+    test_target: str = "scaled_ic50",
 ):
     """Prepare and return model class, dataloaders, ligand_dim, and raw data."""
     data_dir = DATA / "processed" / dataset_name
-    train_tgt = tgt_name = "scaled_ic50"
     aggregate = dataset_name != "chembl"
     inter_assay_weight = None
 
     if method == Method.HODGE:
         inter_assay_weight = 0.0
-        train_tgt = HODGE
 
     model_cls, dataset_cls, val_dataset_cls, load_data = setup(method, dataset_name)
     data = load_data()
@@ -189,15 +189,19 @@ def prepare_dataset_splits(
             aggregate=aggregate,
         )
 
+    train_dataset_path = data_dir / str(fold) / "train.pt"
+    val_dataset_path = data_dir / str(fold) / "val.pt"
+    test_dataset_path = data_dir / str(fold) / "test.pt"
     train_data, val_data, test_data = load_split(
-        fold, data_dir, tgt_name, inter_assay_weight=inter_assay_weight
+        fold, data_dir, test_target, inter_assay_weight=inter_assay_weight,
+        scale_targets=method != Method.PFN
     )
     mol_feat = MolFingerprint(mol_feat)
     data_kwargs = dict(mol_featurizer=mol_feat, info_cols=info_cols)
 
-    train_dataset = dataset_cls(train_data, target=train_tgt, **data_kwargs)
-    val_dataset = val_dataset_cls(val_data, target=tgt_name, **data_kwargs)
-    test_dataset = val_dataset_cls(test_data, target=tgt_name, **data_kwargs)
+    train_dataset = dataset_cls(train_data, target=train_target, **data_kwargs)
+    val_dataset = val_dataset_cls(val_data, target=test_target, **data_kwargs)
+    test_dataset = val_dataset_cls(test_data, target=test_target, **data_kwargs)
 
     assert len(train_dataset) > 0
 
@@ -228,7 +232,6 @@ def prepare_dataset_splits(
         test_loader,
         mol_feat.dim,
         data,
-        train_tgt,
     )
 
 
@@ -244,6 +247,17 @@ def run_split(
     num_epochs = 50_000  # early stopping in place
     info_cols = [INTRA_ASSAY_TEST, COMPOUND, ASSAY]
 
+    match method:
+        case Method.HODGE:
+            train_target = HODGE
+            test_target = "scaled_ic50"
+        case Method.PFN:
+            train_target = ACT
+            test_target = ACT
+        case _:
+            train_target = "scaled_ic50"
+            test_target = "scaled_ic50"
+
     (
         model_cls,
         train_loader,
@@ -251,9 +265,15 @@ def run_split(
         test_loader,
         ligand_dim,
         data,
-        train_tgt,
     ) = prepare_dataset_splits(
-        dataset_name, fold, method, mol_feat, info_cols, batch_size
+        dataset_name,
+        fold,
+        method,
+        mol_feat,
+        info_cols,
+        batch_size,
+        train_target=train_target,
+        test_target=test_target,
     )
 
     rstat = pearsonr
@@ -261,7 +281,8 @@ def run_split(
     training_loss = loss_fn(method, nn.SmoothL1Loss(reduction="none"))
     train_short = method.on_sets or method.on_pairs
 
-    logger.info(f"training target: {train_tgt}")
+    logger.info(f"training target: {train_target}")
+    logger.info(f"test target: {test_target}")
 
     args = [model_cls, run_name, train_loader, val_loader, test_loader, method, fold]
     kwargs = dict(
