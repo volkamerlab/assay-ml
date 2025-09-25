@@ -24,8 +24,7 @@ from .data import MultiSetActivityDataset
 from .model import (
     MoleculeBayesianSetRankModel,
     ComplexBayesianSetRankModel,
-    fit_quantile_bins,
-    digitize_labels,
+    BinDistribution,
 )
 
 logger = logging.getLogger(__name__)
@@ -244,12 +243,12 @@ def train_with_batched_masked_sets(
     model, loader, optimizer, mask_fraction: float = 0.2, **kwargs
 ):
     """
-    Vectorized version: one forward per batch, per-set binning, losses masked.
+    Training loop with one shared BinDistribution.
+    Each set is min-max normalized using its unmasked samples before binning.
     """
     model.train()
     total_loss = 0.0
     steps = 0
-    loss_fn = BCEWithLogitsLoss()
 
     for protein_features, ligand_features, labels, info, metadata in (
         pbar := tqdm.tqdm(loader, desc="training")
@@ -261,18 +260,17 @@ def train_with_batched_masked_sets(
         ligand_features = ligand_features.squeeze().to(device)
         protein_features = protein_features.squeeze().to(device)
         labels = labels.squeeze().to(device)
-        batch_size = labels.size(0)
         info = info.squeeze()
+        batch_size = labels.size(0)
 
         sample_mask = torch.zeros(batch_size, dtype=torch.bool, device=device)
-        dist = torch.zeros(batch_size, model.n_bins, device=device)
-        set_sizes = torch.zeros(num_sets, device=device)
+        normed_labels = torch.empty_like(labels)
 
+        # --- Per-set masking and min-max normalization ---
         for i in range(num_sets):
             start_idx = set_boundaries[i]
             end_idx = set_boundaries[i + 1]
             set_size = end_idx - start_idx
-            set_sizes[i] = set_size
             if set_size < 2:
                 continue
 
@@ -281,27 +279,38 @@ def train_with_batched_masked_sets(
                 mask = info_batch[:, 0].flatten().type(torch.bool)
             else:
                 mask = torch.rand(set_size, device=device) < mask_fraction
-            sample_mask[start_idx:end_idx] = mask.to(device)
+            sample_mask[start_idx:end_idx] = mask
 
-            edges = fit_quantile_bins(
-                labels[start_idx:end_idx][~mask], num_classes=model.n_bins
-            )
-            class_labels = digitize_labels(labels[start_idx:end_idx], edges)
+            set_labels = labels[start_idx:end_idx]
+            unmasked = set_labels[~mask]
+            if unmasked.numel() > 1:
+                min_val = unmasked.min()
+                max_val = unmasked.max()
+                denom = (max_val - min_val).clamp_min(1e-6)
+                normed_labels[start_idx:end_idx] = (set_labels - min_val) / denom
+            else:
+                # fallback if no valid unmasked points
+                normed_labels[start_idx:end_idx] = set_labels
 
-            dist[start_idx:end_idx] = F.one_hot(
-                class_labels, num_classes=model.n_bins
-            ).float()
-
+        # --- Forward pass ---
         preds = model(
-            ligand_features, protein_features, dist, sample_mask, set_ids_tensor
-        )  # (batch_size, model.n_bins)
+            ligand_features,
+            protein_features,
+            normed_labels,
+            sample_mask,
+            set_ids_tensor,
+        )  # (batch_size, n_bins)
 
-        batch_loss = loss_fn(preds, dist)
+        # --- Negative log-likelihood ---
+        nll_losses = -model.bin_dist.log_prob(normed_labels, preds)
+        batch_loss = nll_losses.mean()
+
         pbar.set_description(f"train batch loss={batch_loss:.4e}")
 
         optimizer.zero_grad()
         batch_loss.backward()
         optimizer.step()
+
         total_loss += batch_loss.item()
         steps += 1
 
@@ -309,21 +318,16 @@ def train_with_batched_masked_sets(
 
 
 @torch.no_grad()
-def evaluate_with_batched_masked_sets(
-    model,
-    loader,
-    mask_fraction: float = 0.2,
-):
+def evaluate_with_batched_masked_sets(model, loader, mask_fraction: float = 0.2):
     """
-    Evaluate model on batched masked sets.
-    Computes BCE loss (overall) and AUROC (macro, one-vs-rest).
+    Evaluate model on batched masked sets using the shared learnable BinDistribution.
+    Each set is min-max normalized using its unmasked samples.
+    Computes average negative log-likelihood and AUROC (macro, one-vs-rest).
     """
     model.eval()
-    loss_fn = BCEWithLogitsLoss(reduction="sum")
 
     total_loss = 0.0
     total_samples = 0
-
     all_targets = []
     all_preds = []
 
@@ -337,11 +341,13 @@ def evaluate_with_batched_masked_sets(
         ligand_features = ligand_features.squeeze().to(device)
         protein_features = protein_features.squeeze().to(device)
         labels = labels.squeeze().to(device)
+        info = info.squeeze()
         batch_size = labels.size(0)
 
         sample_mask = torch.zeros(batch_size, dtype=torch.bool, device=device)
-        dist = torch.zeros(batch_size, model.n_bins, device=device)
+        normed_labels = torch.empty_like(labels)
 
+        # --- Per-set masking and min-max normalization ---
         for i in range(num_sets):
             start_idx = set_boundaries[i]
             end_idx = set_boundaries[i + 1]
@@ -349,39 +355,57 @@ def evaluate_with_batched_masked_sets(
             if set_size < 2:
                 continue
 
-            mask = torch.rand(set_size, device=device) < mask_fraction
+            info_batch = info[start_idx:end_idx, :]
+            if info_batch.size(1) == 3:
+                mask = info_batch[:, 0].flatten().type(torch.bool)
+            else:
+                logger.debug("no mask given; sampling a random one")
+                mask = torch.rand(set_size, device=device) < mask_fraction
             sample_mask[start_idx:end_idx] = mask
-            labeled_mask = ~mask
-            if labeled_mask.sum() < 1:
-                continue
 
-            edges = fit_quantile_bins(
-                labels[start_idx:end_idx][labeled_mask], num_classes=model.n_bins
-            )
-            class_labels = digitize_labels(labels[start_idx:end_idx], edges)
+            set_labels = labels[start_idx:end_idx]
+            unmasked = set_labels[~mask]
+            if unmasked.numel() > 1:
+                min_val = unmasked.min()
+                max_val = unmasked.max()
+                denom = (max_val - min_val).clamp_min(1e-6)
+                normed_labels[start_idx:end_idx] = (set_labels - min_val) / denom
+            else:
+                # fallback if no valid unmasked points
+                normed_labels[start_idx:end_idx] = set_labels
 
-            dist[start_idx:end_idx] = F.one_hot(
-                class_labels, num_classes=model.n_bins
-            ).float()
-
+        # --- Forward pass ---
         preds = model(
-            ligand_features, protein_features, dist, sample_mask, set_ids_tensor
+            ligand_features,
+            protein_features,
+            normed_labels,
+            sample_mask,
+            set_ids_tensor,
         )  # (batch_size, n_bins)
 
-        batch_loss = loss_fn(preds, dist)
+        # --- Negative log-likelihood ---
+        nll_losses = -model.bin_dist.log_prob(normed_labels, preds)
+        nll_losses = nll_losses[~torch.isnan(nll_losses)]
+        batch_loss = nll_losses.mean()
+
         pbar.set_description(f"eval batch loss={batch_loss:.4e}")
         total_loss += batch_loss.item()
         total_samples += batch_size
 
+        # Collect for AUROC
         if sample_mask.any():
-            all_targets.append(dist[sample_mask].detach().cpu())
-            all_preds.append(torch.sigmoid(preds[sample_mask]).detach().cpu())
+            class_labels = model.bin_dist.labels(normed_labels)
+            dist_onehot = model.bin_dist.dist(class_labels)
+            all_targets.append(dist_onehot[sample_mask].cpu())
+            all_preds.append(torch.softmax(preds[sample_mask], dim=-1).cpu())
 
+    # --- Compute macro AUROC (one-vs-rest) ---
     if all_targets:
         y_true = torch.cat(all_targets).numpy()
         y_score = torch.cat(all_preds).numpy()
-
         try:
+            from sklearn.metrics import roc_auc_score
+
             auroc = roc_auc_score(y_true, y_score, multi_class="ovr")
         except ValueError:
             auroc = float("nan")
@@ -389,11 +413,7 @@ def evaluate_with_batched_masked_sets(
         auroc = float("nan")
 
     avg_loss = total_loss / max(1, total_samples)
-
-    return {
-        "loss": avg_loss,
-        "auroc": auroc,
-    }
+    return {"loss": avg_loss, "auroc": auroc}
 
 
 def train_with_batched_sets(
@@ -848,6 +868,7 @@ def train_and_evaluate_pfn_model(
     model = model_cls(
         ligand_input_size=opts["ligand_dim"],
         protein_input_size=opts["protein_dim"],
+        n_bins=10,
         **opts,
     ).to(device)
 

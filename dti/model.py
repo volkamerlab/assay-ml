@@ -12,7 +12,7 @@ from torch.nn import (
     Sequential,
     ModuleList,
 )
-from torch.nn import MultiheadAttention as MHA
+from torch.nn import MultiheadAttention as MHA, functional as F
 from torch import nn
 from torch.nn import SiLU, BatchNorm1d
 
@@ -81,7 +81,7 @@ class CombinedModel(nn.Module):
         embedding_size,
         hidden_layer_size=512,
         cosine_agg=True,
-        **kwargs
+        **kwargs,
     ):
         super().__init__()
 
@@ -139,7 +139,7 @@ class PairCombinedModel(CombinedModel):
         embedding_size,
         hidden_layer_size=512,
         cosine_agg=True,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(
             protein_input_size,
@@ -238,6 +238,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             num_heads=num_heads,
         )
         self.n_bins = n_bins
+        self.bin_dist = BinDistribution(n_bins=n_bins)
         self.distribution_encoder = _mlp(
             input_size=self.n_bins,
             hidden_size=self.n_bins * 2,
@@ -264,7 +265,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             num_blocks=8,
             dropout=p_dropout,
         )
-        self.ouput = Sequential(
+        self.output = Sequential(
             Linear(hidden_channels, hidden_channels),
             SiLU(),
             BatchNorm1d(hidden_channels),
@@ -276,8 +277,8 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
     def forward(
         self,
         ligand: Tensor,
-        _protein: Tensor, # ignored
-        dist: Tensor,
+        _protein: Tensor,  # ignored
+        y: Tensor,  # raw regression targets
         sample_mask: Tensor,
         set_ids: Tensor,
     ) -> Tensor:
@@ -285,11 +286,14 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         attn_mask = torch.logical_or(attn_mask, make_asymmetric_mask(sample_mask))
         sample_mask = sample_mask.float().unsqueeze(1)
         x_ligand = self.embed_ligand(ligand)
-        x_dist = self.distribution_encoder(dist)
+        class_labels = self.bin_dist.labels(y)
+        dist_onehot = self.bin_dist.dist(class_labels)  # [N, n_bins]
+        x_dist = self.distribution_encoder(dist_onehot)
         x_dist = (1 - sample_mask) * x_dist + sample_mask * self.default_dist_emb
         x = self.combine_repr(torch.cat((x_ligand, x_dist), 1))
         h = self.set_transformer(x, attn_mask=attn_mask)
-        return self.ouput(h).squeeze()
+        return self.output(h)
+
 
 class ComplexSetRank(MoleculeSetRank):
     def __init__(
@@ -382,7 +386,7 @@ class ComplexBayesianSetRankModel(MoleculeBayesianSetRankModel):
         self,
         ligand: Tensor,
         protein: Tensor,
-        dist: Tensor,
+        y: Tensor,
         sample_mask: Tensor,
         set_ids: Tensor,
     ) -> Tensor:
@@ -391,7 +395,9 @@ class ComplexBayesianSetRankModel(MoleculeBayesianSetRankModel):
         sample_mask = sample_mask.float().unsqueeze(1)
         x_ligand = self.embed_ligand(ligand)
         x_protein = self.embed_protein(protein)
-        x_dist = self.distribution_encoder(dist)
+        class_labels = self.bin_dist.labels(y)
+        dist_onehot = self.bin_dist.dist(class_labels)  # [N, n_bins]
+        x_dist = self.distribution_encoder(dist_onehot)
         x_dist = (1 - sample_mask) * x_dist + sample_mask * self.default_dist_emb
         x = self.combine_repr(torch.cat((x_ligand, x_protein, x_dist), 1))
         h = self.set_transformer(x, attn_mask=attn_mask)
@@ -486,15 +492,91 @@ class SetTransformer(Module):
         return activations[-1]
 
 
-def fit_quantile_bins(y: torch.Tensor, num_classes: int) -> torch.Tensor:
-    if y.ndim != 1:
-        y = y.flatten()
-    probs = torch.linspace(0, 1, num_classes + 1, device=device)
-    return torch.quantile(y, probs, interpolation="linear")
+class BinDistribution(nn.Module):
+    """Learnable bin distribution with positive interval widths."""
 
+    def __init__(self, n_bins: int, exp_tails: bool = True):
+        super().__init__()
+        self.n_bins = n_bins
+        self.exp_tails = exp_tails
 
-def digitize_labels(y: torch.Tensor, edges: torch.Tensor) -> torch.Tensor:
-    return torch.bucketize(y, edges[1:-1], right=False).long()
+        self.widths_unconstrained = nn.Parameter(torch.ones(n_bins))
+
+        self._side_normals = None
+
+    def _construct_edges(self) -> torch.Tensor:
+        """Reconstruct bin edges from parameters."""
+        widths = F.softplus(self.widths_unconstrained)
+        edges = torch.cat(
+            [
+                torch.tensor([0.]),
+                torch.cumsum(widths, dim=0),
+            ]
+        )
+        return edges / widths.sum()
+
+    def _init_side_normals(self):
+        edges = self._construct_edges()
+        bucket_widths = edges[1:] - edges[:-1]
+
+        self._side_normals = (
+            self._halfnormal(bucket_widths[0].item(), p=0.5),
+            self._halfnormal(bucket_widths[-1].item(), p=0.5),
+        )
+
+    @staticmethod
+    def _halfnormal(
+        range_max: float, p: float = 0.5
+    ) -> torch.distributions.Distribution:
+        if range_max <= 0:
+            range_max = 1e-8
+        standard_half_normal = torch.distributions.HalfNormal(torch.tensor(1.0))
+        scale = range_max / standard_half_normal.icdf(torch.tensor(p))
+        return torch.distributions.HalfNormal(scale.item())
+
+    def labels(self, y: torch.Tensor) -> torch.Tensor:
+        edges = self._construct_edges()
+
+        bucket_indices = torch.searchsorted(edges, y) - 1
+        bucket_indices[y == edges[0]] = 0
+        bucket_indices[y == edges[-1]] = self.n_bins - 1
+        bucket_indices = bucket_indices.clamp(0, self.n_bins - 1)
+
+        return bucket_indices.long()
+
+    def dist(self, class_labels: torch.Tensor) -> torch.Tensor:
+        return F.one_hot(class_labels, num_classes=self.n_bins).float()
+
+    def log_prob(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
+        edges = self._construct_edges()
+        bucket_indices = self.labels(y)
+        bucket_log_probs = F.log_softmax(logits, dim=-1)
+        bucket_widths = edges[1:] - edges[:-1]
+
+        scaled_log_probs = bucket_log_probs - torch.log(bucket_widths)
+        log_probs = scaled_log_probs.gather(-1, bucket_indices.unsqueeze(-1)).squeeze(
+            -1
+        )
+
+        if self.exp_tails and self._side_normals is not None:
+            left_boundary_mask = bucket_indices == 0
+            right_boundary_mask = bucket_indices == self.n_bins - 1
+
+            if left_boundary_mask.any():
+                distances = (edges[1] - y[left_boundary_mask]).clamp(min=1e-8)
+                half_normal_log_prob = self._side_normals[0].log_prob(distances)
+                log_probs[left_boundary_mask] += half_normal_log_prob + torch.log(
+                    bucket_widths[0]
+                )
+
+            if right_boundary_mask.any():
+                distances = (y[right_boundary_mask] - edges[-2]).clamp(min=1e-8)
+                half_normal_log_prob = self._side_normals[1].log_prob(distances)
+                log_probs[right_boundary_mask] += half_normal_log_prob + torch.log(
+                    bucket_widths[-1]
+                )
+
+        return log_probs
 
 
 def make_block_diag_mask(set_ids: torch.Tensor, num_heads: int = None) -> torch.Tensor:
