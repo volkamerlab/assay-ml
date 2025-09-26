@@ -225,7 +225,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
     def __init__(
         self,
         ligand_input_size: int,
-        n_bins: int = 10,
+        n_bins: int = 20,
         hidden_channels: int = 512,
         p_dropout: float = 0.05,
         num_heads: int = 8,
@@ -615,13 +615,9 @@ def make_asymmetric_mask(masked: torch.Tensor) -> torch.Tensor:
     attn_mask = torch.zeros(N, N, dtype=torch.bool, device=device)
 
     for i in range(N):  # query index
+        attn_mask[i] = masked  # disallow attending masked tokens
         if masked[i]:
-            # masked query: can attend to unmasked + itself
-            attn_mask[i] = masked  # disallow attending masked tokens
             attn_mask[i, i] = False  # allow self
-        else:
-            # unmasked query: cannot attend to masked tokens
-            attn_mask[i] = masked
 
     return attn_mask
 

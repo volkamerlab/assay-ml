@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 from scipy.stats import spearmanr
 import logging
 from functools import namedtuple
+from sklearn.metrics import roc_auc_score
 
 from .utils import device
 from .constants import ASSAY, OUTPUT, ACT, COMPOUND, PREDICTION, TID
@@ -258,13 +259,11 @@ def train_with_batched_masked_sets(
         sample_mask = torch.zeros(batch_size, dtype=torch.bool, device=device)
         normed_labels = torch.empty_like(labels)
 
-        # --- Per-set masking and min-max normalization ---
         for i in range(num_sets):
             start_idx = set_boundaries[i]
             end_idx = set_boundaries[i + 1]
             set_size = end_idx - start_idx
-            if set_size < 2:
-                continue
+            assert set_size >= 2
 
             info_batch = info[start_idx:end_idx, :]
             if info_batch.size(1) == 3:
@@ -284,7 +283,6 @@ def train_with_batched_masked_sets(
                 # fallback if no valid unmasked points
                 normed_labels[start_idx:end_idx] = set_labels
 
-        # --- Forward pass ---
         preds = model(
             ligand_features,
             protein_features,
@@ -293,7 +291,6 @@ def train_with_batched_masked_sets(
             set_ids_tensor,
         )  # (batch_size, n_bins)
 
-        # --- Negative log-likelihood ---
         nll_losses = -model.bin_dist.log_prob(normed_labels, preds)
         batch_loss = nll_losses.mean()
 
@@ -310,11 +307,17 @@ def train_with_batched_masked_sets(
 
 
 @torch.no_grad()
-def evaluate_with_batched_masked_sets(model, loader, mask_fraction: float = 0.2):
+def evaluate_with_batched_masked_sets(
+    model,
+    loader,
+    mask_fraction: float = 0.2,
+    predictions_file: Path | None = None,
+):
     """
     Evaluate model on batched masked sets using the shared learnable BinDistribution.
     Each set is min-max normalized using its unmasked samples.
     Computes average negative log-likelihood and AUROC (macro, one-vs-rest).
+    Optionally writes predictions + info to a CSV (raw + normalized labels, probs).
     """
     model.eval()
 
@@ -322,6 +325,8 @@ def evaluate_with_batched_masked_sets(model, loader, mask_fraction: float = 0.2)
     total_samples = 0
     all_targets = []
     all_preds = []
+
+    pred_records = []  # for writing to file
 
     for protein_features, ligand_features, labels, info, metadata in (
         pbar := tqdm.tqdm(loader, desc="evaluating")
@@ -339,7 +344,6 @@ def evaluate_with_batched_masked_sets(model, loader, mask_fraction: float = 0.2)
         sample_mask = torch.zeros(batch_size, dtype=torch.bool, device=device)
         normed_labels = torch.empty_like(labels)
 
-        # --- Per-set masking and min-max normalization ---
         for i in range(num_sets):
             start_idx = set_boundaries[i]
             end_idx = set_boundaries[i + 1]
@@ -351,7 +355,6 @@ def evaluate_with_batched_masked_sets(model, loader, mask_fraction: float = 0.2)
             if info_batch.size(1) == 3:
                 mask = info_batch[:, 0].flatten().type(torch.bool)
             else:
-                logger.debug("no mask given; sampling a random one")
                 mask = torch.rand(set_size, device=device) < mask_fraction
             sample_mask[start_idx:end_idx] = mask
 
@@ -363,10 +366,8 @@ def evaluate_with_batched_masked_sets(model, loader, mask_fraction: float = 0.2)
                 denom = (max_val - min_val).clamp_min(1e-6)
                 normed_labels[start_idx:end_idx] = (set_labels - min_val) / denom
             else:
-                # fallback if no valid unmasked points
                 normed_labels[start_idx:end_idx] = set_labels
 
-        # --- Forward pass ---
         preds = model(
             ligand_features,
             protein_features,
@@ -375,7 +376,6 @@ def evaluate_with_batched_masked_sets(model, loader, mask_fraction: float = 0.2)
             set_ids_tensor,
         )  # (batch_size, n_bins)
 
-        # --- Negative log-likelihood ---
         nll_losses = -model.bin_dist.log_prob(normed_labels, preds)
         nll_losses = nll_losses[~torch.isnan(nll_losses)]
         batch_loss = nll_losses.mean()
@@ -384,14 +384,27 @@ def evaluate_with_batched_masked_sets(model, loader, mask_fraction: float = 0.2)
         total_loss += batch_loss.item()
         total_samples += batch_size
 
-        # Collect for AUROC
         if sample_mask.any():
             class_labels = model.bin_dist.labels(normed_labels)
             dist_onehot = model.bin_dist.dist(class_labels)
             all_targets.append(dist_onehot[sample_mask].cpu())
             all_preds.append(torch.softmax(preds[sample_mask], dim=-1).cpu())
 
-    # --- Compute macro AUROC (one-vs-rest) ---
+        if predictions_file is not None:
+            probs = torch.softmax(preds, dim=-1).detach().cpu().numpy()
+            labels_np = labels.detach().cpu().numpy()
+            normed_np = normed_labels.detach().cpu().numpy()
+            info_np = info.detach().cpu().numpy()
+            for i in range(batch_size):
+                record = {
+                    **{f"info_{j}": info_np[i, j] for j in range(info_np.shape[1])},
+                    "true_label": labels_np[i],
+                    "normed_label": normed_np[i],
+                }
+                for b in range(model.n_bins):
+                    record[f"prob_bin_{b}"] = probs[i, b]
+                pred_records.append(record)
+
     if all_targets:
         y_true = torch.cat(all_targets).numpy()
         y_score = torch.cat(all_preds).numpy()
@@ -405,6 +418,12 @@ def evaluate_with_batched_masked_sets(model, loader, mask_fraction: float = 0.2)
         auroc = float("nan")
 
     avg_loss = total_loss / max(1, total_samples)
+
+    if predictions_file is not None and pred_records:
+        df = pd.DataFrame(pred_records)
+        predictions_file.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(predictions_file, index=False)
+
     return {"loss": avg_loss, "auroc": auroc}
 
 
@@ -860,7 +879,7 @@ def train_and_evaluate_pfn_model(
     model = model_cls(
         ligand_input_size=opts["ligand_dim"],
         protein_input_size=opts["protein_dim"],
-        n_bins=10,
+        n_bins=20,
         **opts,
     ).to(device)
 
@@ -903,8 +922,15 @@ def train_and_evaluate_pfn_model(
             logger.info("updating test set predictions")
             best_loss = val_loss
             epochs_without_improvement = 0
-            torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")
-            test_results = evaluate_with_batched_masked_sets(model, test_loader)
+            torch.save(model.state_dict(), OUTPUT / run_name / "model.pt")
+            torch.save(model.bin_dist.com, OUTPUT / run_name / "model.pt")
+            with open(OUTPUT / run_name / "bin_dist", "w") as f_bins:
+                f_bins.write(f"{model.bin_dist._construct_edges()}")
+            test_results = evaluate_with_batched_masked_sets(
+                model,
+                test_loader,
+                predictions_file=OUTPUT / run_name / "predictions.csv",
+            )
             logger.info(
                 f"epoch: {epoch + 1} "
                 f"test loss: {test_results['loss']:.4f} "
