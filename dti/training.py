@@ -923,7 +923,6 @@ def train_and_evaluate_pfn_model(
             best_loss = val_loss
             epochs_without_improvement = 0
             torch.save(model.state_dict(), OUTPUT / run_name / "model.pt")
-            torch.save(model.bin_dist.com, OUTPUT / run_name / "model.pt")
             with open(OUTPUT / run_name / "bin_dist", "w") as f_bins:
                 f_bins.write(f"{model.bin_dist._construct_edges()}")
             test_results = evaluate_with_batched_masked_sets(
