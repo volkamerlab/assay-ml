@@ -10,10 +10,7 @@ import torch
 from torch import nn, Tensor
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
-from torch.nn import BCEWithLogitsLoss
-import torch.nn.functional as F
 from scipy.stats import spearmanr
-from sklearn.metrics import roc_auc_score
 import logging
 from functools import namedtuple
 
@@ -21,11 +18,6 @@ from .utils import device
 from .constants import ASSAY, OUTPUT, ACT, COMPOUND, PREDICTION, TID
 from .hodge_ranking import assay_ranks
 from .data import MultiSetActivityDataset
-from .model import (
-    MoleculeBayesianSetRankModel,
-    ComplexBayesianSetRankModel,
-    BinDistribution,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -799,7 +791,7 @@ def train_and_evaluate_model(
         )
 
         if val_rank_corr > best_corr:
-            logger.info(f"updating test set predictions")
+            logger.info("updating test set predictions")
             best_corr = val_rank_corr
             epochs_without_improvement = 0
             torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")
@@ -908,7 +900,7 @@ def train_and_evaluate_pfn_model(
         )
 
         if val_loss < best_loss:
-            logger.info(f"updating test set predictions")
+            logger.info("updating test set predictions")
             best_loss = val_loss
             epochs_without_improvement = 0
             torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")

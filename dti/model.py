@@ -500,7 +500,7 @@ class BinDistribution(nn.Module):
         self.n_bins = n_bins
         self.exp_tails = exp_tails
 
-        self.widths_unconstrained = nn.Parameter(torch.ones(n_bins))
+        self.widths_unconstrained = nn.Parameter(torch.ones(n_bins, device=device))
 
         self._side_normals = None
 
@@ -509,7 +509,7 @@ class BinDistribution(nn.Module):
         widths = F.softplus(self.widths_unconstrained)
         edges = torch.cat(
             [
-                torch.tensor([0.]),
+                torch.tensor([0.0], device=device),
                 torch.cumsum(widths, dim=0),
             ]
         )
@@ -530,8 +530,10 @@ class BinDistribution(nn.Module):
     ) -> torch.distributions.Distribution:
         if range_max <= 0:
             range_max = 1e-8
-        standard_half_normal = torch.distributions.HalfNormal(torch.tensor(1.0))
-        scale = range_max / standard_half_normal.icdf(torch.tensor(p))
+        standard_half_normal = torch.distributions.HalfNormal(
+            torch.tensor(1.0, device=device)
+        )
+        scale = range_max / standard_half_normal.icdf(torch.tensor(p, device=device))
         return torch.distributions.HalfNormal(scale.item())
 
     def labels(self, y: torch.Tensor) -> torch.Tensor:
