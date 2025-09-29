@@ -160,7 +160,7 @@ def init_logging(run_name: Union[str, None] = str(time.time())):
     file_handler.setLevel(logging.DEBUG)
 
     formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"
+        "%(asctime)s [%(run_name)s] [%(levelname)s] %(message)s", datefmt="%H:%M:%S"
     )
     console_handler.setFormatter(formatter)
     file_handler.setFormatter(formatter)
