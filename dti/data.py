@@ -59,7 +59,7 @@ class ActivityDataset(Dataset):
             logger.info(
                 f"dropping {len(mask) - sum(mask)}/{len(mask)} data points w/o FP"
             )
-    
+
         self.data = data[mask].copy()
         self.data.reset_index(inplace=True)
         self.ligand_features = torch.tensor(
@@ -77,7 +77,9 @@ class ActivityDataset(Dataset):
             info_cols = [c for c in info_cols if c not in missing_info_cols]
         logger.info(f"info cols: {info_cols}")
         self.info_cols = info_cols
-        self.info = torch.tensor(self.data[info_cols].values.astype(np.int64), device="cpu")
+        self.info = torch.tensor(
+            self.data[info_cols].values.astype(np.int64), device="cpu"
+        )
 
     @functools.cached_property
     def weights(self):
@@ -823,6 +825,15 @@ def load_chembl_endpoints(
 ) -> pd.DataFrame:
     logger.info("loading general ChEMBL endpoints")
     data = pd.read_csv(path, index_col=False)
+    data.drop(
+        columns=[
+            "assay_id_x_type",
+            "transform_type",
+            "standard_units",
+            "standard_type",
+            "target_scaled",
+        ]
+    )
     assert data["compound_id"].dtype == int
     return _process(
         data,
