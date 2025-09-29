@@ -1,6 +1,6 @@
 universe = docker
 docker_image = astral/uv:debian
-executable = run_training.sh
+executable = run_pfn_training.sh
 arguments = $(script) $(seed) $(dataset) $(method) $(fold) $(mol_feat) $(unmasked_weight)
 output = logs/train_dti.$(ClusterId).$(ProcId).out
 error = logs/train_dti.$(ClusterId).$(ProcId).err
@@ -14,6 +14,4 @@ requirements = UidDomain == "cs.uni-saarland.de"
 +WantGPUHomeMounted = true
 queue fold, script, seed, dataset, method, mol_feat, unmasked_weight from (
     0, scripts/train.py, 0, chembl, pfn, morgan, 0.0
-    0, scripts/train.py, 0, chembl, pfn, morgan, 0.5
-    0, scripts/train.py, 0, chembl, pfn, morgan, 1.0
 )
