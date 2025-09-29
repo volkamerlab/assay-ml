@@ -20,7 +20,10 @@ from rdkit.ML.Cluster import Butina
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.decomposition import PCA
 from rdkit.DataStructs.cDataStructs import TanimotoSimilarity
+from rdkit import RDLogger
 
+lg = RDLogger.logger()
+lg.setLevel(RDLogger.CRITICAL)
 from .constants import OUTPUT, SMILES
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -160,7 +163,7 @@ def init_logging(run_name: Union[str, None] = str(time.time())):
     file_handler.setLevel(logging.DEBUG)
 
     formatter = logging.Formatter(
-        "%(asctime)s [%(run_name)s] [%(levelname)s] %(message)s", datefmt="%H:%M:%S"
+        f"%(asctime)s [{run_name}] [%(levelname)s] %(message)s", datefmt="%H:%M:%S"
     )
     console_handler.setFormatter(formatter)
     file_handler.setFormatter(formatter)
