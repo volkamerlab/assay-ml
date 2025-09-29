@@ -832,7 +832,8 @@ def load_chembl_endpoints(
             "standard_units",
             "standard_type",
             "target_scaled",
-        ]
+        ],
+        inplace=True,
     )
     assert data["compound_id"].dtype == int
     return _process(
