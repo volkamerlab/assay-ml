@@ -947,13 +947,12 @@ def train_and_evaluate_pfn_model(
         lr = scheduler.get_last_lr()
         logger.debug(f"learning rate: {lr}")
 
-        logger.info(
-            f"validation epoch: {epoch + 1}"
-            f"\n train loss: {train_loss:.4e}"
-            f"\n masked loss: {val_loss:.4e}"
-            f"\n unmasked AUROC: {val_results['loss_unmasked']:.4e}"
-            f"\n masked AUROC: {val_results['auroc_masked']:.4e}"
-            f"\n unmasked AUROC: {val_results['auroc_unmasked']:.4e}"
+        logger.info("validation epoch: {epoch + 1}")
+        logger.info(" train loss: {train_loss:.4e}")
+        logger.info(" masked loss: {val_loss:.4e}")
+        logger.info(" unmasked AUROC: {val_results['loss_unmasked']:.4e}")
+        logger.info(" masked AUROC: {val_results['auroc_masked']:.4e}")
+        logger.info(" unmasked AUROC: {val_results['auroc_unmasked']:.4e}")
         )
 
         optimization.append(Epoch(epoch, lr, train_loss, val_loss))
@@ -973,12 +972,11 @@ def train_and_evaluate_pfn_model(
                 test_loader,
                 predictions_file=OUTPUT / run_name / "predictions.csv",
             )
-            logger.info(
-                f"test epoch: {epoch + 1} "
-                f"\n masked loss: {val_loss:.4e}"
-                f"\n unmasked AUROC: {test_results['loss_unmasked']:.4e}"
-                f"\n masked AUROC: {test_results['auroc_masked']:.4e}"
-                f"\n unmasked AUROC: {test_results['auroc_unmasked']:.4e}"
+            logger.info(f"test epoch: {epoch + 1} ")
+            logger.info(f" masked loss: {val_loss:.4e}")
+            logger.info(f" unmasked AUROC: {test_results['loss_unmasked']:.4e}")
+            logger.info(f" masked AUROC: {test_results['auroc_masked']:.4e}")
+            logger.info(f" unmasked AUROC: {test_results['auroc_unmasked']:.4e}")
             )
         else:
             epochs_without_improvement += 1
