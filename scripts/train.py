@@ -193,8 +193,11 @@ def prepare_dataset_splits(
     val_dataset_path = data_dir / str(fold) / "val.pt"
     test_dataset_path = data_dir / str(fold) / "test.pt"
     train_data, val_data, test_data = load_split(
-        fold, data_dir, test_target, inter_assay_weight=inter_assay_weight,
-        scale_targets=method != Method.PFN
+        fold,
+        data_dir,
+        test_target,
+        inter_assay_weight=inter_assay_weight,
+        scale_targets=method != Method.PFN,
     )
     mol_feat = MolFingerprint(mol_feat)
     data_kwargs = dict(mol_featurizer=mol_feat, info_cols=info_cols)
@@ -242,6 +245,7 @@ def run_split(
     dataset_name: str,
     fold: int,
     seed: int,
+    unmasked_weight: float,
 ):
     batch_size = 512
     num_epochs = 50_000  # early stopping in place
@@ -295,6 +299,7 @@ def run_split(
         patience_termination=100 if train_short else 1000,
         patience_lr=10 if train_short else 100,
         fisher_transform=method not in [Method.IC50SETS, Method.IC50ALLSETS],
+        unmasked_weight=unmasked_weight,
     )
     if model_cls in [ComplexBayesianSetRankModel, MoleculeBayesianSetRankModel]:
         train_and_evaluate_pfn_model(*args, **kwargs)
@@ -320,6 +325,12 @@ def main():
         default="morgan",
         help="Molecular features (default: morgan)",
     )
+    parser.add_argument(
+        "--unmasked-weight",
+        type=float,
+        default=1.0,
+        help="[PFN] Weight of reconstruction on unmasked samples.",
+    )
 
     args = parser.parse_args()
 
@@ -340,7 +351,7 @@ def main():
     save_code_snapshot(run_name)
 
     set_random_seeds(args.seed)
-    run_split(run_name, mol_feat, method, dataset_name, args.fold, args.seed)
+    run_split(run_name, mol_feat, method, dataset_name, args.fold, args.seed, args.unmasked_weight)
 
 
 if __name__ == "__main__":
