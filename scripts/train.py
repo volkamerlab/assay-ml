@@ -168,6 +168,7 @@ def prepare_dataset_splits(
     batch_size: int,
     train_target: str = "scaled_ic50",
     test_target: str = "scaled_ic50",
+    need_data: bool = True,
 ):
     """Prepare and return model class, dataloaders, ligand_dim, and raw data."""
     data_dir = DATA / "processed" / dataset_name
@@ -178,9 +179,9 @@ def prepare_dataset_splits(
         inter_assay_weight = 0.0
 
     model_cls, dataset_cls, val_dataset_cls, load_data = setup(method, dataset_name)
-    data = load_data()
 
     if not (data_dir / f"{fold}").exists():
+        data = load_data()
         prepare_datasets(
             data,
             data_dir,
@@ -188,6 +189,8 @@ def prepare_dataset_splits(
             random_valset=False,
             aggregate=aggregate,
         )
+    elif need_data:
+        data = load_data()
 
     train_dataset_path = data_dir / str(fold) / "train.pt"
     val_dataset_path = data_dir / str(fold) / "val.pt"
@@ -234,7 +237,7 @@ def prepare_dataset_splits(
         val_loader,
         test_loader,
         mol_feat.dim,
-        data,
+        data if need_data else None,
     )
 
 
@@ -278,10 +281,10 @@ def run_split(
         batch_size,
         train_target=train_target,
         test_target=test_target,
+        need_data=method != Method.PFN,
     )
 
     rstat = pearsonr
-    assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
     training_loss = loss_fn(method, nn.SmoothL1Loss(reduction="none"))
     train_short = method.on_sets or method.on_pairs
 
@@ -293,7 +296,6 @@ def run_split(
         ligand_dim=ligand_dim,
         multi_batch=method in [Method.SETS, Method.IC50CORR],
         batch_size=batch_size,
-        rank_corr_fn=assay_rank,
         num_epochs=num_epochs,
         training_loss=training_loss,
         patience_termination=100 if train_short else 1000,
@@ -304,6 +306,8 @@ def run_split(
     if model_cls in [ComplexBayesianSetRankModel, MoleculeBayesianSetRankModel]:
         train_and_evaluate_pfn_model(*args, **kwargs)
     else:
+        assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
+        kwargs["rank_corr_fn"] = assay_rank
         train_and_evaluate_model(*args, **kwargs)
 
     logger.info(f"{run_name} finished")
@@ -351,7 +355,15 @@ def main():
     save_code_snapshot(run_name)
 
     set_random_seeds(args.seed)
-    run_split(run_name, mol_feat, method, dataset_name, args.fold, args.seed, args.unmasked_weight)
+    run_split(
+        run_name,
+        mol_feat,
+        method,
+        dataset_name,
+        args.fold,
+        args.seed,
+        args.unmasked_weight,
+    )
 
 
 if __name__ == "__main__":
