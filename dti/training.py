@@ -268,14 +268,12 @@ def train_with_batched_masked_sets(
         sample_mask = torch.zeros(batch_size, dtype=torch.bool, device=device)
         normed_labels = torch.empty_like(labels)
 
-        # ----- per-set masking + normalization -----
         for i in range(num_sets):
             start_idx = set_boundaries[i]
             end_idx = set_boundaries[i + 1]
             set_size = end_idx - start_idx
             assert set_size >= 2
 
-            # fixed number of masked elements per group
             n_masked = max(1, int(set_size * mask_fraction))
             perm = torch.randperm(set_size, device=device)
             mask_idx = perm[:n_masked]
@@ -358,7 +356,7 @@ def evaluate_with_batched_masked_sets(
         ligand_features = ligand_features.squeeze().to(device)
         protein_features = protein_features.squeeze().to(device)
         labels = labels.squeeze().to(device)
-        info = info.squeeze()
+        info = info.squeeze().to(device)
         batch_size = labels.size(0)
 
         sample_mask = torch.zeros(batch_size, dtype=torch.bool, device=device)
@@ -380,13 +378,11 @@ def evaluate_with_batched_masked_sets(
 
             set_labels = labels[start_idx:end_idx]
             unmasked = set_labels[~mask]
-            if unmasked.numel() > 1:
-                min_val = unmasked.min()
-                max_val = unmasked.max()
-                denom = (max_val - min_val).clamp_min(1e-6)
-                normed_labels[start_idx:end_idx] = (set_labels - min_val) / denom
-            else:
-                normed_labels[start_idx:end_idx] = set_labels
+            assert unmasked.numel() > 1, unmasked.numel()
+            min_val = unmasked.min()
+            max_val = unmasked.max()
+            denom = (max_val - min_val).clamp_min(1e-6)
+            normed_labels[start_idx:end_idx] = (set_labels - min_val) / denom
 
         preds = model(
             ligand_features,

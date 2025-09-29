@@ -59,16 +59,17 @@ class ActivityDataset(Dataset):
             logger.info(
                 f"dropping {len(mask) - sum(mask)}/{len(mask)} data points w/o FP"
             )
+    
         self.data = data[mask].copy()
         self.data.reset_index(inplace=True)
         self.ligand_features = torch.tensor(
             np.stack([fp for fp in fps if fp is not None]),
             dtype=torch.float32,
-            device=device,
+            device="cpu",
         )
         self.protein_features = esm2_features(data, model_name=model_name)
         self.labels = torch.tensor(
-            self.data[target].values, dtype=torch.float32, device=device
+            self.data[target].values, dtype=torch.float32, device="cpu"
         )
         missing_info_cols = [c for c in info_cols if c not in data.columns]
         if len(missing_info_cols) > 0:
@@ -76,7 +77,7 @@ class ActivityDataset(Dataset):
             info_cols = [c for c in info_cols if c not in missing_info_cols]
         logger.info(f"info cols: {info_cols}")
         self.info_cols = info_cols
-        self.info = torch.tensor(self.data[info_cols].values.astype(np.int64))
+        self.info = torch.tensor(self.data[info_cols].values.astype(np.int64), device="cpu")
 
     @functools.cached_property
     def weights(self):
