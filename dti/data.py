@@ -1,4 +1,4 @@
-from typing import List, Union, Iterator, Tuple, Iterable
+from collections.abc import Iterator, Iterable
 import functools
 import logging
 from pathlib import Path
@@ -45,7 +45,7 @@ class ActivityDataset(Dataset):
         data: pd.DataFrame,
         mol_featurizer: MolFingerprint,
         target: str = ACT,
-        info_cols: List[str] = [],
+        info_cols: list[str] = [],
         model_name: str = "esm2_t33_650M_UR50D",
     ):
         super().__init__()
@@ -611,10 +611,10 @@ def load_split(
     index: int,
     data_dir: Path,
     tgt_name: str,
-    inter_assay_weight: Union[float, None] = None,
+    inter_assay_weight: float | None = None,
     scale_scores: bool = False,
     scale_targets: bool = True,
-) -> Tuple[pd.DataFrame, Union[pd.DataFrame, None], pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame | None, pd.DataFrame, pd.DataFrame]:
     split_dir = data_dir / f"{index}"
     logger.info(f"reading dataset from {split_dir}")
 
@@ -679,12 +679,12 @@ def prepare_datasets(
     data: pd.DataFrame,
     data_dir: Path,
     k: int,
-    inter_assay_weight: Union[float, None] = None,
+    inter_assay_weight: float | None = None,
     random_valset: bool = False,
     aggregate: bool = True,
     columns: list[str] = [ASSAY],
 ) -> Iterator[
-    Tuple[int, pd.DataFrame, Union[pd.DataFrame, None], pd.DataFrame, pd.DataFrame]
+    tuple[int, pd.DataFrame, pd.DataFrame | None, pd.DataFrame, pd.DataFrame]
 ]:
     """Prepare train, validation, and test datasets."""
     logger.info(f"split along {columns}")
@@ -695,6 +695,8 @@ def prepare_datasets(
 
 def _process(data, col_map):
     assert all(k in data.columns for k in col_map.keys()), data.columns
+    backup_cols = {v: v + "_orig" for k, v in col_map.items() if k != v}
+    col_map.update(backup_cols)
     data = data.rename(columns=col_map)
     data = data[~data[SMILES].isna()]
     data = data[~data[ACT].isna()]
@@ -705,7 +707,7 @@ def _process(data, col_map):
 
 def load_kinodata(
     kinodata_path: Path = DATA / "raw" / "activities-chembl33_v0.5.csv",
-    activity_types: List[str] = ["pIC50"],
+    activity_types: list[str] = ["pIC50"],
 ) -> pd.DataFrame:
     logger.info(f"loading kinodata activities from {kinodata_path}")
     data = pd.read_csv(kinodata_path, index_col=0)
@@ -816,7 +818,7 @@ def load_clearance(path: Path = DATA / "raw" / "clearance.csv") -> pd.DataFrame:
 
 
 def load_chembl_endpoints(
-    path: Path = DATA / "raw" / "chembl_endpoints_split_transformed.csv.gz",
+    path: Path = DATA / "raw" / "chembl_endpoints_processed.csv.gz",
 ) -> pd.DataFrame:
     logger.info("loading general ChEMBL endpoints")
     data = pd.read_csv(path, index_col=False)
@@ -824,11 +826,10 @@ def load_chembl_endpoints(
     return _process(
         data,
         {
-            ACT: ACT + "_orig",
             "compound_id": COMPOUND,
             "target_transformed": ACT,
-            "smiles": SMILES,
-            "assay_id": ASSAY,
+            "canonical_smiles": SMILES,
+            "group": ASSAY,
             "test": INTRA_ASSAY_TEST,
         },
     )
