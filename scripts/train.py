@@ -26,6 +26,7 @@ from dti.data import (
     ActivityDataset,
     SetActivityDataset,
     MultiSetActivityDataset,
+    MultiSetWithPropertiesDataset,
     PairDataset,
     prepare_datasets,
     load_landrum,
@@ -98,11 +99,32 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
         MultiSetActivityDataset,
         sets_per_batch=(10 if method == Method.PFN else 20),
         max_set_size=(500 if method == Method.PFN else 1000),
+        shuffle_within_target=(method != Method.PFN),
     )
     shuffled_multiset = partial(msa, inter_assay=True)
     match method:
         case Method.PFN if mol_only:
-            return MoleculeBayesianSetRankModel, msa, msa
+            mswpds = partial(
+                MultiSetWithPropertiesDataset,
+                sets_per_batch=10,
+                max_set_size=500,
+                shuffle_within_target=False,
+                property_columns=[
+                    "mw_freebase",
+                    "alogp",
+                    "hba",
+                    "hbd",
+                    "psa",
+                    "rtb",
+                    "num_ro5_violations",
+                    "full_mwt",
+                    "aromatic_rings",
+                    "heavy_atoms",
+                    "qed_weighted",
+                    "np_likeness_score",
+                ],
+            )
+            return MoleculeBayesianSetRankModel, mswpds, msa
         case Method.PFN:
             return ComplexBayesianSetRankModel, msa, msa
         case Method.PAIRS if mol_only:
