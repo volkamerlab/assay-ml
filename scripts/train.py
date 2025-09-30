@@ -26,6 +26,7 @@ from dti.data import (
     ActivityDataset,
     SetActivityDataset,
     MultiSetActivityDataset,
+    MultiSetWithPropertiesDataset,
     PairDataset,
     prepare_datasets,
     load_landrum,
@@ -48,6 +49,7 @@ from dti.training import (
 )
 from dti.utils import (
     Method,
+    device,
     init_logging,
     set_random_seeds,
     save_code_snapshot,
@@ -98,11 +100,32 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
         MultiSetActivityDataset,
         sets_per_batch=(10 if method == Method.PFN else 20),
         max_set_size=(500 if method == Method.PFN else 1000),
+        shuffle_within_target=(method != Method.PFN),
     )
     shuffled_multiset = partial(msa, inter_assay=True)
     match method:
         case Method.PFN if mol_only:
-            return MoleculeBayesianSetRankModel, msa, msa
+            mswpds = partial(
+                MultiSetWithPropertiesDataset,
+                sets_per_batch=10,
+                max_set_size=500,
+                shuffle_within_target=False,
+                property_columns=[
+                    "mw_freebase",
+                    "alogp",
+                    "hba",
+                    "hbd",
+                    "psa",
+                    "rtb",
+                    "num_ro5_violations",
+                    "full_mwt",
+                    "aromatic_rings",
+                    "heavy_atoms",
+                    "qed_weighted",
+                    "np_likeness_score",
+                ],
+            )
+            return MoleculeBayesianSetRankModel, mswpds, msa
         case Method.PFN:
             return ComplexBayesianSetRankModel, msa, msa
         case Method.PAIRS if mol_only:
@@ -169,6 +192,7 @@ def prepare_dataset_splits(
     train_target: str = "scaled_ic50",
     test_target: str = "scaled_ic50",
     need_data: bool = True,
+    property_set_ratio: float = 0.5,
 ):
     """Prepare and return model class, dataloaders, ligand_dim, and raw data."""
     data_dir = DATA / "processed" / dataset_name
@@ -203,7 +227,11 @@ def prepare_dataset_splits(
         scale_targets=method != Method.PFN,
     )
     mol_feat = MolFingerprint(mol_feat)
-    data_kwargs = dict(mol_featurizer=mol_feat, info_cols=info_cols)
+    data_kwargs = dict(
+        mol_featurizer=mol_feat,
+        info_cols=info_cols,
+        property_set_ratio=property_set_ratio,
+    )
 
     train_dataset = dataset_cls(train_data, target=train_target, **data_kwargs)
     val_dataset = val_dataset_cls(val_data, target=test_target, **data_kwargs)
@@ -249,6 +277,7 @@ def run_split(
     fold: int,
     seed: int,
     unmasked_weight: float,
+    property_set_ratio: float,
 ):
     batch_size = 512
     num_epochs = 50_000  # early stopping in place
@@ -282,6 +311,7 @@ def run_split(
         train_target=train_target,
         test_target=test_target,
         need_data=method != Method.PFN,
+        property_set_ratio=property_set_ratio,
     )
 
     rstat = pearsonr
@@ -333,7 +363,13 @@ def main():
         "--unmasked-weight",
         type=float,
         default=1.0,
-        help="[PFN] Weight of reconstruction on unmasked samples.",
+        help="[PFN] Weight of reconstruction on unmasked samples. (default: 1.0)",
+    )
+    parser.add_argument(
+        "--property-set-ratio",
+        type=float,
+        default=0.5,
+        help="[PFN] Proportion of physiochemical property sets during training. (default: 0.5)",
     )
 
     args = parser.parse_args()
@@ -352,6 +388,7 @@ def main():
     logger.info(
         f"seed={args.seed} method={repr(method)} dataset={dataset_name} fold={args.fold}"
     )
+    logger.info(f"device: {device}")
     save_code_snapshot(run_name)
 
     set_random_seeds(args.seed)
@@ -363,6 +400,7 @@ def main():
         args.fold,
         args.seed,
         args.unmasked_weight,
+        args.property_set_ratio,
     )
 
 
