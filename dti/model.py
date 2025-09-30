@@ -552,9 +552,10 @@ class BinDistribution(nn.Module):
     def log_prob(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
         edges = self._construct_edges()
         bucket_indices = self.labels(y)
+        bucket_log_probs = F.log_softmax(logits, dim=-1)
         bucket_widths = edges[1:] - edges[:-1]
 
-        scaled_log_probs = logits - torch.log(bucket_widths)
+        scaled_log_probs = bucket_log_probs - torch.log(bucket_widths)
         log_probs = scaled_log_probs.gather(-1, bucket_indices.unsqueeze(-1)).squeeze(
             -1
         )
