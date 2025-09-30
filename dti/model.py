@@ -495,12 +495,16 @@ class SetTransformer(Module):
 class BinDistribution(nn.Module):
     """Learnable bin distribution with positive interval widths."""
 
-    def __init__(self, n_bins: int, exp_tails: bool = True):
+    def __init__(
+        self, n_bins: int, exp_tails: bool = True, widths: torch.Tensor | None = None
+    ):
         super().__init__()
         self.n_bins = n_bins
         self.exp_tails = exp_tails
 
         self.widths_unconstrained = nn.Parameter(torch.ones(n_bins, device=device))
+        if widths is not None:
+            self.widths_unconstrained.copy_(widths)
 
         self._side_normals = None
 
@@ -578,6 +582,57 @@ class BinDistribution(nn.Module):
                 )
 
         return log_probs
+
+    def bucket_centers(self) -> torch.Tensor:
+        edges = self._construct_edges()
+        return (edges[:-1] + edges[1:]) / 2
+
+    def moment(self, logits: torch.Tensor, n: float = 1.0):
+        """Compute the n-th moment of the distribution."""
+        loc = self.bucket_centers()
+        probs = F.softmax(logits, dim=-1)
+        return (probs * (loc.pow(n))).sum(dim=-1)
+
+    def mean(self, logits: torch.Tensor):
+        return self.moment(logits, n=1.0)
+
+    def var(self, logits: torch.Tensor):
+        mu = self.mean(logits)
+        mu2 = self.moment(logits, n=2.0)
+        return mu2 - mu**2
+
+    def std(self, logits: torch.Tensor):
+        return self.var(logits).sqrt()
+
+    def icdf(self, logits: torch.Tensor, q: torch.Tensor | float):
+        if isinstance(q, float):
+            q = torch.tensor([q])
+        q = q.clamp(1e-6, 1 - 1e-6)
+        assert q.dim() == 1, "Expected 1D tensor of quantiles"
+        assert logits.dim() == 2, "Expected 2D tensor of logits"
+        q = q.to(logits.device)
+
+        loc = self._construct_edges()
+        probs = F.softmax(logits, dim=-1)
+        cumprobs = torch.cumsum(probs, dim=-1)
+        bin_indices = torch.searchsorted(
+            cumprobs, q.expand(logits.size(0), -1), right=True
+        )
+        left_index = bin_indices
+        right_index = bin_indices + 1
+        zero_padded_cumprobs = torch.cat(
+            (cumprobs.new_zeros(cumprobs.size(0), 1), cumprobs), dim=-1
+        )
+        P_left = zero_padded_cumprobs.gather(-1, left_index)
+        P_right = zero_padded_cumprobs.gather(-1, right_index)
+        loc_left = loc[left_index]
+        loc_right = loc[right_index]
+        slope = (q - P_left) / (P_right - P_left).clamp(min=1e-8)
+        xq = loc_left + slope * (loc_right - loc_left)
+        return xq
+
+    def median(self, logits: torch.Tensor):
+        return self.icdf(logits, q=0.5).squeeze(-1)
 
 
 def make_block_diag_mask(set_ids: torch.Tensor, num_heads: int = None) -> torch.Tensor:
