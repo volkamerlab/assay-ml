@@ -505,15 +505,12 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         property_columns: list[str] = None,
         **kwargs,
     ):
-        # Initialize parent class (creates assay-based sets)
         super().__init__(data, target=target, info_cols=info_cols, **kwargs)
 
-        # Property set configuration
         self.property_set_ratio = property_set_ratio
-        self.base_target = target  # Store original assay target name
+        self.base_target = target
         self.property_columns = property_columns or []
 
-        # Validate property columns exist in data
         if self.property_columns:
             missing_cols = [
                 col for col in self.property_columns if col not in self.data.columns
@@ -535,11 +532,9 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
 
     def _prepare_property_data(self):
         """Prepare compound property data aligned with dataset indices."""
-        # Property data is already in self.data, just need to extract and store it
         self.property_values = {}
 
         for prop_col in self.property_columns:
-            # Handle missing values
             valid_mask = self.data[prop_col].notna()
 
             if valid_mask.sum() < self.min_batch_size:
@@ -617,7 +612,6 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         if self.inter_assay:
             self._shuffle_data()
 
-        # Shuffle assay-based sets
         indices = np.arange(len(self.valid_sets))
         self.random.shuffle(indices)
         shuffled_assay_sets = [self.valid_sets[i] for i in indices]
@@ -628,30 +622,24 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self.batch_set_types = []
         self.batch_set_targets = []
 
-        # Create batches with mixed assay and property sets
         for i in range(0, len(shuffled_assay_sets), self.sets_per_batch):
             end_idx = min(i + self.sets_per_batch, len(shuffled_assay_sets))
 
-            # Get assay sets for this batch
             assay_sets = shuffled_assay_sets[i:end_idx]
             assay_ids = shuffled_assay_ids[i:end_idx]
             num_assay_sets = len(assay_sets)
 
-            # Calculate how many property sets to add
             num_property_sets = int(num_assay_sets * self.property_set_ratio)
 
-            # Dynamically create property sets
             prop_sets, prop_ids, prop_types, prop_targets = (
                 self._create_property_sets_for_batch(num_property_sets)
             )
 
-            # Combine assay and property sets
             combined_sets = assay_sets + prop_sets
             combined_ids = assay_ids + prop_ids
             combined_types = ["assay"] * num_assay_sets + prop_types
             combined_targets = [self.base_target] * num_assay_sets + prop_targets
 
-            # Shuffle the combined sets within the batch
             batch_indices = np.arange(len(combined_sets))
             self.random.shuffle(batch_indices)
 
@@ -678,7 +666,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
     def _get_next_batch(self, idx: int):
         """Get the next available batch and mark it as used."""
         if np.all(self.used):
-            self._make_batches()  # Regenerate with new random property sets
+            self._make_batches()
         self.used[idx] = True
         return (
             self.batches[idx],
