@@ -192,6 +192,7 @@ def prepare_dataset_splits(
     train_target: str = "scaled_ic50",
     test_target: str = "scaled_ic50",
     need_data: bool = True,
+    property_set_ratio: float = 0.5,
 ):
     """Prepare and return model class, dataloaders, ligand_dim, and raw data."""
     data_dir = DATA / "processed" / dataset_name
@@ -226,7 +227,11 @@ def prepare_dataset_splits(
         scale_targets=method != Method.PFN,
     )
     mol_feat = MolFingerprint(mol_feat)
-    data_kwargs = dict(mol_featurizer=mol_feat, info_cols=info_cols)
+    data_kwargs = dict(
+        mol_featurizer=mol_feat,
+        info_cols=info_cols,
+        property_set_ratio=property_set_ratio,
+    )
 
     train_dataset = dataset_cls(train_data, target=train_target, **data_kwargs)
     val_dataset = val_dataset_cls(val_data, target=test_target, **data_kwargs)
@@ -272,6 +277,7 @@ def run_split(
     fold: int,
     seed: int,
     unmasked_weight: float,
+    property_set_ratio: float,
 ):
     batch_size = 512
     num_epochs = 50_000  # early stopping in place
@@ -305,6 +311,7 @@ def run_split(
         train_target=train_target,
         test_target=test_target,
         need_data=method != Method.PFN,
+        property_set_ratio=property_set_ratio,
     )
 
     rstat = pearsonr
@@ -356,7 +363,13 @@ def main():
         "--unmasked-weight",
         type=float,
         default=1.0,
-        help="[PFN] Weight of reconstruction on unmasked samples.",
+        help="[PFN] Weight of reconstruction on unmasked samples. (default: 1.0)",
+    )
+    parser.add_argument(
+        "--property-set-ratio",
+        type=float,
+        default=0.5,
+        help="[PFN] Proportion of physiochemical property sets during training. (default: 0.5)",
     )
 
     args = parser.parse_args()
@@ -387,6 +400,7 @@ def main():
         args.fold,
         args.seed,
         args.unmasked_weight,
+        args.property_set_ratio,
     )
 
 

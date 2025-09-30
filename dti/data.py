@@ -47,6 +47,7 @@ class ActivityDataset(Dataset):
         target: str = ACT,
         info_cols: list[str] = [],
         model_name: str = "esm2_t33_650M_UR50D",
+        **kwargs,
     ):
         super().__init__()
         logger.info(f"creating dataset of size {len(data)}")
@@ -227,6 +228,7 @@ class SetActivityDataset(ActivityDataset):
         min_batch_size: int = 3,
         max_batch_size: int = 0,
         random_seed: int = 0,
+        **kwargs,
     ):
         super().__init__(data, target, info_cols, model_name)
         self.min_batch_size = min_batch_size
@@ -506,6 +508,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         **kwargs,
     ):
         super().__init__(data, target=target, info_cols=info_cols, **kwargs)
+        logger.info(f"ratio of physchem property set: {property_set_ratio}")
 
         self.property_set_ratio = property_set_ratio
         self.base_target = target
@@ -552,8 +555,8 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             prop_tensor[valid_indices] = torch.tensor(valid_values, dtype=torch.float32)
 
             self.property_values[prop_col] = {
-                "tensor": prop_tensor,  # Full aligned tensor for fast indexing
-                "valid_indices": valid_indices,  # For sampling
+                "tensor": prop_tensor,
+                "valid_indices": valid_indices,
             }
 
         logger.info(
