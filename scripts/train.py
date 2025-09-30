@@ -49,6 +49,7 @@ from dti.training import (
 )
 from dti.utils import (
     Method,
+    device,
     init_logging,
     set_random_seeds,
     save_code_snapshot,
@@ -374,6 +375,7 @@ def main():
     logger.info(
         f"seed={args.seed} method={repr(method)} dataset={dataset_name} fold={args.fold}"
     )
+    logger.info(f"device: {device}")
     save_code_snapshot(run_name)
 
     set_random_seeds(args.seed)

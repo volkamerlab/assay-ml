@@ -548,21 +548,17 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
                 )
                 continue
 
-            # Store indices and values for molecules with valid property data
-            valid_indices = self.data.index[valid_mask].values
-            valid_values = torch.tensor(
-                self.data.loc[valid_mask, prop_col].values,
-                dtype=torch.float32,
-                device="cpu",
+            prop_tensor = torch.full(
+                (len(self.data),), float("nan"), dtype=torch.float32, device="cpu"
             )
 
-            # Pre-compute index-to-position mapping for fast lookup
-            idx_to_pos = {idx: pos for pos, idx in enumerate(valid_indices)}
+            valid_indices = self.data.index[valid_mask].values
+            valid_values = self.data.loc[valid_mask, prop_col].values
+            prop_tensor[valid_indices] = torch.tensor(valid_values, dtype=torch.float32)
 
             self.property_values[prop_col] = {
-                "indices": valid_indices,
-                "values": valid_values,
-                "idx_to_pos": idx_to_pos,  # Pre-computed lookup table
+                "tensor": prop_tensor,  # Full aligned tensor for fast indexing
+                "valid_indices": valid_indices,  # For sampling
             }
 
         logger.info(
@@ -589,12 +585,10 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         available_properties = list(self.property_values.keys())
 
         for set_idx in range(num_sets):
-            # Randomly select a property to use as target
             prop_name = self.random.choice(available_properties)
             prop_data = self.property_values[prop_name]
 
-            # Determine set size
-            max_available = len(prop_data["indices"])
+            max_available = len(prop_data["valid_indices"])
             if self.max_set_size > 0:
                 max_size = min(self.max_set_size, max_available)
             else:
@@ -605,12 +599,11 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
 
             set_size = self.random.integers(self.min_batch_size, max_size + 1)
 
-            # Randomly sample molecules
             sample_idx = self.random.choice(
-                len(prop_data["indices"]), size=set_size, replace=False
+                len(prop_data["valid_indices"]), size=set_size, replace=False
             )
 
-            selected_indices = prop_data["indices"][sample_idx]
+            selected_indices = prop_data["valid_indices"][sample_idx]
 
             property_sets.append(selected_indices)
             property_ids.append(f"property_{prop_name}_{set_idx}")
@@ -708,46 +701,21 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
 
         all_indices = np.concatenate(batch_sets)
 
-        set_ids_tensor = []
-        for set_idx, set_size in enumerate(set_sizes):
-            set_ids_tensor.extend([set_idx] * set_size)
-        set_ids_tensor = torch.tensor(set_ids_tensor, dtype=torch.long)
+        set_ids_tensor = torch.tensor(
+            [set_idx for set_idx, size in enumerate(set_sizes) for _ in range(size)],
+            dtype=torch.long,
+        )
 
-        # Collect labels based on set type - build list of label tensors
         all_labels = []
-        all_assay_indices = []  # Indices for assay sets
-
         for set_idcs, set_type, target_name in zip(
             batch_sets, batch_types, batch_targets
         ):
             if set_type == "assay":
-                all_assay_indices.append(set_idcs)
-            else:  # property set
-                # Use property values as labels - use pre-computed lookup
-                prop_data = self.property_values[target_name]
-                positions = [prop_data["idx_to_pos"][idx] for idx in set_idcs]
-                all_labels.append(prop_data["values"][positions])
+                all_labels.append(self.labels[set_idcs])
+            else:
+                all_labels.append(self.property_values[target_name]["tensor"][set_idcs])
 
-        # Batch index assay labels for efficiency
-        if all_assay_indices:
-            assay_indices_flat = np.concatenate(all_assay_indices)
-            assay_labels = self.labels[assay_indices_flat]
-
-            # Insert assay labels at correct positions
-            full_labels = []
-            assay_offset = 0
-            for set_type in batch_types:
-                if set_type == "assay":
-                    set_len = set_sizes[len(full_labels)]
-                    full_labels.append(
-                        assay_labels[assay_offset : assay_offset + set_len]
-                    )
-                    assay_offset += set_len
-                else:
-                    full_labels.append(all_labels.pop(0))
-            all_labels = torch.cat(full_labels)
-        else:
-            all_labels = torch.cat(all_labels) if all_labels else torch.tensor([])
+        all_labels = torch.cat(all_labels)
 
         prot_feats = (
             torch.ones(1, device=device)
