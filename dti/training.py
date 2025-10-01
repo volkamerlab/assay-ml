@@ -931,6 +931,7 @@ def train_and_evaluate_pfn_model(
 
         logger.info(f"epoch: {epoch + 1}")
         logger.info(f" train loss: {train_loss:.4e}")
+        logger.info(f" validation loss: {val_loss:.4e}")
         logger.info(f" validation Brier: {val_results['brier_masked']:.4e}")
         logger.info(f" validation EMD: {val_results['wass_masked']:.4e}")
         logger.info(f" validation MAE: {val_results['mae_masked']:.4e}")
