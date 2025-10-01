@@ -69,6 +69,8 @@ class BinDistribution(nn.Module):
         quantiles = torch.quantile(all_normed, probabilities)
 
         self.edges.copy_(quantiles)
+        if self.exp_tails:
+            self._init_side_normals()
 
         logger.info(
             f"fitted {self.n_bins} bins with edges: "
