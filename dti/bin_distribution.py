@@ -45,11 +45,11 @@ class BinDistribution(nn.Module):
 
     def _init_side_normals(self):
         edges = self._construct_edges()
-        bucket_widths = edges[1:] - edges[:-1]
+        bin_widths = edges[1:] - edges[:-1]
 
         self._side_normals = (
-            self._halfnormal(bucket_widths[0].item(), p=0.5),
-            self._halfnormal(bucket_widths[-1].item(), p=0.5),
+            self._halfnormal(bin_widths[0].item(), p=0.5),
+            self._halfnormal(bin_widths[-1].item(), p=0.5),
         )
 
     @staticmethod
@@ -67,54 +67,52 @@ class BinDistribution(nn.Module):
     def labels(self, y: torch.Tensor) -> torch.Tensor:
         edges = self._construct_edges()
 
-        bucket_indices = torch.searchsorted(edges, y) - 1
-        bucket_indices[y == edges[0]] = 0
-        bucket_indices[y == edges[-1]] = self.n_bins - 1
-        bucket_indices = bucket_indices.clamp(0, self.n_bins - 1)
+        bin_indices = torch.searchsorted(edges, y) - 1
+        bin_indices[y == edges[0]] = 0
+        bin_indices[y == edges[-1]] = self.n_bins - 1
+        bin_indices = bin_indices.clamp(0, self.n_bins - 1)
 
-        return bucket_indices.long()
+        return bin_indices.long()
 
     def dist(self, class_labels: torch.Tensor) -> torch.Tensor:
         return F.one_hot(class_labels, num_classes=self.n_bins).float()
 
     def log_prob(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
         edges = self._construct_edges()
-        bucket_indices = self.labels(y)
-        bucket_log_probs = F.log_softmax(logits, dim=-1)
-        bucket_widths = edges[1:] - edges[:-1]
+        bin_indices = self.labels(y)
+        bin_log_probs = F.log_softmax(logits, dim=-1)
+        bin_widths = edges[1:] - edges[:-1]
 
-        scaled_log_probs = bucket_log_probs - torch.log(bucket_widths)
-        log_probs = scaled_log_probs.gather(-1, bucket_indices.unsqueeze(-1)).squeeze(
-            -1
-        )
+        scaled_log_probs = bin_log_probs - torch.log(bin_widths)
+        log_probs = scaled_log_probs.gather(-1, bin_indices.unsqueeze(-1)).squeeze(-1)
 
         if self.exp_tails and self._side_normals is not None:
-            left_boundary_mask = bucket_indices == 0
-            right_boundary_mask = bucket_indices == self.n_bins - 1
+            left_boundary_mask = bin_indices == 0
+            right_boundary_mask = bin_indices == self.n_bins - 1
 
             if left_boundary_mask.any():
                 distances = (edges[1] - y[left_boundary_mask]).clamp(min=1e-8)
                 half_normal_log_prob = self._side_normals[0].log_prob(distances)
                 log_probs[left_boundary_mask] += half_normal_log_prob + torch.log(
-                    bucket_widths[0]
+                    bin_widths[0]
                 )
 
             if right_boundary_mask.any():
                 distances = (y[right_boundary_mask] - edges[-2]).clamp(min=1e-8)
                 half_normal_log_prob = self._side_normals[1].log_prob(distances)
                 log_probs[right_boundary_mask] += half_normal_log_prob + torch.log(
-                    bucket_widths[-1]
+                    bin_widths[-1]
                 )
 
         return log_probs
 
-    def bucket_centers(self) -> torch.Tensor:
+    def bin_centers(self) -> torch.Tensor:
         edges = self._construct_edges()
         return (edges[:-1] + edges[1:]) / 2
 
     def moment(self, logits: torch.Tensor, n: float = 1.0):
         """Compute the n-th moment of the distribution."""
-        loc = self.bucket_centers()
+        loc = self.bin_centers()
         probs = F.softmax(logits, dim=-1)
         return (probs * (loc.pow(n))).sum(dim=-1)
 
