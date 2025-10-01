@@ -496,15 +496,21 @@ class BinDistribution(nn.Module):
     """Learnable bin distribution with positive interval widths."""
 
     def __init__(
-        self, n_bins: int, exp_tails: bool = True, widths: torch.Tensor | None = None
+        self,
+        n_bins: int,
+        exp_tails: bool = True,
+        widths: torch.Tensor | None = None,
+        learnable_widths: bool = False,
     ):
         super().__init__()
         self.n_bins = n_bins
         self.exp_tails = exp_tails
 
-        self.widths_unconstrained = nn.Parameter(torch.ones(n_bins, device=device))
-        if widths is not None:
-            self.widths_unconstrained.copy_(widths)
+        self.widths_unconstrained = (
+            torch.ones(n_bins, device=device) if widths is None else widths
+        )
+        if learnable_widths:
+            self.widths_unconstrained = nn.Parameter(self.widths_unconstrained)
 
         self._side_normals = None
 
