@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from scipy.stats import spearmanr
 import logging
 from functools import namedtuple
-from sklearn.metrics import roc_auc_score
+from torcheval.metrics import MulticlassAUROC
 
 from .utils import device
 from .constants import ASSAY, OUTPUT, ACT, COMPOUND, PREDICTION, TID
@@ -335,14 +335,15 @@ def evaluate_with_batched_masked_sets(
     - Optionally writes predictions + info to a CSV.
     """
     model.eval()
+    device = next(model.parameters()).device
 
     total_loss_masked = 0.0
     total_loss_unmasked = 0.0
     n_masked = 0
     n_unmasked = 0
 
-    all_targets_masked, all_preds_masked = [], []
-    all_targets_unmasked, all_preds_unmasked = [], []
+    auroc_masked = MulticlassAUROC(num_classes=model.n_bins, average="macro")
+    auroc_unmasked = MulticlassAUROC(num_classes=model.n_bins, average="macro")
 
     pred_records = []
 
@@ -371,14 +372,17 @@ def evaluate_with_batched_masked_sets(
 
             info_batch = info[start_idx:end_idx, :]
             if info_batch.size(1) == 3:
-                mask = info_batch[:, 0].flatten().type(torch.bool)
+                mask = info_batch[:, 0].flatten().bool()
             else:
                 mask = torch.rand(set_size, device=device) < mask_fraction
             sample_mask[start_idx:end_idx] = mask
 
             set_labels = labels[start_idx:end_idx]
             unmasked = set_labels[~mask]
-            assert unmasked.numel() > 1, unmasked.numel()
+            assert unmasked.numel() > 1, (
+                f"Need at least 2 unmasked samples, got {unmasked.numel()}"
+            )
+
             min_val = unmasked.min()
             max_val = unmasked.max()
             denom = (max_val - min_val).clamp_min(1e-6)
@@ -393,36 +397,30 @@ def evaluate_with_batched_masked_sets(
         )  # (batch_size, n_bins)
 
         nll_losses = -model.bin_dist.log_prob(normed_labels, preds)
-
         masked_losses = nll_losses[sample_mask]
         unmasked_losses = nll_losses[~sample_mask]
 
-        if masked_losses.numel():
-            total_loss_masked += masked_losses.mean().item() * masked_losses.numel()
+        if masked_losses.numel() > 0:
+            total_loss_masked += masked_losses.sum().item()
             n_masked += masked_losses.numel()
-
             class_labels = model.bin_dist.labels(normed_labels[sample_mask])
-            dist_onehot = model.bin_dist.dist(class_labels)
-            all_targets_masked.append(dist_onehot.cpu())
-            all_preds_masked.append(torch.softmax(preds[sample_mask], dim=-1).cpu())
+            probs = torch.softmax(preds[sample_mask], dim=-1)
+            auroc_masked.update(probs.cpu(), class_labels.cpu())
 
-        if unmasked_losses.numel():
-            total_loss_unmasked += (
-                unmasked_losses.mean().item() * unmasked_losses.numel()
-            )
+        if unmasked_losses.numel() > 0:
+            total_loss_unmasked += unmasked_losses.sum().item()
             n_unmasked += unmasked_losses.numel()
-
             class_labels = model.bin_dist.labels(normed_labels[~sample_mask])
-            dist_onehot = model.bin_dist.dist(class_labels)
-            all_targets_unmasked.append(dist_onehot.cpu())
-            all_preds_unmasked.append(torch.softmax(preds[~sample_mask], dim=-1).cpu())
+            probs = torch.softmax(preds[~sample_mask], dim=-1)
+            auroc_unmasked.update(probs.cpu(), class_labels.cpu())
 
         if predictions_file is not None:
-            probs = torch.softmax(preds, dim=-1).detach().cpu().numpy()
-            labels_np = labels.detach().cpu().numpy()
-            normed_np = normed_labels.detach().cpu().numpy()
-            info_np = info.detach().cpu().numpy()
-            mask_np = sample_mask.detach().cpu().numpy()
+            probs_np = torch.softmax(preds, dim=-1).cpu().numpy()
+            labels_np = labels.cpu().numpy()
+            normed_np = normed_labels.cpu().numpy()
+            info_np = info.cpu().numpy()
+            mask_np = sample_mask.cpu().numpy()
+
             for i in range(batch_size):
                 record = {
                     **{f"info_{j}": info_np[i, j] for j in range(info_np.shape[1])},
@@ -431,28 +429,15 @@ def evaluate_with_batched_masked_sets(
                     "is_masked": bool(mask_np[i]),
                 }
                 for b in range(model.n_bins):
-                    record[f"prob_bin_{b}"] = probs[i, b]
+                    record[f"prob_bin_{b}"] = probs_np[i, b]
                 pred_records.append(record)
 
-    def compute_metrics(all_targets, all_preds, n, total_loss):
-        if not all_targets:
-            return float("nan"), float("nan")
-        y_true = torch.cat(all_targets).numpy()
-        y_score = torch.cat(all_preds).numpy()
-        try:
-            from sklearn.metrics import roc_auc_score
+    avg_loss_masked = total_loss_masked / max(1, n_masked)
+    avg_loss_unmasked = total_loss_unmasked / max(1, n_unmasked)
 
-            auroc = roc_auc_score(y_true, y_score, multi_class="ovr")
-        except ValueError:
-            auroc = float("nan")
-        avg_loss = total_loss / max(1, n)
-        return avg_loss, auroc
-
-    avg_loss_masked, auroc_masked = compute_metrics(
-        all_targets_masked, all_preds_masked, n_masked, total_loss_masked
-    )
-    avg_loss_unmasked, auroc_unmasked = compute_metrics(
-        all_targets_unmasked, all_preds_unmasked, n_unmasked, total_loss_unmasked
+    auroc_masked_value = auroc_masked.compute().item() if n_masked > 0 else float("nan")
+    auroc_unmasked_value = (
+        auroc_unmasked.compute().item() if n_unmasked > 0 else float("nan")
     )
 
     if predictions_file is not None and pred_records:
@@ -462,9 +447,9 @@ def evaluate_with_batched_masked_sets(
 
     return {
         "loss_masked": avg_loss_masked,
-        "auroc_masked": auroc_masked,
+        "auroc_masked": auroc_masked_value,
         "loss_unmasked": avg_loss_unmasked,
-        "auroc_unmasked": auroc_unmasked,
+        "auroc_unmasked": auroc_unmasked_value,
     }
 
 
@@ -920,7 +905,6 @@ def train_and_evaluate_pfn_model(
     model = model_cls(
         ligand_input_size=opts["ligand_dim"],
         protein_input_size=opts["protein_dim"],
-        n_bins=20,
         **opts,
     ).to(device)
 
