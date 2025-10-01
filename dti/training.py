@@ -298,15 +298,20 @@ def train_with_batched_masked_sets(
             set_ids_tensor,
         )  # (batch_size, n_bins)
 
-        nll_losses = -model.bin_dist.log_prob(normed_labels, preds)
+        probs = torch.softmax(preds, dim=-1)
+        class_labels = model.bin_dist.labels(normed_labels)
+        one_hot = model.bin_dist.dist(class_labels)
+
+        cdf_pred = torch.cumsum(probs, dim=-1)
+        cdf_true = torch.cumsum(one_hot, dim=-1)
+        wass_dists = torch.abs(cdf_pred - cdf_true).sum(dim=-1)
 
         weights = torch.where(
             sample_mask,
             torch.ones_like(labels),
             torch.full_like(labels, unmasked_weight),
         )
-        batch_loss = (nll_losses * weights).mean()
-
+        batch_loss = (wass_dists * weights).mean()
         pbar.set_description(f"train batch loss={batch_loss:.4e}")
 
         optimizer.zero_grad()
