@@ -19,6 +19,7 @@ from torch.nn import SiLU, BatchNorm1d
 import pytest
 
 from .utils import device
+from .bin_distribution import BinDistribution
 
 import logging
 
