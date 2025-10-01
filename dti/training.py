@@ -959,7 +959,7 @@ def train_and_evaluate_pfn_model(
                 predictions_file=OUTPUT / run_name / "predictions.csv",
             )
             logger.info(f"test epoch: {epoch + 1} ")
-            logger.info(f" test loss: {test['loss_masked']:.4e}")
+            logger.info(f" test loss: {test_results['loss_masked']:.4e}")
             logger.info(f" test Brier: {test_results['brier_masked']:.4e}")
             logger.info(f" test EMD: {test_results['wass_masked']:.4e}")
             logger.info(f" test MAE: {test_results['mae_masked']:.4e}")
