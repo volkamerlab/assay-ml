@@ -28,7 +28,7 @@ class BinDistribution(nn.Module):
         self.register_buffer("edges", torch.zeros(n_bins + 1, device=device))
 
     @torch.no_grad()
-    def fit(self, loader, mask_fraction: float = 0.2):
+    def fit(self, loader, max_samples: int = 1_000_000):
         """
         Fit quantile bin edges from z-score normalized training data.
 
@@ -61,6 +61,9 @@ class BinDistribution(nn.Module):
                 all_normed_values.append(normed_set)
 
         all_normed = torch.cat(all_normed_values)
+        if all_normed.numel() > max_samples:
+            idx = torch.randperm(all_normed.numel(), device=device)[:max_samples]
+            all_normed = all_normed[idx]
 
         probabilities = torch.linspace(0, 1, self.n_bins + 1, device=device)
         quantiles = torch.quantile(all_normed, probabilities)
