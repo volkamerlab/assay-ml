@@ -331,21 +331,21 @@ def evaluate_with_batched_masked_sets(
     Each set is min-max normalized using its unmasked samples.
 
     - Masking comes from `info` (deterministic).
-    - Computes average NLL and AUROC separately for masked and unmasked samples.
+    - Computes average NLL, Brier score, Wasserstein distance, and Expected Value MAE
+      separately for masked and unmasked samples.
     - Optionally writes predictions + info to a CSV.
     """
     model.eval()
     device = next(model.parameters()).device
 
     total_loss_masked = 0.0
-    total_loss_unmasked = 0.0
     n_masked = 0
-    n_unmasked = 0
-
-    auroc_masked = MulticlassAUROC(num_classes=model.n_bins, average="macro")
-    auroc_unmasked = MulticlassAUROC(num_classes=model.n_bins, average="macro")
-
+    brier_masked = 0.0
+    wass_masked = 0.0
+    mae_masked = 0.0
     pred_records = []
+
+    bin_centers = model.bin_dist.bin_centers().to(device)
 
     for protein_features, ligand_features, labels, info, metadata in (
         pbar := tqdm.tqdm(loader, desc="evaluating")
@@ -397,25 +397,26 @@ def evaluate_with_batched_masked_sets(
         )  # (batch_size, n_bins)
 
         nll_losses = -model.bin_dist.log_prob(normed_labels, preds)
+        probs = torch.softmax(preds, dim=-1)
+        class_labels = model.bin_dist.labels(normed_labels)
+        one_hot = model.bin_dist.dist(class_labels)
+        expected_vals = (probs * bin_centers).sum(dim=-1)
+        brier_scores = ((probs - one_hot) ** 2).sum(dim=-1)  # (batch_size,)
+        wass_dists = torch.cumsum(probs, dim=-1) - torch.cumsum(one_hot, dim=-1)
+        wass_dists = torch.abs(wass_dists).sum(dim=-1)  # discrete 1D Wasserstein
+        mae_vals = torch.abs(expected_vals - normed_labels).clip(0, 1)
+
         masked_losses = nll_losses[sample_mask]
-        unmasked_losses = nll_losses[~sample_mask]
 
         if masked_losses.numel() > 0:
             total_loss_masked += masked_losses.sum().item()
             n_masked += masked_losses.numel()
-            class_labels = model.bin_dist.labels(normed_labels[sample_mask])
-            probs = torch.softmax(preds[sample_mask], dim=-1)
-            auroc_masked.update(probs.cpu(), class_labels.cpu())
-
-        if unmasked_losses.numel() > 0:
-            total_loss_unmasked += unmasked_losses.sum().item()
-            n_unmasked += unmasked_losses.numel()
-            class_labels = model.bin_dist.labels(normed_labels[~sample_mask])
-            probs = torch.softmax(preds[~sample_mask], dim=-1)
-            auroc_unmasked.update(probs.cpu(), class_labels.cpu())
+            brier_masked += brier_scores[sample_mask].sum().item()
+            wass_masked += wass_dists[sample_mask].sum().item()
+            mae_masked += mae_vals[sample_mask].sum().item()
 
         if predictions_file is not None:
-            probs_np = torch.softmax(preds, dim=-1).cpu().numpy()
+            probs_np = probs.cpu().numpy()
             labels_np = labels.cpu().numpy()
             normed_np = normed_labels.cpu().numpy()
             info_np = info.cpu().numpy()
@@ -433,12 +434,9 @@ def evaluate_with_batched_masked_sets(
                 pred_records.append(record)
 
     avg_loss_masked = total_loss_masked / max(1, n_masked)
-    avg_loss_unmasked = total_loss_unmasked / max(1, n_unmasked)
-
-    auroc_masked_value = auroc_masked.compute().item() if n_masked > 0 else float("nan")
-    auroc_unmasked_value = (
-        auroc_unmasked.compute().item() if n_unmasked > 0 else float("nan")
-    )
+    brier_masked_value = brier_masked / max(1, n_masked)
+    wass_masked_value = wass_masked / max(1, n_masked)
+    mae_masked_value = mae_masked / max(1, n_masked)
 
     if predictions_file is not None and pred_records:
         df = pd.DataFrame(pred_records)
@@ -447,9 +445,9 @@ def evaluate_with_batched_masked_sets(
 
     return {
         "loss_masked": avg_loss_masked,
-        "auroc_masked": auroc_masked_value,
-        "loss_unmasked": avg_loss_unmasked,
-        "auroc_unmasked": auroc_unmasked_value,
+        "brier_masked": brier_masked_value,
+        "wass_masked": wass_masked_value,
+        "mae_masked": mae_masked_value,
     }
 
 
@@ -933,10 +931,9 @@ def train_and_evaluate_pfn_model(
 
         logger.info(f"epoch: {epoch + 1}")
         logger.info(f" train loss: {train_loss:.4e}")
-        logger.info(f" validation masked loss: {val_loss:.4e}")
-        logger.info(f" validation unmasked loss: {val_results['loss_unmasked']:.4e}")
-        logger.info(f" validation masked AUROC: {val_results['auroc_masked']:.4e}")
-        logger.info(f" validation unmasked AUROC: {val_results['auroc_unmasked']:.4e}")
+        logger.info(f" validation Brier: {val_results['brier_masked']:.4e}")
+        logger.info(f" validation EMD: {val_results['wass_masked']:.4e}")
+        logger.info(f" validation MAE: {val_results['mae_masked']:.4e}")
 
         optimization.append(Epoch(epoch, lr, train_loss, val_loss))
         pd.DataFrame(optimization).to_csv(
@@ -956,10 +953,10 @@ def train_and_evaluate_pfn_model(
                 predictions_file=OUTPUT / run_name / "predictions.csv",
             )
             logger.info(f"test epoch: {epoch + 1} ")
-            logger.info(f" test masked loss: {val_loss:.4e}")
-            logger.info(f" test unmasked loss: {test_results['loss_unmasked']:.4e}")
-            logger.info(f" test masked AUROC: {test_results['auroc_masked']:.4e}")
-            logger.info(f" test unmasked AUROC: {test_results['auroc_unmasked']:.4e}")
+            logger.info(f" test loss: {test['loss_masked']:.4e}")
+            logger.info(f" test Brier: {test_results['brier_masked']:.4e}")
+            logger.info(f" test EMD: {test_results['wass_masked']:.4e}")
+            logger.info(f" test MAE: {test_results['mae_masked']:.4e}")
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= opts["patience_termination"]:
