@@ -908,6 +908,8 @@ def train_and_evaluate_pfn_model(
         **opts,
     ).to(device)
 
+    model.bin_dist.fit(train_loader)
+
     optimizer = torch.optim.Adam(model.parameters(), lr=opts["lr"])
     scheduler = ReduceLROnPlateau(
         optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
