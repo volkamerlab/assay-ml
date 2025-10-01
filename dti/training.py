@@ -242,7 +242,7 @@ def train_with_batched_masked_sets(
 ):
     """
     Training loop with one shared BinDistribution.
-    Each set is min-max normalized using its unmasked samples before binning.
+    Each set is z-score normalized using its unmasked samples before binning.
 
     - In each group, a fixed fraction of samples (mask_fraction) are masked.
     - Masked indices are chosen randomly each batch.
@@ -285,10 +285,10 @@ def train_with_batched_masked_sets(
             set_labels = labels[start_idx:end_idx]
             unmasked = set_labels[~mask]
             assert unmasked.numel() > 1, unmasked.numel()
-            min_val = unmasked.min()
-            max_val = unmasked.max()
-            denom = (max_val - min_val).clamp_min(1e-6)
-            normed_labels[start_idx:end_idx] = (set_labels - min_val) / denom
+            mean_val = unmasked.mean()
+            std_val = unmasked.std(unbiased=True)
+            std_val = std_val.clamp_min(1e-6)
+            normed_labels[start_idx:end_idx] = (set_labels - mean_val) / std_val
 
         preds = model(
             ligand_features,
@@ -328,7 +328,7 @@ def evaluate_with_batched_masked_sets(
 ):
     """
     Evaluate model on batched masked sets using the shared learnable BinDistribution.
-    Each set is min-max normalized using its unmasked samples.
+    Each set is z-score normalized using its unmasked samples.
 
     - Masking comes from `info` (deterministic).
     - Computes average NLL and AUROC separately for masked and unmasked samples.
@@ -383,10 +383,10 @@ def evaluate_with_batched_masked_sets(
                 f"Need at least 2 unmasked samples, got {unmasked.numel()}"
             )
 
-            min_val = unmasked.min()
-            max_val = unmasked.max()
-            denom = (max_val - min_val).clamp_min(1e-6)
-            normed_labels[start_idx:end_idx] = (set_labels - min_val) / denom
+            mean_val = unmasked.mean()
+            std_val = unmasked.std(unbiased=True)
+            std_val = std_val.clamp_min(1e-6)
+            normed_labels[start_idx:end_idx] = (set_labels - mean_val) / std_val
 
         preds = model(
             ligand_features,
