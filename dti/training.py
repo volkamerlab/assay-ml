@@ -947,12 +947,12 @@ def train_and_evaluate_pfn_model(
         lr = scheduler.get_last_lr()
         logger.debug(f"learning rate: {lr}")
 
-        logger.info(f"validation epoch: {epoch + 1}")
+        logger.info(f"epoch: {epoch + 1}")
         logger.info(f" train loss: {train_loss:.4e}")
-        logger.info(f" masked loss: {val_loss:.4e}")
-        logger.info(f" unmasked loss: {val_results['loss_unmasked']:.4e}")
-        logger.info(f" masked AUROC: {val_results['auroc_masked']:.4e}")
-        logger.info(f" unmasked AUROC: {val_results['auroc_unmasked']:.4e}")
+        logger.info(f" validation masked loss: {val_loss:.4e}")
+        logger.info(f" validation unmasked loss: {val_results['loss_unmasked']:.4e}")
+        logger.info(f" validation masked AUROC: {val_results['auroc_masked']:.4e}")
+        logger.info(f" validation unmasked AUROC: {val_results['auroc_unmasked']:.4e}")
 
         optimization.append(Epoch(epoch, lr, train_loss, val_loss))
         pd.DataFrame(optimization).to_csv(
@@ -972,10 +972,10 @@ def train_and_evaluate_pfn_model(
                 predictions_file=OUTPUT / run_name / "predictions.csv",
             )
             logger.info(f"test epoch: {epoch + 1} ")
-            logger.info(f" masked loss: {val_loss:.4e}")
-            logger.info(f" unmasked loss: {test_results['loss_unmasked']:.4e}")
-            logger.info(f" masked AUROC: {test_results['auroc_masked']:.4e}")
-            logger.info(f" unmasked AUROC: {test_results['auroc_unmasked']:.4e}")
+            logger.info(f" test masked loss: {val_loss:.4e}")
+            logger.info(f" test unmasked loss: {test_results['loss_unmasked']:.4e}")
+            logger.info(f" test masked AUROC: {test_results['auroc_masked']:.4e}")
+            logger.info(f" test unmasked AUROC: {test_results['auroc_unmasked']:.4e}")
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= opts["patience_termination"]:
