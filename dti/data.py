@@ -488,14 +488,17 @@ class MultiSetActivityDataset(ActivityDataset):
 class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
     """Extended dataset that dynamically creates property sets alongside assay sets.
 
-    Property sets are created on-the-fly during batch creation rather than upfront,
-    allowing for more diverse sampling across epochs.
+    Property sets are created on-the-fly during batch creation using random linear
+    combinations of physicochemical properties with Gaussian noise, allowing for
+    more diverse sampling across epochs.
 
     Args:
         property_set_ratio (float): Ratio of property sets to assay sets per batch
             (0.0 = no property sets, 1.0 = equal numbers, 2.0 = twice as many property sets).
         property_columns (List[str]): List of property column names from data to use as targets.
             These should be columns already present in the data DataFrame (e.g., 'mw_freebase', 'alogp').
+        noise_std (float): Standard deviation of Gaussian noise to add to linear combinations.
+            Default is 0.1 (relative to normalized property values).
     """
 
     def __init__(
@@ -505,6 +508,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         info_cols=...,
         property_set_ratio: float = 0.5,
         property_columns: list[str] = None,
+        noise_std: float = 0.1,
         **kwargs,
     ):
         super().__init__(data, target=target, info_cols=info_cols, **kwargs)
@@ -513,6 +517,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self.property_set_ratio = property_set_ratio
         self.base_target = target
         self.property_columns = property_columns or []
+        self.noise_std = noise_std
 
         if self.property_columns:
             missing_cols = [
@@ -530,12 +535,14 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             else:
                 self._prepare_property_data()
                 logger.info(f"Property columns available: {self.property_columns}")
+                logger.info(f"Noise std for linear combinations: {self.noise_std}")
         else:
             self.property_values = None
 
     def _prepare_property_data(self):
         """Prepare compound property data aligned with dataset indices."""
         self.property_values = {}
+        self.property_stats = {}
 
         for prop_col in self.property_columns:
             valid_mask = self.data[prop_col].notna()
@@ -546,47 +553,87 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
                 )
                 continue
 
+            # Store raw values and normalization stats
+            valid_values = self.data.loc[valid_mask, prop_col].values
+            mean_val = np.mean(valid_values)
+            std_val = np.std(valid_values)
+
+            # Avoid division by zero
+            if std_val < 1e-8:
+                std_val = 1.0
+
             prop_tensor = torch.full(
                 (len(self.data),), float("nan"), dtype=torch.float32, device="cpu"
             )
 
             valid_indices = self.data.index[valid_mask].values
-            valid_values = self.data.loc[valid_mask, prop_col].values
-            prop_tensor[valid_indices] = torch.tensor(valid_values, dtype=torch.float32)
+            # Normalize to zero mean and unit variance
+            normalized_values = (valid_values - mean_val) / std_val
+            prop_tensor[valid_indices] = torch.tensor(
+                normalized_values, dtype=torch.float32
+            )
 
             self.property_values[prop_col] = {
                 "tensor": prop_tensor,
                 "valid_indices": valid_indices,
             }
 
+            self.property_stats[prop_col] = {"mean": mean_val, "std": std_val}
+
+        # Find common valid indices across all properties
+        if self.property_values:
+            common_indices = set(
+                self.property_values[self.property_columns[0]]["valid_indices"]
+            )
+            for prop_col in self.property_columns[1:]:
+                if prop_col in self.property_values:
+                    common_indices &= set(
+                        self.property_values[prop_col]["valid_indices"]
+                    )
+            self.common_valid_indices = np.array(sorted(common_indices))
+            logger.info(
+                f"Common valid indices across all properties: {len(self.common_valid_indices)}"
+            )
+        else:
+            self.common_valid_indices = np.array([])
+
         logger.info(
             f"Prepared properties for molecules: {list(self.property_values.keys())}"
         )
 
     def _create_property_sets_for_batch(self, num_sets: int):
-        """Dynamically create property sets for the current batch.
+        """Dynamically create property sets using linear combinations of properties.
 
         Args:
             num_sets (int): Number of property sets to create
 
         Returns:
-            tuple: (property_sets, property_ids, property_types, property_targets)
+            tuple: (property_sets, property_ids, property_types, property_targets, property_coefficients)
         """
-        if not self.property_values or num_sets <= 0:
-            return [], [], [], []
+        if (
+            not self.property_values
+            or num_sets <= 0
+            or len(self.common_valid_indices) == 0
+        ):
+            return [], [], [], [], []
 
         property_sets = []
         property_ids = []
         property_types = []
         property_targets = []
+        property_coefficients = []
 
         available_properties = list(self.property_values.keys())
+        n_properties = len(available_properties)
 
         for set_idx in range(num_sets):
-            prop_name = self.random.choice(available_properties)
-            prop_data = self.property_values[prop_name]
+            # Generate random coefficients for linear combination
+            # Using standard normal distribution
+            coeffs = self.random.standard_normal(n_properties)
+            # Normalize coefficients to have unit L2 norm
+            coeffs = coeffs / np.linalg.norm(coeffs)
 
-            max_available = len(prop_data["valid_indices"])
+            max_available = len(self.common_valid_indices)
             if self.max_set_size > 0:
                 max_size = min(self.max_set_size, max_available)
             else:
@@ -598,17 +645,54 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             set_size = self.random.integers(self.min_batch_size, max_size + 1)
 
             sample_idx = self.random.choice(
-                len(prop_data["valid_indices"]), size=set_size, replace=False
+                len(self.common_valid_indices), size=set_size, replace=False
             )
 
-            selected_indices = prop_data["valid_indices"][sample_idx]
+            selected_indices = self.common_valid_indices[sample_idx]
 
             property_sets.append(selected_indices)
-            property_ids.append(f"property_{prop_name}_{set_idx}")
+            property_ids.append(f"property_combo_{set_idx}")
             property_types.append("property")
-            property_targets.append(prop_name)
+            # Store coefficients as a dictionary
+            coeff_dict = {
+                prop: float(c) for prop, c in zip(available_properties, coeffs)
+            }
+            property_targets.append(coeff_dict)
+            property_coefficients.append(coeffs)
 
-        return property_sets, property_ids, property_types, property_targets
+        return (
+            property_sets,
+            property_ids,
+            property_types,
+            property_targets,
+            property_coefficients,
+        )
+
+    def _compute_linear_combination(self, indices, coefficients):
+        """Compute linear combination of normalized properties with Gaussian noise.
+
+        Args:
+            indices: Indices of molecules
+            coefficients: Coefficients for linear combination
+
+        Returns:
+            torch.Tensor: Linear combination values with added noise
+        """
+        available_properties = list(self.property_values.keys())
+
+        # Initialize result tensor
+        result = torch.zeros(len(indices), dtype=torch.float32)
+
+        # Compute linear combination
+        for prop, coeff in zip(available_properties, coefficients):
+            prop_values = self.property_values[prop]["tensor"][indices]
+            result += coeff * prop_values
+
+        # Add Gaussian noise
+        noise = torch.randn_like(result) * self.noise_std
+        result += noise
+
+        return result
 
     def _make_batches(self):
         """Create batches with both assay and dynamically generated property sets."""
@@ -624,6 +708,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self.batch_set_ids = []
         self.batch_set_types = []
         self.batch_set_targets = []
+        self.batch_set_coefficients = []
 
         for i in range(0, len(shuffled_assay_sets), self.sets_per_batch):
             end_idx = min(i + self.sets_per_batch, len(shuffled_assay_sets))
@@ -634,7 +719,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
 
             num_property_sets = int(num_assay_sets * self.property_set_ratio)
 
-            prop_sets, prop_ids, prop_types, prop_targets = (
+            prop_sets, prop_ids, prop_types, prop_targets, prop_coeffs = (
                 self._create_property_sets_for_batch(num_property_sets)
             )
 
@@ -642,6 +727,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             combined_ids = assay_ids + prop_ids
             combined_types = ["assay"] * num_assay_sets + prop_types
             combined_targets = [self.base_target] * num_assay_sets + prop_targets
+            combined_coeffs = [None] * num_assay_sets + prop_coeffs
 
             batch_indices = np.arange(len(combined_sets))
             self.random.shuffle(batch_indices)
@@ -650,6 +736,9 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             self.batch_set_ids.append([combined_ids[j] for j in batch_indices])
             self.batch_set_types.append([combined_types[j] for j in batch_indices])
             self.batch_set_targets.append([combined_targets[j] for j in batch_indices])
+            self.batch_set_coefficients.append(
+                [combined_coeffs[j] for j in batch_indices]
+            )
 
         self.used = np.full(len(self.batches), False, dtype=bool)
 
@@ -663,7 +752,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         logger.debug(
             f"Created {len(self.batches)} batches with up to "
             f"{self.sets_per_batch * (1 + self.property_set_ratio):.0f} sets each "
-            f"({total_assay} assay, {total_property} property)"
+            f"({total_assay} assay, {total_property} property with linear combinations)"
         )
 
     def _get_next_batch(self, idx: int):
@@ -676,6 +765,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             self.batch_set_ids[idx],
             self.batch_set_types[idx],
             self.batch_set_targets[idx],
+            self.batch_set_coefficients[idx],
         )
 
     def __getitem__(self, idx):
@@ -685,7 +775,9 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             tuple: Protein features, ligand features, labels, info for each set in the batch,
                   and metadata to track set boundaries and types for the loss function.
         """
-        batch_sets, batch_ids, batch_types, batch_targets = self._get_next_batch(idx)
+        batch_sets, batch_ids, batch_types, batch_targets, batch_coeffs = (
+            self._get_next_batch(idx)
+        )
 
         set_sizes = [len(set_idcs) for set_idcs in batch_sets]
         cumulative_sizes = np.cumsum([0] + set_sizes).squeeze()
@@ -698,13 +790,15 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         )
 
         all_labels = []
-        for set_idcs, set_type, target_name in zip(
-            batch_sets, batch_types, batch_targets
+        for set_idcs, set_type, target_name, coeffs in zip(
+            batch_sets, batch_types, batch_targets, batch_coeffs
         ):
             if set_type == "assay":
                 all_labels.append(self.labels[set_idcs])
             else:
-                all_labels.append(self.property_values[target_name]["tensor"][set_idcs])
+                # Compute linear combination with noise
+                linear_combo = self._compute_linear_combination(set_idcs, coeffs)
+                all_labels.append(linear_combo)
 
         all_labels = torch.cat(all_labels)
 
