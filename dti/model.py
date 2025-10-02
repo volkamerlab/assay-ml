@@ -223,24 +223,26 @@ class MoleculeSetRank(Module):
         return self.ouput(h).squeeze()
 
 
-class GaussianSmoothing(nn.Module):
-    def __init__(self, channels=1, kernel_size=5, sigma=1.0):
+class BinAwareSmoothing(nn.Module):
+    def __init__(self, bin_centers, sigma=0.1):
+        """
+        Args:
+            bin_edges: [n_bins+1] tensor of bin boundaries
+            sigma: smoothing width in the same units as your target variable
+        """
         super().__init__()
-        self.kernel_size = kernel_size
-        self.sigma = sigma
 
-        x = torch.arange(kernel_size) - kernel_size // 2
-        kernel = torch.exp(-x.pow(2) / (2 * sigma**2))
-        kernel = kernel / kernel.sum()
+        distances = torch.abs(
+            bin_centers.unsqueeze(0) - bin_centers.unsqueeze(1)
+        )  # [n_bins, n_bins]
 
-        self.register_buffer("weight", kernel.view(1, 1, -1))
-        self.padding = kernel_size // 2
+        kernel = torch.exp(-distances.pow(2) / (2 * sigma**2))
+        kernel = kernel / kernel.sum(dim=1, keepdim=True)
+        self.register_buffer("kernel", kernel)
 
     def forward(self, x):
         # x: [batch, n_bins]
-        x = x.unsqueeze(1)  # [batch, 1, n_bins]
-        x = F.conv1d(x, self.weight, padding=self.padding)
-        return x.squeeze(1)
+        return torch.matmul(x, self.kernel.T)
 
 
 class MoleculeBayesianSetRankModel(MoleculeSetRank):
@@ -297,7 +299,10 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             Linear(hidden_channels, n_bins),
         )
         self.smoother = (
-            GaussianSmoothing(kernel_size=5, sigma=1.0)
+            BinAwareSmoothing(
+                bin_centers=self.bin_dist.bucket_centers(),
+                sigma=0.1,  # in units of your z-scored target variable
+            )
             if smoothing
             else nn.Identity(n_bins)
         )
