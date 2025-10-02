@@ -928,7 +928,7 @@ def train_and_evaluate_pfn_model(
             unmasked_weight=opts.get("unmasked_weight", 1.0),
         )
         val_results = evaluate_with_batched_masked_sets(model, val_loader)
-        val_loss = val_results["loss_masked"]
+        val_loss = val_results["wass_masked"]
 
         scheduler.step(val_loss)
         lr = scheduler.get_last_lr()
@@ -936,7 +936,7 @@ def train_and_evaluate_pfn_model(
 
         logger.info(f"epoch: {epoch + 1}")
         logger.info(f" train loss: {train_loss:.4e}")
-        logger.info(f" validation loss: {val_loss:.4e}")
+        logger.info(f" validation NLL: {val['loss_masked']:.4e}")
         logger.info(f" validation Brier: {val_results['brier_masked']:.4e}")
         logger.info(f" validation EMD: {val_results['wass_masked']:.4e}")
         logger.info(f" validation MAE: {val_results['mae_masked']:.4e}")
@@ -959,7 +959,7 @@ def train_and_evaluate_pfn_model(
                 predictions_file=OUTPUT / run_name / "predictions.csv",
             )
             logger.info(f"test epoch: {epoch + 1} ")
-            logger.info(f" test loss: {test_results['loss_masked']:.4e}")
+            logger.info(f" test NLL: {test_results['loss_masked']:.4e}")
             logger.info(f" test Brier: {test_results['brier_masked']:.4e}")
             logger.info(f" test EMD: {test_results['wass_masked']:.4e}")
             logger.info(f" test MAE: {test_results['mae_masked']:.4e}")
