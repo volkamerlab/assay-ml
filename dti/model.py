@@ -15,6 +15,7 @@ from torch.nn import (
 from torch.nn import MultiheadAttention as MHA
 from torch import nn
 from torch.nn import SiLU, BatchNorm1d
+import torch.nn.functional as F
 
 import pytest
 
@@ -222,6 +223,26 @@ class MoleculeSetRank(Module):
         return self.ouput(h).squeeze()
 
 
+class GaussianSmoothing(nn.Module):
+    def __init__(self, channels=1, kernel_size=5, sigma=1.0):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.sigma = sigma
+
+        x = torch.arange(kernel_size) - kernel_size // 2
+        kernel = torch.exp(-x.pow(2) / (2 * sigma**2))
+        kernel = kernel / kernel.sum()
+
+        self.register_buffer("weight", kernel.view(1, 1, -1))
+        self.padding = kernel_size // 2
+
+    def forward(self, x):
+        # x: [batch, n_bins]
+        x = x.unsqueeze(1)  # [batch, 1, n_bins]
+        x = F.conv1d(x, self.weight, padding=self.padding)
+        return x.squeeze(1)
+
+
 class MoleculeBayesianSetRankModel(MoleculeSetRank):
     def __init__(
         self,
@@ -230,6 +251,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         hidden_channels: int = 512,
         p_dropout: float = 0.05,
         num_heads: int = 8,
+        smoothing: bool = True,
         **kwargs,
     ):
         super().__init__(
@@ -274,6 +296,12 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             SiLU(),
             Linear(hidden_channels, n_bins),
         )
+        self.smoother = (
+            GaussianSmoothing(kernel_size=5, sigma=1.0)
+            if smoothing
+            else nn.Identity(n_bins)
+        )
+        logger.debug(f"Smoothing module: {self.smoother}")
 
     def forward(
         self,
@@ -293,7 +321,8 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         x_dist = (1 - sample_mask) * x_dist + sample_mask * self.default_dist_emb
         x = self.combine_repr(torch.cat((x_ligand, x_dist), 1))
         h = self.set_transformer(x, attn_mask=attn_mask)
-        return self.output(h)
+        logits = self.output(h)
+        return self.smoother(logits)
 
 
 class ComplexSetRank(MoleculeSetRank):
