@@ -223,26 +223,39 @@ class MoleculeSetRank(Module):
         return self.ouput(h).squeeze()
 
 
-class BinAwareSmoothing(nn.Module):
-    def __init__(self, bin_centers, sigma=0.1):
-        """
-        Args:
-            bin_edges: [n_bins+1] tensor of bin boundaries
-            sigma: smoothing width in the same units as your target variable
-        """
+class SparseBinSmoothing(nn.Module):
+    def __init__(self, bin_centers, sigma=0.1, max_neighbors=10):
         super().__init__()
 
-        distances = torch.abs(
-            bin_centers.unsqueeze(0) - bin_centers.unsqueeze(1)
-        )  # [n_bins, n_bins]
+        n_bins = len(bin_centers)
 
-        kernel = torch.exp(-distances.pow(2) / (2 * sigma**2))
-        kernel = kernel / kernel.sum(dim=1, keepdim=True)
-        self.register_buffer("kernel", kernel)
+        indices = []
+        values = []
+
+        for i in range(n_bins):
+            distances = torch.abs(bin_centers - bin_centers[i])
+            mask = distances < 3 * sigma
+
+            if mask.sum() > max_neighbors:
+                _, top_k = torch.topk(-distances, max_neighbors)
+                mask = torch.zeros(n_bins, dtype=torch.bool)
+                mask[top_k] = True
+
+            weights = torch.exp(-distances[mask].pow(2) / (2 * sigma**2))
+            weights = weights / weights.sum()
+
+            for j, w in zip(torch.where(mask)[0], weights):
+                indices.append([i, j.item()])
+                values.append(w.item())
+
+        indices = torch.tensor(indices).T
+        values = torch.tensor(values)
+        sparse_kernel = torch.sparse_coo_tensor(indices, values, (n_bins, n_bins))
+
+        self.register_buffer("kernel", sparse_kernel)
 
     def forward(self, x):
-        # x: [batch, n_bins]
-        return torch.matmul(x, self.kernel.T)
+        return torch.sparse.mm(self.kernel, x.T).T
 
 
 class MoleculeBayesianSetRankModel(MoleculeSetRank):
@@ -299,9 +312,8 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             Linear(hidden_channels, n_bins),
         )
         self.smoother = (
-            BinAwareSmoothing(
-                bin_centers=self.bin_dist.bucket_centers(),
-                sigma=0.1,  # in units of your z-scored target variable
+            SparseBinSmoothing(
+                self.bin_dist.bucket_centers(), sigma=0.1, max_neighbors=20
             )
             if smoothing
             else nn.Identity(n_bins)
