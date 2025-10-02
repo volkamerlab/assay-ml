@@ -243,7 +243,7 @@ def prepare_dataset_splits(
         train_dataset,
         batch_size=train_batch(method, batch_size),
         shuffle=True,
-        num_workers=0,
+        num_workers=4,
         drop_last=method.on_pairs,
     )
     val_loader = DataLoader(

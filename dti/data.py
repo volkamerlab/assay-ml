@@ -533,6 +533,15 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         else:
             self.property_values = None
 
+        # Worker-specific state (will be initialized per worker)
+        self._worker_id = None
+        self._worker_rng = None
+        self._worker_batches = None
+        self._worker_batch_set_ids = None
+        self._worker_batch_set_types = None
+        self._worker_batch_set_targets = None
+        self._worker_used = None
+
     def _prepare_property_data(self):
         """Prepare compound property data aligned with dataset indices."""
         self.property_values = {}
@@ -563,6 +572,39 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             f"Prepared properties for molecules: {list(self.property_values.keys())}"
         )
 
+    def _init_worker(self):
+        """Initialize worker-specific state with proper random seeding."""
+        worker_info = torch.utils.data.get_worker_info()
+
+        if worker_info is None:
+            # Single-process data loading
+            self._worker_id = 0
+            seed = self.seed if hasattr(self, "seed") else None
+        else:
+            # Multi-process data loading
+            self._worker_id = worker_info.id
+            # Create unique seed per worker
+            base_seed = self.seed if hasattr(self, "seed") else 0
+            seed = base_seed + worker_info.id
+
+        # Initialize worker-specific random generator
+        self._worker_rng = np.random.default_rng(seed)
+
+        # Initialize worker-specific batch state
+        self._worker_batches = None
+        self._worker_batch_set_ids = None
+        self._worker_batch_set_types = None
+        self._worker_batch_set_targets = None
+        self._worker_used = None
+
+        logger.debug(f"Initialized worker {self._worker_id} with seed {seed}")
+
+    def _get_worker_rng(self):
+        """Get the worker-specific random number generator."""
+        if self._worker_rng is None:
+            self._init_worker()
+        return self._worker_rng
+
     def _create_property_sets_for_batch(self, num_sets: int):
         """Dynamically create property sets for the current batch.
 
@@ -575,6 +617,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         if not self.property_values or num_sets <= 0:
             return [], [], [], []
 
+        rng = self._get_worker_rng()
         property_sets = []
         property_ids = []
         property_types = []
@@ -583,7 +626,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         available_properties = list(self.property_values.keys())
 
         for set_idx in range(num_sets):
-            prop_name = self.random.choice(available_properties)
+            prop_name = rng.choice(available_properties)
             prop_data = self.property_values[prop_name]
 
             max_available = len(prop_data["valid_indices"])
@@ -595,9 +638,9 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             if max_size < self.min_batch_size:
                 continue
 
-            set_size = self.random.integers(self.min_batch_size, max_size + 1)
+            set_size = rng.integers(self.min_batch_size, max_size + 1)
 
-            sample_idx = self.random.choice(
+            sample_idx = rng.choice(
                 len(prop_data["valid_indices"]), size=set_size, replace=False
             )
 
@@ -612,18 +655,20 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
 
     def _make_batches(self):
         """Create batches with both assay and dynamically generated property sets."""
+        rng = self._get_worker_rng()
+
         if self.inter_assay:
             self._shuffle_data()
 
         indices = np.arange(len(self.valid_sets))
-        self.random.shuffle(indices)
+        rng.shuffle(indices)
         shuffled_assay_sets = [self.valid_sets[i] for i in indices]
         shuffled_assay_ids = [self.set_ids[i] for i in indices]
 
-        self.batches = []
-        self.batch_set_ids = []
-        self.batch_set_types = []
-        self.batch_set_targets = []
+        self._worker_batches = []
+        self._worker_batch_set_ids = []
+        self._worker_batch_set_types = []
+        self._worker_batch_set_targets = []
 
         for i in range(0, len(shuffled_assay_sets), self.sets_per_batch):
             end_idx = min(i + self.sets_per_batch, len(shuffled_assay_sets))
@@ -644,38 +689,62 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             combined_targets = [self.base_target] * num_assay_sets + prop_targets
 
             batch_indices = np.arange(len(combined_sets))
-            self.random.shuffle(batch_indices)
+            rng.shuffle(batch_indices)
 
-            self.batches.append([combined_sets[j] for j in batch_indices])
-            self.batch_set_ids.append([combined_ids[j] for j in batch_indices])
-            self.batch_set_types.append([combined_types[j] for j in batch_indices])
-            self.batch_set_targets.append([combined_targets[j] for j in batch_indices])
+            self._worker_batches.append([combined_sets[j] for j in batch_indices])
+            self._worker_batch_set_ids.append([combined_ids[j] for j in batch_indices])
+            self._worker_batch_set_types.append(
+                [combined_types[j] for j in batch_indices]
+            )
+            self._worker_batch_set_targets.append(
+                [combined_targets[j] for j in batch_indices]
+            )
 
-        self.used = np.full(len(self.batches), False, dtype=bool)
+        self._worker_used = np.full(len(self._worker_batches), False, dtype=bool)
 
         total_assay = sum(
-            sum(1 for t in types if t == "assay") for types in self.batch_set_types
+            sum(1 for t in types if t == "assay")
+            for types in self._worker_batch_set_types
         )
         total_property = sum(
-            sum(1 for t in types if t == "property") for types in self.batch_set_types
+            sum(1 for t in types if t == "property")
+            for types in self._worker_batch_set_types
         )
 
         logger.debug(
-            f"Created {len(self.batches)} batches with up to "
+            f"Worker {self._worker_id}: Created {len(self._worker_batches)} batches with up to "
             f"{self.sets_per_batch * (1 + self.property_set_ratio):.0f} sets each "
             f"({total_assay} assay, {total_property} property)"
         )
 
+    def __len__(self):
+        """Get the number of batches in the dataset.
+
+        Calculate based on valid_sets since batches are created per-worker.
+        """
+        num_batches = (
+            len(self.valid_sets) + self.sets_per_batch - 1
+        ) // self.sets_per_batch
+        return num_batches
+
     def _get_next_batch(self, idx: int):
         """Get the next available batch and mark it as used."""
-        if np.all(self.used):
+        # Initialize worker state if needed
+        if self._worker_rng is None:
+            self._init_worker()
+
+        # Create batches if needed
+        if self._worker_batches is None or np.all(self._worker_used):
             self._make_batches()
-        self.used[idx] = True
+
+        # Handle index wrapping for when DataLoader requests more batches
+        actual_idx = idx % len(self._worker_batches)
+        self._worker_used[actual_idx] = True
         return (
-            self.batches[idx],
-            self.batch_set_ids[idx],
-            self.batch_set_types[idx],
-            self.batch_set_targets[idx],
+            self._worker_batches[actual_idx],
+            self._worker_batch_set_ids[actual_idx],
+            self._worker_batch_set_types[actual_idx],
+            self._worker_batch_set_targets[actual_idx],
         )
 
     def __getitem__(self, idx):
@@ -708,16 +777,17 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
 
         all_labels = torch.cat(all_labels)
 
+        # Always use CPU tensors in dataset (let DataLoader handle device placement)
         prot_feats = (
-            torch.ones(1, device=device)
+            torch.ones(1, device="cpu")
             if self.protein_features is None
-            else self.protein_features[all_indices]
+            else self.protein_features[all_indices].cpu()
         )
 
         return (
             prot_feats,
-            self.ligand_features[all_indices],
-            all_labels,
+            self.ligand_features[all_indices].cpu(),
+            all_labels.cpu(),
             self.info[all_indices],
             {
                 "set_boundaries": cumulative_sizes,
