@@ -239,7 +239,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             num_heads=num_heads,
         )
         self.n_bins = n_bins
-        self.bin_dist = BinDistribution(n_bins=n_bins)
+        self.bin_dist = BinDistribution(n_bins=n_bins, exp_tails=False)
         self.distribution_encoder = _mlp(
             input_size=self.n_bins,
             hidden_size=self.n_bins * 2,

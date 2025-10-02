@@ -284,7 +284,9 @@ def train_with_batched_masked_sets(
 
             set_labels = labels[start_idx:end_idx]
             unmasked = set_labels[~mask]
-            assert unmasked.numel() > 1, unmasked.numel()
+            if unmasked.numel() < 2:
+                logger.warning("too few unmasked examples")
+                continue
             mean_val = unmasked.mean()
             std_val = unmasked.std(unbiased=True)
             std_val = std_val.clamp_min(1e-6)
@@ -331,19 +333,17 @@ def evaluate_with_batched_masked_sets(
     Each set is z-score normalized using its unmasked samples.
 
     - Masking comes from `info` (deterministic).
-    - Computes average NLL and AUROC separately for masked and unmasked samples.
+    - Computes NLL, Wasserstein (normalized), Brier, and MAE on masked samples only.
     - Optionally writes predictions + info to a CSV.
     """
     model.eval()
     device = next(model.parameters()).device
 
-    total_loss_masked = 0.0
-    total_loss_unmasked = 0.0
+    total_loss = 0.0
+    total_wass = 0.0
+    total_brier = 0.0
+    total_mae = 0.0
     n_masked = 0
-    n_unmasked = 0
-
-    auroc_masked = MulticlassAUROC(num_classes=model.n_bins, average="macro")
-    auroc_unmasked = MulticlassAUROC(num_classes=model.n_bins, average="macro")
 
     pred_records = []
 
@@ -379,13 +379,12 @@ def evaluate_with_batched_masked_sets(
 
             set_labels = labels[start_idx:end_idx]
             unmasked = set_labels[~mask]
-            assert unmasked.numel() > 1, (
-                f"Need at least 2 unmasked samples, got {unmasked.numel()}"
-            )
+            if unmasked.numel() < 2:
+                logger.warning("too few unmasked examples")
+                continue
 
             mean_val = unmasked.mean()
-            std_val = unmasked.std(unbiased=True)
-            std_val = std_val.clamp_min(1e-6)
+            std_val = unmasked.std(unbiased=True).clamp_min(1e-6)
             normed_labels[start_idx:end_idx] = (set_labels - mean_val) / std_val
 
         preds = model(
@@ -398,21 +397,25 @@ def evaluate_with_batched_masked_sets(
 
         nll_losses = -model.bin_dist.log_prob(normed_labels, preds)
         masked_losses = nll_losses[sample_mask]
-        unmasked_losses = nll_losses[~sample_mask]
 
         if masked_losses.numel() > 0:
-            total_loss_masked += masked_losses.sum().item()
+            total_loss += masked_losses.sum().item()
             n_masked += masked_losses.numel()
-            class_labels = model.bin_dist.labels(normed_labels[sample_mask])
-            probs = torch.softmax(preds[sample_mask], dim=-1)
-            auroc_masked.update(probs.cpu(), class_labels.cpu())
 
-        if unmasked_losses.numel() > 0:
-            total_loss_unmasked += unmasked_losses.sum().item()
-            n_unmasked += unmasked_losses.numel()
-            class_labels = model.bin_dist.labels(normed_labels[~sample_mask])
-            probs = torch.softmax(preds[~sample_mask], dim=-1)
-            auroc_unmasked.update(probs.cpu(), class_labels.cpu())
+            probs = torch.softmax(preds[sample_mask], dim=-1)  # (n_masked, n_bins)
+            true_bins = model.bin_dist.labels(normed_labels[sample_mask])  # (n_masked,)
+            one_hot = model.bin_dist.dist(true_bins)
+
+            cdf_pred = torch.cumsum(probs, dim=-1)
+            cdf_true = torch.cumsum(one_hot, dim=-1)
+            wass_dists = torch.abs(cdf_pred - cdf_true).sum(dim=-1)
+            wass_dists = wass_dists / model.n_bins
+            total_wass += wass_dists.sum().item()
+
+            pred_mean = model.bin_dist.mean(preds[sample_mask])
+            true_centers = model.bin_dist.bucket_centers()[true_bins]
+            mae = torch.abs(pred_mean - true_centers)
+            total_mae += mae.sum().item()
 
         if predictions_file is not None:
             probs_np = torch.softmax(preds, dim=-1).cpu().numpy()
@@ -432,13 +435,9 @@ def evaluate_with_batched_masked_sets(
                     record[f"prob_bin_{b}"] = probs_np[i, b]
                 pred_records.append(record)
 
-    avg_loss_masked = total_loss_masked / max(1, n_masked)
-    avg_loss_unmasked = total_loss_unmasked / max(1, n_unmasked)
-
-    auroc_masked_value = auroc_masked.compute().item() if n_masked > 0 else float("nan")
-    auroc_unmasked_value = (
-        auroc_unmasked.compute().item() if n_unmasked > 0 else float("nan")
-    )
+    avg_loss = total_loss / max(1, n_masked)
+    avg_wass = total_wass / max(1, n_masked)
+    avg_mae = total_mae / max(1, n_masked)
 
     if predictions_file is not None and pred_records:
         df = pd.DataFrame(pred_records)
@@ -446,10 +445,9 @@ def evaluate_with_batched_masked_sets(
         df.to_csv(predictions_file, index=False)
 
     return {
-        "loss_masked": avg_loss_masked,
-        "auroc_masked": auroc_masked_value,
-        "loss_unmasked": avg_loss_unmasked,
-        "auroc_unmasked": auroc_unmasked_value,
+        "nll": avg_loss,
+        "wasserstein": avg_wass,
+        "mae": avg_mae,
     }
 
 
@@ -927,7 +925,7 @@ def train_and_evaluate_pfn_model(
             unmasked_weight=opts.get("unmasked_weight", 1.0),
         )
         val_results = evaluate_with_batched_masked_sets(model, val_loader)
-        val_loss = val_results["loss_masked"]
+        val_loss = val_results["nll"]
 
         scheduler.step(val_loss)
         lr = scheduler.get_last_lr()
@@ -935,10 +933,9 @@ def train_and_evaluate_pfn_model(
 
         logger.info(f"epoch: {epoch + 1}")
         logger.info(f" train loss: {train_loss:.4e}")
-        logger.info(f" validation masked loss: {val_loss:.4e}")
-        logger.info(f" validation unmasked loss: {val_results['loss_unmasked']:.4e}")
-        logger.info(f" validation masked AUROC: {val_results['auroc_masked']:.4e}")
-        logger.info(f" validation unmasked AUROC: {val_results['auroc_unmasked']:.4e}")
+        logger.info(f" val masked NLL: {val_results['nll']:.4e}")
+        logger.info(f" val masked EMD: {val_results['wasserstein']:.4e}")
+        logger.info(f" val masked MAE: {val_results['mae']:.4e}")
 
         optimization.append(Epoch(epoch, lr, train_loss, val_loss))
         pd.DataFrame(optimization).to_csv(
@@ -951,17 +948,16 @@ def train_and_evaluate_pfn_model(
             epochs_without_improvement = 0
             torch.save(model.state_dict(), OUTPUT / run_name / "model.pt")
             with open(OUTPUT / run_name / "bin_dist", "w") as f_bins:
-                f_bins.write(f"{model.bin_dist._construct_edges()}")
+                f_bins.write(f"{','.join(map(str, model.bin_dist.edges))}")
             test_results = evaluate_with_batched_masked_sets(
                 model,
                 test_loader,
                 predictions_file=OUTPUT / run_name / "predictions.csv",
             )
             logger.info(f"test epoch: {epoch + 1} ")
-            logger.info(f" test masked loss: {val_loss:.4e}")
-            logger.info(f" test unmasked loss: {test_results['loss_unmasked']:.4e}")
-            logger.info(f" test masked AUROC: {test_results['auroc_masked']:.4e}")
-            logger.info(f" test unmasked AUROC: {test_results['auroc_unmasked']:.4e}")
+            logger.info(f" test masked NLL: {test_results['nll']:.4e}")
+            logger.info(f" test masked EMD: {test_results['wasserstein']:.4e}")
+            logger.info(f" test masked MAE: {test_results['mae']:.4e}")
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= opts["patience_termination"]:
