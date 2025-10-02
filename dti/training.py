@@ -948,7 +948,9 @@ def train_and_evaluate_pfn_model(
             epochs_without_improvement = 0
             torch.save(model.state_dict(), OUTPUT / run_name / "model.pt")
             with open(OUTPUT / run_name / "bin_dist", "w") as f_bins:
-                f_bins.write(f"{','.join(map(str, model.bin_dist.edges))}")
+                f_bins.write(
+                    f"{','.join([str(x.item()) for x in model.bin_dist.edges])}"
+                )
             test_results = evaluate_with_batched_masked_sets(
                 model,
                 test_loader,
