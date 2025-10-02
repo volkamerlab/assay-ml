@@ -328,24 +328,20 @@ def evaluate_with_batched_masked_sets(
     mask_fraction: float = 0.2,
     predictions_file: Path | None = None,
 ):
-    """
-    Evaluate model on batched masked sets using the shared learnable BinDistribution.
-    Each set is z-score normalized using its unmasked samples.
-
-    - Masking comes from `info` (deterministic).
-    - Computes NLL, Wasserstein (normalized), Brier, and MAE on masked samples only.
-    - Optionally writes predictions + info to a CSV.
-    """
     model.eval()
     device = next(model.parameters()).device
 
     total_loss = 0.0
     total_wass = 0.0
-    total_brier = 0.0
     total_mae = 0.0
     n_masked = 0
 
-    pred_records = []
+    # Collect predictions in lists
+    all_info = []
+    all_labels = []
+    all_normed = []
+    all_masks = []
+    all_probs = []
 
     for protein_features, ligand_features, labels, info, metadata in (
         pbar := tqdm.tqdm(loader, desc="evaluating")
@@ -393,7 +389,7 @@ def evaluate_with_batched_masked_sets(
             normed_labels,
             sample_mask,
             set_ids_tensor,
-        )  # (batch_size, n_bins)
+        )
 
         nll_losses = -model.bin_dist.log_prob(normed_labels, preds)
         masked_losses = nll_losses[sample_mask]
@@ -402,8 +398,8 @@ def evaluate_with_batched_masked_sets(
             total_loss += masked_losses.sum().item()
             n_masked += masked_losses.numel()
 
-            probs = torch.softmax(preds[sample_mask], dim=-1)  # (n_masked, n_bins)
-            true_bins = model.bin_dist.labels(normed_labels[sample_mask])  # (n_masked,)
+            probs = torch.softmax(preds[sample_mask], dim=-1)
+            true_bins = model.bin_dist.labels(normed_labels[sample_mask])
             one_hot = model.bin_dist.dist(true_bins)
 
             cdf_pred = torch.cumsum(probs, dim=-1)
@@ -417,32 +413,30 @@ def evaluate_with_batched_masked_sets(
             mae = torch.abs(pred_mean - true_centers)
             total_mae += mae.sum().item()
 
+        # Collect data for writing
         if predictions_file is not None:
-            probs_np = torch.softmax(preds, dim=-1).cpu().numpy()
-            labels_np = labels.cpu().numpy()
-            normed_np = normed_labels.cpu().numpy()
-            info_np = info.cpu().numpy()
-            mask_np = sample_mask.cpu().numpy()
-
-            for i in range(batch_size):
-                record = {
-                    **{f"info_{j}": info_np[i, j] for j in range(info_np.shape[1])},
-                    "true_label": labels_np[i],
-                    "normed_label": normed_np[i],
-                    "is_masked": bool(mask_np[i]),
-                }
-                for b in range(model.n_bins):
-                    record[f"prob_bin_{b}"] = probs_np[i, b]
-                pred_records.append(record)
+            all_info.append(info.cpu().numpy())
+            all_labels.append(labels.cpu().numpy())
+            all_normed.append(normed_labels.cpu().numpy())
+            all_masks.append(sample_mask.cpu().numpy())
+            all_probs.append(torch.softmax(preds, dim=-1).cpu().numpy())
 
     avg_loss = total_loss / max(1, n_masked)
     avg_wass = total_wass / max(1, n_masked)
     avg_mae = total_mae / max(1, n_masked)
 
-    if predictions_file is not None and pred_records:
-        df = pd.DataFrame(pred_records)
+    # Write predictions once at the end
+    if predictions_file is not None and all_info:
+        predictions_file = predictions_file.with_suffix(".npz")
         predictions_file.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(predictions_file, index=False)
+        np.savez_compressed(
+            predictions_file,
+            info=np.concatenate(all_info),
+            true_labels=np.concatenate(all_labels),
+            normed_labels=np.concatenate(all_normed),
+            is_masked=np.concatenate(all_masks),
+            probs=np.concatenate(all_probs),
+        )
 
     return {
         "nll": avg_loss,
