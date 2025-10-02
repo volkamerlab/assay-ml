@@ -573,19 +573,35 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         )
 
     def _init_worker(self):
-        """Initialize worker-specific state with proper random seeding."""
+        """Initialize worker-specific state with proper random seeding and data partitioning."""
         worker_info = torch.utils.data.get_worker_info()
 
         if worker_info is None:
-            # Single-process data loading
+            # Single-process data loading - use all data
             self._worker_id = 0
+            self._num_workers = 1
             seed = self.seed if hasattr(self, "seed") else None
+            self._worker_valid_sets = self.valid_sets
+            self._worker_set_ids = self.set_ids
         else:
-            # Multi-process data loading
+            # Multi-process data loading - partition data across workers
             self._worker_id = worker_info.id
+            self._num_workers = worker_info.num_workers
+
             # Create unique seed per worker
             base_seed = self.seed if hasattr(self, "seed") else 0
             seed = base_seed + worker_info.id
+
+            # Partition valid_sets across workers
+            # Each worker gets every num_workers-th set, starting at worker_id
+            self._worker_valid_sets = [
+                self.valid_sets[i]
+                for i in range(self._worker_id, len(self.valid_sets), self._num_workers)
+            ]
+            self._worker_set_ids = [
+                self.set_ids[i]
+                for i in range(self._worker_id, len(self.valid_sets), self._num_workers)
+            ]
 
         # Initialize worker-specific random generator
         self._worker_rng = np.random.default_rng(seed)
@@ -597,7 +613,10 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self._worker_batch_set_targets = None
         self._worker_used = None
 
-        logger.debug(f"Initialized worker {self._worker_id} with seed {seed}")
+        logger.debug(
+            f"Initialized worker {self._worker_id}/{self._num_workers} with seed {seed}, "
+            f"handling {len(self._worker_valid_sets)} sets"
+        )
 
     def _get_worker_rng(self):
         """Get the worker-specific random number generator."""
@@ -657,13 +676,17 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         """Create batches with both assay and dynamically generated property sets."""
         rng = self._get_worker_rng()
 
+        # Use worker-specific sets (partitioned data)
+        worker_sets = self._worker_valid_sets
+        worker_ids = self._worker_set_ids
+
         if self.inter_assay:
             self._shuffle_data()
 
-        indices = np.arange(len(self.valid_sets))
+        indices = np.arange(len(worker_sets))
         rng.shuffle(indices)
-        shuffled_assay_sets = [self.valid_sets[i] for i in indices]
-        shuffled_assay_ids = [self.set_ids[i] for i in indices]
+        shuffled_assay_sets = [worker_sets[i] for i in indices]
+        shuffled_assay_ids = [worker_ids[i] for i in indices]
 
         self._worker_batches = []
         self._worker_batch_set_ids = []
