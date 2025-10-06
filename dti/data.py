@@ -500,6 +500,8 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             These should be columns already present in the data DataFrame (e.g., 'mw_freebase', 'alogp').
         noise_std (float): Standard deviation of Gaussian noise to add to linear combinations.
             Default is 0.1 (relative to normalized property values).
+        max_batch_size (int): Maximum total number of samples (compounds) in a batch.
+            Batches will accumulate sets until this threshold is reached or exceeded.
     """
 
     def __init__(
@@ -510,6 +512,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         property_set_ratio: float = 0.5,
         property_columns: list[str] = None,
         noise_std: float = 0.1,
+        max_batch_size: int = 1024,
         **kwargs,
     ):
         super().__init__(data, target=target, info_cols=info_cols, **kwargs)
@@ -519,6 +522,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self.base_target = target
         self.property_columns = property_columns or []
         self.noise_std = noise_std
+        self.max_batch_size = max_batch_size
 
         if self.property_columns:
             missing_cols = [
@@ -706,7 +710,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         return result
 
     def _make_batches(self):
-        """Create batches with both assay and dynamically generated property sets."""
+        """Create batches by accumulating sets until max_batch_size threshold is met."""
         if self.inter_assay:
             self._shuffle_data()
 
@@ -721,34 +725,62 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self.batch_set_targets = []
         self.batch_set_coefficients = []
 
-        for i in range(0, len(shuffled_assay_sets), self.sets_per_batch):
-            end_idx = min(i + self.sets_per_batch, len(shuffled_assay_sets))
+        i = 0
+        while i < len(shuffled_assay_sets):
+            current_batch_sets = []
+            current_batch_ids = []
+            current_batch_types = []
+            current_batch_targets = []
+            current_batch_coeffs = []
+            current_size = 0
 
-            assay_sets = shuffled_assay_sets[i:end_idx]
-            assay_ids = shuffled_assay_ids[i:end_idx]
-            num_assay_sets = len(assay_sets)
+            # Add assay sets until we reach max_batch_size
+            while i < len(shuffled_assay_sets) and current_size < self.max_batch_size:
+                assay_set = shuffled_assay_sets[i]
+                assay_id = shuffled_assay_ids[i]
+                set_size = len(assay_set)
 
+                # Add the set even if it exceeds threshold (at least one set per batch)
+                if current_size == 0 or current_size + set_size <= self.max_batch_size:
+                    current_batch_sets.append(assay_set)
+                    current_batch_ids.append(assay_id)
+                    current_batch_types.append("assay")
+                    current_batch_targets.append(self.base_target)
+                    current_batch_coeffs.append(None)
+                    current_size += set_size
+                    i += 1
+                else:
+                    # Would exceed threshold, stop adding to this batch
+                    break
+
+            # Calculate how many property sets to add based on ratio
+            num_assay_sets = len(current_batch_sets)
             num_property_sets = int(num_assay_sets * self.property_set_ratio)
 
+            # Create property sets
             prop_sets, prop_ids, prop_types, prop_targets, prop_coeffs = (
                 self._create_property_sets_for_batch(num_property_sets)
             )
 
-            combined_sets = assay_sets + prop_sets
-            combined_ids = assay_ids + prop_ids
-            combined_types = ["assay"] * num_assay_sets + prop_types
-            combined_targets = [self.base_target] * num_assay_sets + prop_targets
-            combined_coeffs = [None] * num_assay_sets + prop_coeffs
+            # Add property sets to batch
+            current_batch_sets.extend(prop_sets)
+            current_batch_ids.extend(prop_ids)
+            current_batch_types.extend(prop_types)
+            current_batch_targets.extend(prop_targets)
+            current_batch_coeffs.extend(prop_coeffs)
 
-            batch_indices = np.arange(len(combined_sets))
+            # Shuffle the combined sets within the batch
+            batch_indices = np.arange(len(current_batch_sets))
             self.random.shuffle(batch_indices)
 
-            self.batches.append([combined_sets[j] for j in batch_indices])
-            self.batch_set_ids.append([combined_ids[j] for j in batch_indices])
-            self.batch_set_types.append([combined_types[j] for j in batch_indices])
-            self.batch_set_targets.append([combined_targets[j] for j in batch_indices])
+            self.batches.append([current_batch_sets[j] for j in batch_indices])
+            self.batch_set_ids.append([current_batch_ids[j] for j in batch_indices])
+            self.batch_set_types.append([current_batch_types[j] for j in batch_indices])
+            self.batch_set_targets.append(
+                [current_batch_targets[j] for j in batch_indices]
+            )
             self.batch_set_coefficients.append(
-                [combined_coeffs[j] for j in batch_indices]
+                [current_batch_coeffs[j] for j in batch_indices]
             )
 
         self.used = np.full(len(self.batches), False, dtype=bool)
@@ -760,10 +792,13 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             sum(1 for t in types if t == "property") for types in self.batch_set_types
         )
 
+        # Calculate average batch size for logging
+        avg_batch_size = np.mean([sum(len(s) for s in batch) for batch in self.batches])
+
         logger.debug(
-            f"Created {len(self.batches)} batches with up to "
-            f"{self.sets_per_batch * (1 + self.property_set_ratio):.0f} sets each "
-            f"({total_assay} assay, {total_property} property with linear combinations)"
+            f"Created {len(self.batches)} batches with max_batch_size={self.max_batch_size} "
+            f"(avg size: {avg_batch_size:.1f} samples, "
+            f"{total_assay} assay sets, {total_property} property sets)"
         )
 
     def _get_next_batch(self, idx: int):

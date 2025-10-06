@@ -107,7 +107,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
         case Method.PFN if mol_only:
             mswpds = partial(
                 MultiSetWithPropertiesDataset,
-                sets_per_batch=20,
+                max_batch_size=1024,
                 max_set_size=500,
                 shuffle_within_target=False,
                 property_columns=[
