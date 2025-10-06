@@ -332,8 +332,8 @@ def run_split(
         patience_lr=10 if train_short else 100,
         fisher_transform=method not in [Method.IC50SETS, Method.IC50ALLSETS],
         unmasked_weight=unmasked_weight,
-        n_bins=1000,
-        smoothing=True,
+        n_bins=100,
+        smoothing=False,
     )
     if model_cls in [ComplexBayesianSetRankModel, MoleculeBayesianSetRankModel]:
         train_and_evaluate_pfn_model(*args, **kwargs)
