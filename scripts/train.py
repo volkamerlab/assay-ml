@@ -54,7 +54,7 @@ from dti.utils import (
     set_random_seeds,
     save_code_snapshot,
 )
-from dti.constants import ACT, DATA, ASSAY, COMPOUND, HODGE, INTRA_ASSAY_TEST
+from dti.constants import ACT, DATA, ASSAY, COMPOUND, HODGE, INTRA_ASSAY_TEST, IDENT
 
 logger = logging.getLogger(__name__)
 
@@ -281,7 +281,7 @@ def run_split(
 ):
     batch_size = 512
     num_epochs = 50_000  # early stopping in place
-    info_cols = [INTRA_ASSAY_TEST, COMPOUND, ASSAY]
+    info_cols = [INTRA_ASSAY_TEST, IDENT, COMPOUND, ASSAY]
 
     match method:
         case Method.HODGE:

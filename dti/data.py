@@ -21,6 +21,7 @@ from .constants import (
     COMPOUND,
     HODGE,
     INTRA_ASSAY_TEST,
+    IDENT,
 )
 from .utils import device
 from .featurization import MolFingerprint, esm2_features
@@ -514,7 +515,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         super().__init__(data, target=target, info_cols=info_cols, **kwargs)
         logger.info(f"ratio of physchem property set: {property_set_ratio}")
 
-        self.property_set_ratio = property_set_ratio
+        self._property_set_ratio = property_set_ratio
         self.base_target = target
         self.property_columns = property_columns or []
         self.noise_std = noise_std
@@ -538,6 +539,16 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
                 logger.info(f"Noise std for linear combinations: {self.noise_std}")
         else:
             self.property_values = None
+
+    @property
+    def property_set_ratio(self):
+        """The property_set_ratio property."""
+        return self._property_set_ratio
+
+    @property_set_ratio.setter
+    def property_set_ratio(self, value):
+        self._property_set_ratio = value
+        self._make_batches()
 
     def _prepare_property_data(self):
         """Prepare compound property data aligned with dataset indices."""
@@ -1067,6 +1078,7 @@ def load_kinodata(
     return _process(
         data,
         {
+            "activities.activity_id": IDENT,
             "activities.standard_value": ACT,
             "compound_structures.canonical_smiles": SMILES,
             "component_sequences.sequence": SEQUENCE,
@@ -1186,5 +1198,6 @@ def load_chembl_endpoints(
             "canonical_smiles": SMILES,
             "group": ASSAY,
             "test": INTRA_ASSAY_TEST,
+            "activity_id": IDENT,
         },
     )

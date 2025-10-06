@@ -38,6 +38,10 @@ class BinDistribution(nn.Module):
         """
         all_normed_values = []
 
+        if hasattr(loader.dataset, "property_set_ratio"):
+            prop_set_ratio = loader.dataset.property_set_ratio
+            loader.dataset.property_set_ratio = 0
+
         for protein_features, ligand_features, labels, _, metadata in tqdm.tqdm(
             loader, desc="fitting bin distribution"
         ):
@@ -79,6 +83,8 @@ class BinDistribution(nn.Module):
         logger.info(
             f"Median bin width: {(self.edges[1:] - self.edges[:-1]).median():.3f}"
         )
+        if hasattr(loader.dataset, "property_set_ratio"):
+            loader.dataset.property_set_ratio = prop_set_ratio
 
     def _init_side_normals(self):
         """Initialize half-normal distributions for the tails."""
