@@ -780,27 +780,28 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         )
 
         set_sizes = [len(set_idcs) for set_idcs in batch_sets]
-        cumulative_sizes = np.cumsum([0] + set_sizes).squeeze()
+        cumulative_sizes = np.cumsum([0] + set_sizes)
+        total_size = cumulative_sizes[-1]
 
         all_indices = np.concatenate(batch_sets)
 
-        set_ids_tensor = torch.tensor(
-            [set_idx for set_idx, size in enumerate(set_sizes) for _ in range(size)],
-            dtype=torch.long,
+        set_ids_tensor = torch.repeat_interleave(
+            torch.arange(len(set_sizes), dtype=torch.long),
+            torch.tensor(set_sizes, dtype=torch.long),
         )
 
-        all_labels = []
-        for set_idcs, set_type, target_name, coeffs in zip(
-            batch_sets, batch_types, batch_targets, batch_coeffs
-        ):
-            if set_type == "assay":
-                all_labels.append(self.labels[set_idcs])
-            else:
-                # Compute linear combination with noise
-                linear_combo = self._compute_linear_combination(set_idcs, coeffs)
-                all_labels.append(linear_combo)
+        all_labels = torch.empty(total_size, dtype=torch.float32)
 
-        all_labels = torch.cat(all_labels)
+        offset = 0
+        for set_idcs, set_type, coeffs in zip(batch_sets, batch_types, batch_coeffs):
+            size = len(set_idcs)
+            if set_type == "assay":
+                all_labels[offset : offset + size] = self.labels[set_idcs]
+            else:
+                all_labels[offset : offset + size] = self._compute_linear_combination(
+                    set_idcs, coeffs
+                )
+            offset += size
 
         prot_feats = (
             torch.ones(1, device=device)
