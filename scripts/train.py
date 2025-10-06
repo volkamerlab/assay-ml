@@ -5,7 +5,6 @@ import uuid
 import sys
 from functools import partial
 from typing import Tuple, Callable
-from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 import torch
@@ -108,7 +107,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
         case Method.PFN if mol_only:
             mswpds = partial(
                 MultiSetWithPropertiesDataset,
-                sets_per_batch=20,
+                sets_per_batch=10,
                 max_set_size=500,
                 shuffle_within_target=False,
                 property_columns=[
@@ -234,22 +233,9 @@ def prepare_dataset_splits(
         property_set_ratio=property_set_ratio,
     )
 
-    with ProcessPoolExecutor(max_workers=3) as executor:
-        futures = {
-            "train": executor.submit(
-                dataset_cls, train_data, target=train_target, **data_kwargs
-            ),
-            "val": executor.submit(
-                val_dataset_cls, val_data, target=test_target, **data_kwargs
-            ),
-            "test": executor.submit(
-                val_dataset_cls, test_data, target=test_target, **data_kwargs
-            ),
-        }
-
-    train_dataset = futures["train"].result()
-    val_dataset = futures["val"].result()
-    test_dataset = futures["test"].result()
+    train_dataset = dataset_cls(train_data, target=train_target, **data_kwargs)
+    val_dataset = val_dataset_cls(val_data, target=test_target, **data_kwargs)
+    test_dataset = val_dataset_cls(test_data, target=test_target, **data_kwargs)
 
     assert len(train_dataset) > 0
 
@@ -346,8 +332,7 @@ def run_split(
         patience_lr=10 if train_short else 100,
         fisher_transform=method not in [Method.IC50SETS, Method.IC50ALLSETS],
         unmasked_weight=unmasked_weight,
-        n_bins=100,
-        smoothing=False,
+        n_bins=20,
     )
     if model_cls in [ComplexBayesianSetRankModel, MoleculeBayesianSetRankModel]:
         train_and_evaluate_pfn_model(*args, **kwargs)
