@@ -531,74 +531,78 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
 
             if len(self.property_columns) == 0:
                 logger.warning("No valid property columns found")
-                self.property_values = None
+                self.property_tensor = None
+                self.common_valid_indices = np.array([])
             else:
                 self._prepare_property_data()
                 logger.info(f"Property columns available: {self.property_columns}")
                 logger.info(f"Noise std for linear combinations: {self.noise_std}")
         else:
-            self.property_values = None
+            self.property_tensor = None
+            self.common_valid_indices = np.array([])
 
     def _prepare_property_data(self):
-        """Prepare compound property data aligned with dataset indices."""
-        self.property_values = {}
-        self.property_stats = {}
-
+        """Prepare compound property data aligned with dataset indices - optimized version."""
+        valid_cols = []
         for prop_col in self.property_columns:
             valid_mask = self.data[prop_col].notna()
-
-            if valid_mask.sum() < self.min_batch_size:
+            if valid_mask.sum() >= self.min_batch_size:
+                valid_cols.append(prop_col)
+            else:
                 logger.warning(
                     f"Property {prop_col} has too few valid values ({valid_mask.sum()}), skipping"
                 )
-                continue
 
-            # Store raw values and normalization stats
-            valid_values = self.data.loc[valid_mask, prop_col].values
-            mean_val = np.mean(valid_values)
-            std_val = np.std(valid_values)
-
-            # Avoid division by zero
-            if std_val < 1e-8:
-                std_val = 1.0
-
-            prop_tensor = torch.full(
-                (len(self.data),), float("nan"), dtype=torch.float32, device="cpu"
-            )
-
-            valid_indices = self.data.index[valid_mask].values
-            # Normalize to zero mean and unit variance
-            normalized_values = (valid_values - mean_val) / std_val
-            prop_tensor[valid_indices] = torch.tensor(
-                normalized_values, dtype=torch.float32
-            )
-
-            self.property_values[prop_col] = {
-                "tensor": prop_tensor,
-                "valid_indices": valid_indices,
-            }
-
-            self.property_stats[prop_col] = {"mean": mean_val, "std": std_val}
-
-        # Find common valid indices across all properties
-        if self.property_values:
-            common_indices = set(
-                self.property_values[self.property_columns[0]]["valid_indices"]
-            )
-            for prop_col in self.property_columns[1:]:
-                if prop_col in self.property_values:
-                    common_indices &= set(
-                        self.property_values[prop_col]["valid_indices"]
-                    )
-            self.common_valid_indices = np.array(sorted(common_indices))
-            logger.info(
-                f"Common valid indices across all properties: {len(self.common_valid_indices)}"
-            )
-        else:
+        if not valid_cols:
+            logger.warning("No valid property columns found")
+            self.property_tensor = None
             self.common_valid_indices = np.array([])
+            self.property_stats = {}
+            return
 
+        prop_data = self.data[valid_cols].values.astype(
+            np.float32
+        )  # (n_samples, n_props)
+
+        valid_mask = ~np.isnan(prop_data).any(axis=1)
+        self.common_valid_indices = np.where(valid_mask)[0]
+
+        if len(self.common_valid_indices) == 0:
+            logger.warning("No samples with all properties valid")
+            self.property_tensor = None
+            self.common_valid_indices = np.array([])
+            self.property_stats = {}
+            return
+
+        valid_data = prop_data[valid_mask]
+        means = np.mean(valid_data, axis=0)
+        stds = np.std(valid_data, axis=0)
+
+        stds = np.where(stds < 1e-8, 1.0, stds)
+
+        self.property_tensor = torch.full(
+            (len(self.data), len(valid_cols)), float("nan"), dtype=torch.float32
+        )
+
+        normalized = (valid_data - means) / stds
+        self.property_tensor[self.common_valid_indices] = torch.from_numpy(
+            normalized.astype(np.float32)
+        )
+
+        self.property_columns = valid_cols
+        self.n_properties = len(valid_cols)
+
+        self.property_stats = {
+            col: {"mean": float(means[i]), "std": float(stds[i])}
+            for i, col in enumerate(valid_cols)
+        }
+
+        self._property_keys = valid_cols
+        self.n_common_valid = len(self.common_valid_indices)
+
+        logger.info(f"Prepared properties for molecules: {self._property_keys}")
         logger.info(
-            f"Prepared properties for molecules: {list(self.property_values.keys())}"
+            f"Common valid indices across all properties: {self.n_common_valid}"
         )
 
     def _create_property_sets_for_batch(self, num_sets: int):
@@ -610,52 +614,44 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         Returns:
             tuple: (property_sets, property_ids, property_types, property_targets, property_coefficients)
         """
-        if (
-            not self.property_values
-            or num_sets <= 0
-            or len(self.common_valid_indices) == 0
-        ):
+        if self.property_tensor is None or num_sets <= 0 or self.n_common_valid == 0:
             return [], [], [], [], []
 
         property_sets = []
         property_ids = []
-        property_types = []
+        property_types = ["property"] * num_sets
         property_targets = []
         property_coefficients = []
 
-        available_properties = list(self.property_values.keys())
-        n_properties = len(available_properties)
+        max_available = self.n_common_valid
+        if self.max_set_size > 0:
+            max_size = min(self.max_set_size, max_available)
+        else:
+            max_size = max_available
+
+        if max_size < self.min_batch_size:
+            return [], [], [], [], []
+
+        shuffled_indices = self.common_valid_indices.copy()
 
         for set_idx in range(num_sets):
-            # Generate random coefficients for linear combination
-            # Using standard normal distribution
-            coeffs = self.random.standard_normal(n_properties)
-            # Normalize coefficients to have unit L2 norm
-            coeffs = coeffs / np.linalg.norm(coeffs)
-
-            max_available = len(self.common_valid_indices)
-            if self.max_set_size > 0:
-                max_size = min(self.max_set_size, max_available)
-            else:
-                max_size = max_available
-
-            if max_size < self.min_batch_size:
-                continue
+            coeffs = self.random.standard_normal(self.n_properties).astype(np.float32)
+            norm = np.linalg.norm(coeffs)
+            coeffs = coeffs / norm if norm > 1e-8 else coeffs
 
             set_size = self.random.integers(self.min_batch_size, max_size + 1)
 
-            sample_idx = self.random.choice(
-                len(self.common_valid_indices), size=set_size, replace=False
-            )
+            if set_size > len(shuffled_indices):
+                shuffled_indices = self.common_valid_indices.copy()
 
-            selected_indices = self.common_valid_indices[sample_idx]
+            self.random.shuffle(shuffled_indices)
+            selected_indices = shuffled_indices[:set_size].copy()
 
             property_sets.append(selected_indices)
             property_ids.append(f"property_combo_{set_idx}")
-            property_types.append("property")
-            # Store coefficients as a dictionary
+
             coeff_dict = {
-                prop: float(c) for prop, c in zip(available_properties, coeffs)
+                prop: float(coeffs[i]) for i, prop in enumerate(self._property_keys)
             }
             property_targets.append(coeff_dict)
             property_coefficients.append(coeffs)
@@ -673,24 +669,18 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
 
         Args:
             indices: Indices of molecules
-            coefficients: Coefficients for linear combination
+            coefficients: Coefficients for linear combination (numpy array)
 
         Returns:
             torch.Tensor: Linear combination values with added noise
         """
-        available_properties = list(self.property_values.keys())
+        # property_tensor[indices]: (n_samples, n_props)
+        # coefficients: (n_props,)
+        prop_values = self.property_tensor[indices]  # (n_samples, n_props)
+        coeffs_tensor = torch.from_numpy(coefficients)
 
-        # Initialize result tensor
-        result = torch.zeros(len(indices), dtype=torch.float32)
-
-        # Compute linear combination
-        for prop, coeff in zip(available_properties, coefficients):
-            prop_values = self.property_values[prop]["tensor"][indices]
-            result += coeff * prop_values
-
-        # Add Gaussian noise
-        noise = torch.randn_like(result) * self.noise_std
-        result += noise
+        result = torch.matmul(prop_values, coeffs_tensor)  # (n_samples,)
+        result += torch.randn_like(result) * self.noise_std
 
         return result
 
@@ -704,6 +694,9 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         shuffled_assay_sets = [self.valid_sets[i] for i in indices]
         shuffled_assay_ids = [self.set_ids[i] for i in indices]
 
+        n_batches = (
+            len(shuffled_assay_sets) + self.sets_per_batch - 1
+        ) // self.sets_per_batch
         self.batches = []
         self.batch_set_ids = []
         self.batch_set_types = []
@@ -729,7 +722,8 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             combined_targets = [self.base_target] * num_assay_sets + prop_targets
             combined_coeffs = [None] * num_assay_sets + prop_coeffs
 
-            batch_indices = np.arange(len(combined_sets))
+            n_combined = len(combined_sets)
+            batch_indices = np.arange(n_combined)
             self.random.shuffle(batch_indices)
 
             self.batches.append([combined_sets[j] for j in batch_indices])
@@ -780,27 +774,28 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         )
 
         set_sizes = [len(set_idcs) for set_idcs in batch_sets]
-        cumulative_sizes = np.cumsum([0] + set_sizes).squeeze()
+        cumulative_sizes = np.cumsum([0] + set_sizes)
+        total_size = cumulative_sizes[-1]
 
         all_indices = np.concatenate(batch_sets)
 
-        set_ids_tensor = torch.tensor(
-            [set_idx for set_idx, size in enumerate(set_sizes) for _ in range(size)],
-            dtype=torch.long,
+        set_ids_tensor = torch.repeat_interleave(
+            torch.arange(len(set_sizes), dtype=torch.long),
+            torch.tensor(set_sizes, dtype=torch.long),
         )
 
-        all_labels = []
-        for set_idcs, set_type, target_name, coeffs in zip(
-            batch_sets, batch_types, batch_targets, batch_coeffs
-        ):
-            if set_type == "assay":
-                all_labels.append(self.labels[set_idcs])
-            else:
-                # Compute linear combination with noise
-                linear_combo = self._compute_linear_combination(set_idcs, coeffs)
-                all_labels.append(linear_combo)
+        all_labels = torch.empty(total_size, dtype=torch.float32)
 
-        all_labels = torch.cat(all_labels)
+        offset = 0
+        for set_idcs, set_type, coeffs in zip(batch_sets, batch_types, batch_coeffs):
+            size = len(set_idcs)
+            if set_type == "assay":
+                all_labels[offset : offset + size] = self.labels[set_idcs]
+            else:
+                all_labels[offset : offset + size] = self._compute_linear_combination(
+                    set_idcs, coeffs
+                )
+            offset += size
 
         prot_feats = (
             torch.ones(1, device=device)

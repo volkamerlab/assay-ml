@@ -5,6 +5,7 @@ import uuid
 import sys
 from functools import partial
 from typing import Tuple, Callable
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 import torch
@@ -233,9 +234,22 @@ def prepare_dataset_splits(
         property_set_ratio=property_set_ratio,
     )
 
-    train_dataset = dataset_cls(train_data, target=train_target, **data_kwargs)
-    val_dataset = val_dataset_cls(val_data, target=test_target, **data_kwargs)
-    test_dataset = val_dataset_cls(test_data, target=test_target, **data_kwargs)
+    with ProcessPoolExecutor(max_workers=3) as executor:
+        futures = {
+            "train": executor.submit(
+                dataset_cls, train_data, target=train_target, **data_kwargs
+            ),
+            "val": executor.submit(
+                val_dataset_cls, val_data, target=test_target, **data_kwargs
+            ),
+            "test": executor.submit(
+                val_dataset_cls, test_data, target=test_target, **data_kwargs
+            ),
+        }
+
+    train_dataset = futures["train"].result()
+    val_dataset = futures["val"].result()
+    test_dataset = futures["test"].result()
 
     assert len(train_dataset) > 0
 
