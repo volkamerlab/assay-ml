@@ -352,6 +352,10 @@ def evaluate_with_batched_masked_sets(
     all_probs = []
     save_predictions = predictions_file is not None
 
+    bin_edges = model.bin_dist.edges.to(device)
+    bin_widths = torch.diff(bin_edges)  # (n_bins,)
+    total_width = (bin_edges[-1] - bin_edges[0]).clamp_min(1e-6)
+
     for protein_features, ligand_features, labels, info, metadata in (
         pbar := tqdm.tqdm(loader, desc="evaluating")
     ):
@@ -417,7 +421,9 @@ def evaluate_with_batched_masked_sets(
 
             cdf_pred = torch.cumsum(probs, dim=-1)
             cdf_true = torch.cumsum(one_hot, dim=-1)
-            wass_dists = (cdf_pred - cdf_true).abs().sum(dim=-1) / model.n_bins
+            wass_dists = (torch.abs(cdf_pred - cdf_true) * bin_widths).sum(
+                dim=-1
+            ) / total_width
             total_wass += wass_dists.sum().item()
 
             pred_mean = model.bin_dist.mean(masked_preds)
