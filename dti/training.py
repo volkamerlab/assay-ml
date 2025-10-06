@@ -248,6 +248,7 @@ def train_with_batched_masked_sets(
     - In each group, a fixed fraction of samples (mask_fraction) are masked.
     - Masked indices are chosen randomly each batch.
     - Reconstruction loss: unmasked samples get linear weight `unmasked_weight`.
+    - Loss: normalized Wasserstein distance between predicted and true distributions.
     """
     model.train()
     device = next(model.parameters()).device
@@ -258,6 +259,10 @@ def train_with_batched_masked_sets(
 
     masked_weight = 1.0
     unmasked_weight_val = unmasked_weight
+
+    bin_edges = model.bin_dist.edges.to(device)
+    bin_widths = torch.diff(bin_edges)  # (n_bins,)
+    total_width = (bin_edges[-1] - bin_edges[0]).clamp_min(1e-6)
 
     for protein_features, ligand_features, labels, _, metadata in (
         pbar := tqdm.tqdm(loader, desc="training")
@@ -308,14 +313,23 @@ def train_with_batched_masked_sets(
             set_ids_tensor,
         )
 
-        nll_losses = -model.bin_dist.log_prob(normed_labels, preds)
+        probs = torch.softmax(preds, dim=-1)
+        true_bins = model.bin_dist.labels(normed_labels)
+        one_hot = model.bin_dist.dist(true_bins)
 
-        if unmasked_weight == 1.0:
-            batch_loss = nll_losses.mean()
+        cdf_pred = torch.cumsum(probs.to(torch.float32), dim=-1)
+        cdf_true = torch.cumsum(one_hot.to(torch.float32), dim=-1)
+
+        wass_dists = (torch.abs(cdf_pred - cdf_true) * bin_widths).sum(
+            dim=-1
+        ) / total_width
+
+        if unmasked_weight_val == 1.0:
+            batch_loss = wass_dists.mean()
         else:
-            weights = torch.full_like(nll_losses, unmasked_weight)
+            weights = torch.full_like(wass_dists, unmasked_weight_val)
             weights[sample_mask] = masked_weight
-            batch_loss = (nll_losses * weights).mean()
+            batch_loss = (wass_dists * weights).mean()
 
         optimizer.zero_grad(set_to_none=True)
         batch_loss.backward()
@@ -324,7 +338,6 @@ def train_with_batched_masked_sets(
         batch_loss_val = batch_loss.item()
         total_loss += batch_loss_val
         steps += 1
-
         pbar.set_description(f"train batch loss={batch_loss_val:.4e}")
 
     return total_loss / max(1, steps)
