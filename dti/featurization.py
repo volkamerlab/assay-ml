@@ -254,4 +254,4 @@ def extract_embeddings(
                 }
 
                 torch.save(result, filename(entry_id))
-    logger.info("ESM embeddings written to {output_dir}")
+    logger.info(f"ESM embeddings written to {output_dir}")
