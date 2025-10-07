@@ -448,8 +448,8 @@ class ComplexBayesianSetRankModel(MoleculeBayesianSetRankModel):
         x_dist = (1 - sample_mask) * x_dist + sample_mask * self.default_dist_emb
         x = self.combine_repr(torch.cat((x_ligand, x_protein, x_dist), 1))
         h = self.set_transformer(x, attn_mask=attn_mask)
-        return self.ouput(h).squeeze()
-
+        logits = self.output(h)
+        return self.smoother(logits)
 
 class MHABlock(Module):
     def __init__(
