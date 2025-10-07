@@ -50,7 +50,6 @@ class BinDistribution(nn.Module):
 
             labels = labels.squeeze().to(device)
 
-            # Apply the same z-score normalization as in training
             for i in range(num_sets):
                 start_idx = set_boundaries[i]
                 end_idx = set_boundaries[i + 1]

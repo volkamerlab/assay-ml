@@ -31,6 +31,7 @@ from dti.data import (
     prepare_datasets,
     load_landrum,
     load_chembl_endpoints,
+    load_chembl_endpoints_protein,
     load_kinodata,
     load_nci,
     load_solubility,
@@ -63,6 +64,8 @@ def setup(method: Method, dataset: str) -> Tuple[type, type, type, Callable]:
     match dataset.lower():
         case "chembl":
             data, mol_only = load_chembl_endpoints, True
+        case "chemblprot":
+            data, mol_only = load_chembl_endpoints_protein, False
         case "kinodata":
             data, mol_only = load_kinodata, False
         case "landrum":

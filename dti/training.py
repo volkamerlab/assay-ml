@@ -239,7 +239,7 @@ def train_with_batched_masked_sets(
     loader,
     optimizer,
     mask_fraction: float = 0.2,
-    unmasked_weight: float = 1.0,
+    unmasked_weight: float = 0.0,
     **kwargs,
 ):
     """

@@ -1181,14 +1181,6 @@ def load_chembl_endpoints(
 ) -> pd.DataFrame:
     logger.info("loading general ChEMBL endpoints")
     data = pd.read_csv(path, index_col=False)
-    # data.drop(
-    #     columns=[
-    #         "assay_id_x_type",
-    #         "standard_units",
-    #         "target_scaled",
-    #     ],
-    #     inplace=True,
-    # )
     assert data["compound_id"].dtype == int
     return _process(
         data,
@@ -1199,5 +1191,26 @@ def load_chembl_endpoints(
             "group": ASSAY,
             "test": INTRA_ASSAY_TEST,
             "activity_id": IDENT,
+        },
+    )
+
+
+def load_chembl_endpoints_protein(
+    path: Path = DATA / "raw" / "chembl_endpoints_protein_processed.csv.gz",
+) -> pd.DataFrame:
+    logger.info("loading general ChEMBL protein endpoints")
+    data = pd.read_csv(path, index_col=False)
+    assert data["compound_id"].dtype == int
+    return _process(
+        data,
+        {
+            "compound_id": COMPOUND,
+            "target_transformed": ACT,
+            "canonical_smiles": SMILES,
+            "group": ASSAY,
+            "test": INTRA_ASSAY_TEST,
+            "activity_id": IDENT,
+            "sequence": SEQUENCE,
+            "uniprot_id": TID,
         },
     )
