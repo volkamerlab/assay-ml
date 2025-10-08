@@ -1,14 +1,15 @@
 universe = docker
 docker_image = astral/uv:debian
 executable = fit_flaml_baseline.sh
+arguments = $(Process)
 output = logs/baseline.$(ClusterId).$(ProcId).out
 error = logs/baseline.$(ClusterId).$(ProcId).err
 log = logs/baseline.$(ClusterId).$(ProcId).log
 should_transfer_files   = YES
 when_to_transfer_output = ON_EXIT
 request_GPUs = 0
-request_CPUs = 100
-request_memory = 100G
+request_CPUs = 16
+request_memory = 32GB
 requirements = UidDomain == "cs.uni-saarland.de"
 +WantGPUHomeMounted = true
-queue
+queue 10

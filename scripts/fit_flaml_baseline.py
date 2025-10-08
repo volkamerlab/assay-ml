@@ -10,7 +10,7 @@ from dti.featurization import MolFingerprint
 CHUNK_ID = int(sys.argv[1])
 log = lambda message: print(f"[{CHUNK_ID}] {message}")
 CHUNK_FILE = f"data/raw/chembl_split_{CHUNK_ID}.csv"
-MODEL_DIR = "data/chembl_flaml"
+MODEL_DIR = "data/flaml"
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 log(f"reading csv")
@@ -26,10 +26,10 @@ def train_assay(assay_id, group):
     smiles_all = group["smiles"].values
     fps_all = np.stack(fpgen.compute_parallel(smiles_all, pbar=False))
 
-    X_train = fps_all[~group["test"].values]
-    X_test = fps_all[group["test"].values]
+    X_train = fps_all[~group["is_intra_assay_test"].values]
+    X_test = fps_all[group["is_intra_assay_test"].values]
 
-    y_train = group.loc[~group["test"], "activity_value"].values
+    y_train = group.loc[~group["is_intra_assay_test"], "activity_value"].values
 
     if len(y_train) < 5 or X_test.shape[0] < 1:
         return assay_id, None, None, None
@@ -53,7 +53,7 @@ def train_assay(assay_id, group):
     model_path = os.path.join(MODEL_DIR, f"assay_{assay_id}.pkl")
     joblib.dump(automl, model_path)
 
-    return assay_id, group.loc[group["test"]].index, y_pred, model_path
+    return assay_id, group.loc[group["is_intra_assay_test"]].index, y_pred, model_path
 
 
 results = [train_assay(assay_id, group) for assay_id, group in df.groupby("assay_id")]
@@ -65,4 +65,4 @@ for assay_id, test_idx, y_pred, model_path in results:
     df.loc[test_idx, "y_pred"] = y_pred
     df.loc[df["assay_id"] == assay_id, "model_path"] = model_path
 
-df.to_csv(f"data/raw/chembl_endpoints_split_flaml_chunk_{CHUNK_ID}.csv", index=False)
+df.to_csv(f"data/flaml/chembl_endpoints_split_flaml_chunk_{CHUNK_ID}.csv", index=False)
