@@ -276,7 +276,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             num_heads=num_heads,
         )
         self.n_bins = n_bins
-        self.bin_dist = BinDistribution(n_bins=n_bins, exp_tails=False)
+        self.bin_dist = BinDistribution(n_bins=n_bins, exp_tails=True)
         self.distribution_encoder = _mlp(
             input_size=self.n_bins,
             hidden_size=self.n_bins * 2,
@@ -450,6 +450,7 @@ class ComplexBayesianSetRankModel(MoleculeBayesianSetRankModel):
         h = self.set_transformer(x, attn_mask=attn_mask)
         logits = self.output(h)
         return self.smoother(logits)
+
 
 class MHABlock(Module):
     def __init__(

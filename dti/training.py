@@ -299,6 +299,7 @@ def train_with_batched_masked_sets(
             mean_val = unmasked.mean()
             std_val = unmasked.std(unbiased=True).clamp_min(1e-6)
             normed_labels[start_idx:end_idx] = (set_labels - mean_val) / std_val
+            normed_labels = normed_labels.clamp(-10, 10)
 
         preds = model(
             ligand_features,
