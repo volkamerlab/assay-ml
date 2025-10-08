@@ -199,7 +199,7 @@ def prepare_dataset_splits(
 ):
     """Prepare and return model class, dataloaders, ligand_dim, and raw data."""
     data_dir = DATA / "processed" / dataset_name
-    aggregate = dataset_name != "chembl"
+    aggregate = not dataset_name.startswith("chembl")
     inter_assay_weight = None
 
     if method == Method.HODGE:
