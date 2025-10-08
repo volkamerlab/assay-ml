@@ -99,13 +99,15 @@ class BinDistribution(nn.Module):
         if prop_set_ratio is not None and hasattr(loader.dataset, "property_set_ratio"):
             loader.dataset.property_set_ratio = prop_set_ratio
 
+    @property
+    def widths(self):
+        return self.edges[1:] - self.edges[:-1]
+
     def _init_side_normals(self):
         """Initialize half-normal distributions for the tails."""
-        bucket_widths = self.edges[1:] - self.edges[:-1]
-
         self._side_normals = (
-            self._halfnormal(bucket_widths[0].item(), p=self.tail_percentile),
-            self._halfnormal(bucket_widths[-1].item(), p=self.tail_percentile),
+            self._halfnormal(self.widths[0].item(), p=self.tail_percentile),
+            self._halfnormal(self.widths[-1].item(), p=self.tail_percentile),
         )
 
         logger.info(
@@ -148,9 +150,8 @@ class BinDistribution(nn.Module):
     def log_prob(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
         bucket_idcs = self.labels(y)
         bucket_log_ps = F.log_softmax(logits, dim=-1)
-        bucket_widths = self.edges[1:] - self.edges[:-1]
 
-        scaled_log_ps = bucket_log_ps - torch.log(bucket_widths.clamp_min(1e-8))
+        scaled_log_ps = bucket_log_ps - torch.log(self.widths.clamp_min(1e-8))
         log_ps = scaled_log_ps.gather(-1, bucket_idcs.unsqueeze(-1)).squeeze(-1)
 
         if self.exp_tails and self._side_normals is not None:
