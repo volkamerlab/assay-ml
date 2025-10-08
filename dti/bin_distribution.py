@@ -19,10 +19,20 @@ class BinDistribution(nn.Module):
         self,
         n_bins: int,
         exp_tails: bool = True,
+        tail_percentile: float = 0.5,
     ):
+        """
+        Args:
+            n_bins: Number of bins for discretization
+            exp_tails: Whether to use exponential/half-normal tails
+            tail_percentile: Percentile for fitting tail scale (higher = wider tails)
+            device: Device to place tensors on
+        """
         super().__init__()
         self.n_bins = n_bins
         self.exp_tails = exp_tails
+        self.tail_percentile = tail_percentile
+        self.device_str = device
         self._side_normals = None
 
         self.register_buffer("edges", torch.zeros(n_bins + 1, device=device))
@@ -34,10 +44,11 @@ class BinDistribution(nn.Module):
 
         Args:
             loader: Training data loader
-            mask_fraction: Fraction of samples to mask (should match training)
+            max_samples: Maximum number of samples to use for fitting
         """
         all_normed_values = []
 
+        prop_set_ratio = None
         if hasattr(loader.dataset, "property_set_ratio"):
             prop_set_ratio = loader.dataset.property_set_ratio
             loader.dataset.property_set_ratio = 0
@@ -72,83 +83,93 @@ class BinDistribution(nn.Module):
         quantiles = torch.quantile(all_normed, probabilities)
 
         self.edges.copy_(quantiles)
+
         if self.exp_tails:
             self._init_side_normals()
 
         logger.info(
-            f"fitted {self.n_bins} bins with edges: "
+            f"Fitted {self.n_bins} bins with edges: "
             f"[{self.edges[0]:.3f}, ..., {self.edges[-1]:.3f}]"
         )
         logger.info(
             f"Median bin width: {(self.edges[1:] - self.edges[:-1]).median():.3f}"
         )
-        if hasattr(loader.dataset, "property_set_ratio"):
+
+        if prop_set_ratio is not None and hasattr(loader.dataset, "property_set_ratio"):
             loader.dataset.property_set_ratio = prop_set_ratio
 
     def _init_side_normals(self):
         """Initialize half-normal distributions for the tails."""
         bucket_widths = self.edges[1:] - self.edges[:-1]
+
         self._side_normals = (
-            self._halfnormal(bucket_widths[0].item(), p=0.5),
-            self._halfnormal(bucket_widths[-1].item(), p=0.5),
+            self._halfnormal(bucket_widths[0].item(), p=self.tail_percentile),
+            self._halfnormal(bucket_widths[-1].item(), p=self.tail_percentile),
+        )
+
+        logger.info(
+            f"Initialized tail distributions with scales: "
+            f"left={self._side_normals[0].scale:.3f}, right={self._side_normals[1].scale:.3f}"
         )
 
     @staticmethod
     def _halfnormal(
-        range_max: float, p: float = 0.5
+        range_max: float, p: float = 0.75
     ) -> torch.distributions.Distribution:
+        """
+        Create a half-normal distribution scaled so that P(X <= range_max) = p.
+
+        Args:
+            range_max: The value at which CDF should equal p
+            p: Target cumulative probability at range_max
+        """
         if range_max <= 0:
             range_max = 1e-8
-        standard_half_normal = torch.distributions.HalfNormal(
-            torch.tensor(1.0, device=device)
-        )
-        scale = range_max / standard_half_normal.icdf(torch.tensor(p, device=device))
+
+        standard_half_normal = torch.distributions.HalfNormal(torch.tensor(1.0))
+        scale = range_max / standard_half_normal.icdf(torch.tensor(p))
+
         return torch.distributions.HalfNormal(scale.item())
 
     def labels(self, y: torch.Tensor) -> torch.Tensor:
-        """Assign bin labels to input values."""
         bucket_indices = torch.searchsorted(self.edges, y) - 1
+
         bucket_indices[y == self.edges[0]] = 0
         bucket_indices[y == self.edges[-1]] = self.n_bins - 1
+
         bucket_indices = bucket_indices.clamp(0, self.n_bins - 1)
+
         return bucket_indices.long()
 
     def dist(self, class_labels: torch.Tensor) -> torch.Tensor:
-        """Convert class labels to one-hot distribution."""
         return F.one_hot(class_labels, num_classes=self.n_bins).float()
 
     def log_prob(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
-        """Compute log probability of values given logits."""
-        bucket_indices = self.labels(y)
-        bucket_log_probs = F.log_softmax(logits, dim=-1)
+        bucket_idcs = self.labels(y)
+        bucket_log_ps = F.log_softmax(logits, dim=-1)
         bucket_widths = self.edges[1:] - self.edges[:-1]
 
-        # Scale log probs by bucket width (uniform density within bucket)
-        scaled_log_probs = bucket_log_probs - torch.log(bucket_widths)
-        log_probs = scaled_log_probs.gather(-1, bucket_indices.unsqueeze(-1)).squeeze(
-            -1
-        )
+        scaled_log_ps = bucket_log_ps - torch.log(bucket_widths.clamp_min(1e-8))
+        log_ps = scaled_log_ps.gather(-1, bucket_idcs.unsqueeze(-1)).squeeze(-1)
 
-        # Add exponential tail corrections if enabled
         if self.exp_tails and self._side_normals is not None:
-            left_boundary_mask = bucket_indices == 0
-            right_boundary_mask = bucket_indices == self.n_bins - 1
+            left_mask = bucket_idcs == 0
+            right_mask = bucket_idcs == self.n_bins - 1
 
-            if left_boundary_mask.any():
-                distances = (self.edges[1] - y[left_boundary_mask]).clamp(min=1e-8)
-                half_normal_log_prob = self._side_normals[0].log_prob(distances)
-                log_probs[left_boundary_mask] += half_normal_log_prob + torch.log(
-                    bucket_widths[0]
-                )
+            if left_mask.any():
+                y_left = y[left_mask]
 
-            if right_boundary_mask.any():
-                distances = (y[right_boundary_mask] - self.edges[-2]).clamp(min=1e-8)
-                half_normal_log_prob = self._side_normals[1].log_prob(distances)
-                log_probs[right_boundary_mask] += half_normal_log_prob + torch.log(
-                    bucket_widths[-1]
-                )
+                distances = (self.edges[0] - y_left).clamp(min=0.0)
+                tail_log_density = self._side_normals[0].log_prob(distances + 1e-8)
+                log_ps[left_mask] = bucket_log_ps[left_mask, 0] + tail_log_density
 
-        return log_probs
+            if right_mask.any():
+                y_right = y[right_mask]
+                distances = (y_right - self.edges[-1]).clamp(min=0.0)
+                tail_log_density = self._side_normals[1].log_prob(distances + 1e-8)
+                log_ps[right_mask] = bucket_log_ps[right_mask, -1] + tail_log_density
+
+        return log_ps
 
     def bucket_centers(self) -> torch.Tensor:
         return (self.edges[:-1] + self.edges[1:]) / 2
