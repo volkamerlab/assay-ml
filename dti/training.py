@@ -254,7 +254,7 @@ def train_with_batched_masked_sets(
     logger.info(f"training with unmasked_weight={unmasked_weight}")
 
     bd = model.bin_dist
-    clip_range = (bd.edges[0] - 3 * bd.widths[0], bd.edges[-1] * 3 * bd.widths[-1])
+    clip_range = (bd.edges[0] - 3 * bd.widths[0], bd.edges[-1] + 3 * bd.widths[-1])
     logger.debug(f"clipping labels to {clip_range}")
 
     total_loss = 0.0
