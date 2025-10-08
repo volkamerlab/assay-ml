@@ -34,6 +34,7 @@ class BinDistribution(nn.Module):
         self.tail_percentile = tail_percentile
         self.device_str = device
         self._side_normals = None
+        logger.info(f"bin distribution {'with' if self.exp_tails else 'without'} exponential tails")
 
         self.register_buffer("edges", torch.zeros(n_bins + 1, device=device))
 
