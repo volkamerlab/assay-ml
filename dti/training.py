@@ -254,7 +254,7 @@ def train_with_batched_masked_sets(
     logger.info(f"training with unmasked_weight={unmasked_weight}")
 
     bd = model.bin_dist
-    clip_range = (bd.edges[0] - 3 * bd.widths[0], bd.edges[-1] + 3 * bd.widths[-1])
+    clip_range = (bd.edges[0] -  0 * bd.widths[0], bd.edges[-1] + 0 * bd.widths[-1])
     logger.debug(f"clipping labels to {clip_range}")
 
     total_loss = 0.0
@@ -361,6 +361,9 @@ def evaluate_with_batched_masked_sets(
     bin_widths = torch.diff(bin_edges)  # (n_bins,)
     total_width = (bin_edges[-1] - bin_edges[0]).clamp_min(1e-6)
 
+    clip_range = (bd.edges[0] -  0 * bd.widths[0], bd.edges[-1] + 0 * bd.widths[-1])
+    logger.debug(f"clipping labels to {clip_range}")
+
     for protein_features, ligand_features, labels, info, metadata in (
         pbar := tqdm.tqdm(loader, desc="evaluating")
     ):
@@ -402,6 +405,7 @@ def evaluate_with_batched_masked_sets(
             mean_val = unmasked.mean()
             std_val = unmasked.std(unbiased=True).clamp_min(1e-6)
             normed_labels[start_idx:end_idx] = (set_labels - mean_val) / std_val
+            normed_labels = normed_labels.clamp(*clip_range)
 
         preds = model(
             ligand_features,
