@@ -367,8 +367,8 @@ def main():
     parser.add_argument(
         "--unmasked-weight",
         type=float,
-        default=1.0,
-        help="[PFN] Weight of reconstruction on unmasked samples. (default: 1.0)",
+        default=0.0,
+        help="[PFN] Weight of reconstruction on unmasked samples. (default: 0.0)",
     )
     parser.add_argument(
         "--property-set-ratio",
