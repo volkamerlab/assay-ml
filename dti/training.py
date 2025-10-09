@@ -361,6 +361,7 @@ def evaluate_with_batched_masked_sets(
     bin_widths = torch.diff(bin_edges)  # (n_bins,)
     total_width = (bin_edges[-1] - bin_edges[0]).clamp_min(1e-6)
 
+    bd = model.bin_dist
     clip_range = (bd.edges[0] -  0 * bd.widths[0], bd.edges[-1] + 0 * bd.widths[-1])
     logger.debug(f"clipping labels to {clip_range}")
 
