@@ -255,7 +255,7 @@ def train_with_batched_masked_sets(
 
     bd = model.bin_dist
     clip_range = (bd.edges[0] - 0 * bd.widths[0], bd.edges[-1] + 0 * bd.widths[-1])
-    logger.debug(f"clipping labels to {clip_range}")
+    logger.debug(f"clipping labels to [{clip_range[0].item()}, {clip_range[1].item()}]")
 
     total_loss = 0.0
     steps = 0
@@ -363,7 +363,7 @@ def evaluate_with_batched_masked_sets(
 
     bd = model.bin_dist
     clip_range = (bd.edges[0] - 0 * bd.widths[0], bd.edges[-1] + 0 * bd.widths[-1])
-    logger.debug(f"clipping labels to {clip_range}")
+    logger.debug(f"clipping labels to [{clip_range[0].item()}, {clip_range[1].item()}]")
 
     for protein_features, ligand_features, labels, info, metadata in (
         pbar := tqdm.tqdm(loader, desc="evaluating")
@@ -378,7 +378,7 @@ def evaluate_with_batched_masked_sets(
         info = info.squeeze().to(device, non_blocking=True)
         batch_size = labels.size(0)
 
-        sample_mask = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        sample_mask = info[:, 0].bool()
         normed_labels = torch.zeros_like(labels)
         assert len(torch.unique(info[:, 0])) == 2
 
@@ -389,14 +389,9 @@ def evaluate_with_batched_masked_sets(
             if set_size < 2:
                 continue
 
-            info_batch = info[start_idx:end_idx, :]
-            mask = info_batch[:, 0].bool()
-
-            sample_mask[start_idx:end_idx] = mask
+            mask = sample_mask[start_idx:end_idx]
             set_labels = labels[start_idx:end_idx]
-
-            mask_inv = ~mask
-            unmasked = set_labels[mask_inv]
+            unmasked = set_labels[~mask]
 
             if unmasked.numel() < 2:
                 continue
