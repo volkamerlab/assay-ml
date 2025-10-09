@@ -23,37 +23,41 @@ df["model_path"] = None
 
 def train_assay(assay_id, group):
     log(f"processing assay {assay_id}")
-    smiles_all = group["smiles"].values
+    smiles_all = group["canonical_smiles"].values
     fps_all = np.stack(fpgen.compute_parallel(smiles_all, pbar=False))
 
-    X_train = fps_all[~group["is_intra_assay_test"].values]
-    X_test = fps_all[group["is_intra_assay_test"].values]
+    X_train = fps_all[~group["test"].values]
+    X_test = fps_all[group["test"].values]
 
-    y_train = group.loc[~group["is_intra_assay_test"], "activity_value"].values
+    y_train = group.loc[~group["test"], "target_transformed"].values
 
     if len(y_train) < 5 or X_test.shape[0] < 1:
         return assay_id, None, None, None
 
-    n_features = X_train.shape[1]
-    X_train = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(n_features)])
-    X_test = pd.DataFrame(X_test, columns=[f"f{i}" for i in range(n_features)])
+    try:
+        n_features = X_train.shape[1]
+        X_train = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(n_features)])
+        X_test = pd.DataFrame(X_test, columns=[f"f{i}" for i in range(n_features)])
 
-    automl = AutoML()
-    automl_settings = {
-        "time_budget": 30,
-        "task": "regression",
-        "metric": "rmse",
-        "log_file_name": f"{MODEL_DIR}/assay_{assay_id}.log",
-        "verbose": 0,
-    }
+        automl = AutoML()
+        automl_settings = {
+            "time_budget": 60,
+            "task": "regression",
+            "metric": "rmse",
+            "log_file_name": f"{MODEL_DIR}/assay_{assay_id}.log",
+            "verbose": 3,
+            "n_jobs": 16,
+        }
 
-    automl.fit(X_train=X_train, y_train=y_train, **automl_settings)
-    y_pred = automl.predict(X_test)
+        automl.fit(X_train=X_train, y_train=y_train, **automl_settings)
+        y_pred = automl.predict(X_test)
 
-    model_path = os.path.join(MODEL_DIR, f"assay_{assay_id}.pkl")
-    joblib.dump(automl, model_path)
+        model_path = os.path.join(MODEL_DIR, f"assay_{assay_id}.pkl")
+        joblib.dump(automl, model_path)
+    except:
+        return assay_id, None, None, None
 
-    return assay_id, group.loc[group["is_intra_assay_test"]].index, y_pred, model_path
+    return assay_id, group.loc[group["test"]].index, y_pred, model_path
 
 
 results = [train_assay(assay_id, group) for assay_id, group in df.groupby("assay_id")]
