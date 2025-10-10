@@ -926,6 +926,10 @@ def train_and_evaluate_pfn_model(
     ).to(device)
 
     model.bin_dist.fit(train_loader)
+    with open(OUTPUT / run_name / "bin_dist", "w") as f_bins:
+        f_bins.write(
+            f"{','.join([str(x.item()) for x in model.bin_dist.edges])}"
+        )
 
     optimizer = torch.optim.Adam(model.parameters(), lr=opts["lr"])
     scheduler = ReduceLROnPlateau(
@@ -966,10 +970,6 @@ def train_and_evaluate_pfn_model(
             best_loss = val_loss
             epochs_without_improvement = 0
             torch.save(model.state_dict(), OUTPUT / run_name / "model.pt")
-            with open(OUTPUT / run_name / "bin_dist", "w") as f_bins:
-                f_bins.write(
-                    f"{','.join([str(x.item()) for x in model.bin_dist.edges])}"
-                )
             test_results = evaluate_with_batched_masked_sets(
                 model,
                 test_loader,
