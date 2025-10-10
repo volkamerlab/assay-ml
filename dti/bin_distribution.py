@@ -41,7 +41,7 @@ class BinDistribution(nn.Module):
             f"bin distribution {'with' if self.exp_tails else 'without'} exponential tails and '{self.normalization}' normalization"
         )
 
-        self.register_buffer("edges", torch.zeros(n_bins + 1, device=device))
+        self.register_buffer("edges", torch.linspace(0, 1, n_bins + 1, device=device))
 
     @torch.no_grad()
     def fit(self, loader, max_samples: int = 1_000_000):
@@ -52,6 +52,10 @@ class BinDistribution(nn.Module):
             loader: Training data loader
             max_samples: Maximum number of samples to use for fitting
         """
+
+        if self.normalization == "minmax":
+            return
+
         all_normed_values = []
 
         prop_set_ratio = None
