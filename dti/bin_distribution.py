@@ -20,7 +20,7 @@ class BinDistribution(nn.Module):
         n_bins: int,
         exp_tails: bool = True,
         tail_percentile: float = 0.5,
-        normalization: str = 'zscore',
+        normalization: str = "zscore",
     ):
         """
         Args:
@@ -35,9 +35,11 @@ class BinDistribution(nn.Module):
         self.tail_percentile = tail_percentile
         self.device_str = device
         self._side_normals = None
-        assert normalization in ['zscore', 'minmax']
+        assert normalization in ["zscore", "minmax"]
         self.normalization = normalization
-        logger.info(f"bin distribution {'with' if self.exp_tails else 'without'} exponential tails")
+        logger.info(
+            f"bin distribution {'with' if self.exp_tails else 'without'} exponential tails and '{self.normalization}' normalization"
+        )
 
         self.register_buffer("edges", torch.zeros(n_bins + 1, device=device))
 
@@ -71,12 +73,12 @@ class BinDistribution(nn.Module):
                 set_size = end_idx - start_idx
                 set_labels = labels[start_idx:end_idx]
 
-                if self.normalization == 'minmax':
+                if self.normalization == "minmax":
                     min_val = set_labels.min()
                     max_val = set_labels.max()
                     range_val = (max_val - min_val).clamp_min(1e-6)
                     normed_set = (set_labels - min_val) / range_val
-                elif self.normalization == 'zscore':
+                elif self.normalization == "zscore":
                     mean_val = set_labels.mean()
                     std_val = set_labels.std(unbiased=True)
                     std_val = std_val.clamp_min(1e-6)
