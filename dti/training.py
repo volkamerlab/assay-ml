@@ -244,7 +244,7 @@ def train_with_batched_masked_sets(
 ):
     """
     Training loop with one shared BinDistribution.
-    Each set is z-score normalized using its unmasked samples before binning.
+    Each set is min–max normalized to [0, 1] using its unmasked samples before binning.
     - In each group, a fixed fraction of samples (mask_fraction) are masked.
     - Masked indices are chosen randomly each batch.
     - Reconstruction loss: unmasked samples get linear weight `unmasked_weight`.
@@ -300,9 +300,10 @@ def train_with_batched_masked_sets(
             if unmasked.numel() < 2:
                 continue
 
-            mean_val = unmasked.mean()
-            std_val = unmasked.std(unbiased=True).clamp_min(1e-6)
-            normed_labels[start_idx:end_idx] = (set_labels - mean_val) / std_val
+            min_val = unmasked.min()
+            max_val = unmasked.max()
+            range_val = (max_val - min_val).clamp_min(1e-6)
+            normed_labels[start_idx:end_idx] = (set_labels - min_val) / range_val
             normed_labels = normed_labels.clamp(*clip_range)
 
         preds = model(
@@ -396,9 +397,10 @@ def evaluate_with_batched_masked_sets(
             if unmasked.numel() < 2:
                 continue
 
-            mean_val = unmasked.mean()
-            std_val = unmasked.std(unbiased=True).clamp_min(1e-6)
-            normed_labels[start_idx:end_idx] = (set_labels - mean_val) / std_val
+            min_val = unmasked.min()
+            max_val = unmasked.max()
+            range_val = (max_val - min_val).clamp_min(1e-6)
+            normed_labels[start_idx:end_idx] = (set_labels - min_val) / range_val
             normed_labels = normed_labels.clamp(*clip_range)
 
         preds = model(
@@ -927,9 +929,7 @@ def train_and_evaluate_pfn_model(
 
     model.bin_dist.fit(train_loader)
     with open(OUTPUT / run_name / "bin_dist", "w") as f_bins:
-        f_bins.write(
-            f"{','.join([str(x.item()) for x in model.bin_dist.edges])}"
-        )
+        f_bins.write(f"{','.join([str(x.item()) for x in model.bin_dist.edges])}")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=opts["lr"])
     scheduler = ReduceLROnPlateau(
