@@ -2,7 +2,6 @@ from typing import Type, Any, Dict, Callable
 from joblib import Parallel, delayed
 from pathlib import Path
 from functools import partial
-import concurrent.futures
 from threading import Thread
 
 import tqdm
@@ -15,7 +14,6 @@ from torch.utils.data import DataLoader
 from scipy.stats import spearmanr
 import logging
 from functools import namedtuple
-from torcheval.metrics import MulticlassAUROC
 
 from .utils import device
 from .constants import ASSAY, OUTPUT, ACT, COMPOUND, PREDICTION, TID

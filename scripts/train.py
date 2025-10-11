@@ -219,9 +219,6 @@ def prepare_dataset_splits(
     elif need_data:
         data = load_data()
 
-    train_dataset_path = data_dir / str(fold) / "train.pt"
-    val_dataset_path = data_dir / str(fold) / "val.pt"
-    test_dataset_path = data_dir / str(fold) / "test.pt"
     train_data, val_data, test_data = load_split(
         fold,
         data_dir,
