@@ -10,6 +10,7 @@ import random
 import shutil
 
 import torch
+from torch import nn
 import pandas as pd
 import numpy as np
 from tqdm.auto import tqdm
@@ -29,6 +30,23 @@ from .constants import OUTPUT, SMILES
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 logger = logging.getLogger(__name__)
+
+
+defaults = dict(
+    protein_dim=1280,
+    ligand_dim=2048,
+    embedding_size=512,
+    hidden_channels=512,
+    num_epochs=500,
+    patience_termination=100,
+    patience_lr=20,
+    rank_corr_fn=None,
+    training_loss=nn.MSELoss(),
+    cosine_agg=True,
+    normalize_training_batches=False,
+    lr=1e-4,
+    fisher_transform=True,
+)
 
 
 @functools.total_ordering

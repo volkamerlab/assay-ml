@@ -15,7 +15,6 @@ from torch.nn import (
 from torch.nn import MultiheadAttention as MHA
 from torch import nn
 from torch.nn import SiLU, BatchNorm1d
-import torch.nn.functional as F
 
 import pytest
 

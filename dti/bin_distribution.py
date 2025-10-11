@@ -3,18 +3,14 @@ from torch.nn import functional as F
 from torch import nn
 
 import tqdm.auto as tqdm
-
+import logging
 
 from .utils import device
-
-import logging
 
 logger = logging.getLogger(__name__)
 
 
 class BinDistribution(nn.Module):
-    """Bin distribution with empirical quantile bins fitted to z-score normalized data."""
-
     def __init__(
         self,
         n_bins: int,
@@ -27,7 +23,7 @@ class BinDistribution(nn.Module):
             n_bins: Number of bins for discretization
             exp_tails: Whether to use exponential/half-normal tails
             tail_percentile: Percentile for fitting tail scale (higher = wider tails)
-            normalization: Which normalization to use (zscore, minmax)
+            normalization: Which normalization to use ('zscore', 'minmax')
         """
         super().__init__()
         self.n_bins = n_bins
@@ -37,25 +33,25 @@ class BinDistribution(nn.Module):
         self._side_normals = None
         assert normalization in ["zscore", "minmax"]
         self.normalization = normalization
+
         logger.info(
-            f"bin distribution {'with' if self.exp_tails else 'without'} exponential tails and '{self.normalization}' normalization"
+            f"bin distribution {'with' if self.exp_tails else 'without'} exponential tails "
+            f"and '{self.normalization}' normalization"
         )
 
         self.register_buffer("edges", torch.linspace(0, 1, n_bins + 1, device=device))
+        # For min-max mode, will store per-bin frequency ratios
+        self.register_buffer("weights", torch.ones(n_bins, device=device) / n_bins)
 
     @torch.no_grad()
     def fit(self, loader, max_samples: int = 1_000_000):
         """
-        Fit quantile bin edges from z-score normalized training data.
+        Fit quantile bin edges (zscore) or bin ratios (minmax) from training data.
 
         Args:
             loader: Training data loader
             max_samples: Maximum number of samples to use for fitting
         """
-
-        if self.normalization == "minmax":
-            return
-
         all_normed_values = []
 
         prop_set_ratio = None
@@ -74,7 +70,6 @@ class BinDistribution(nn.Module):
             for i in range(num_sets):
                 start_idx = set_boundaries[i]
                 end_idx = set_boundaries[i + 1]
-                set_size = end_idx - start_idx
                 set_labels = labels[start_idx:end_idx]
 
                 if self.normalization == "minmax":
@@ -84,8 +79,7 @@ class BinDistribution(nn.Module):
                     normed_set = (set_labels - min_val) / range_val
                 elif self.normalization == "zscore":
                     mean_val = set_labels.mean()
-                    std_val = set_labels.std(unbiased=True)
-                    std_val = std_val.clamp_min(1e-6)
+                    std_val = set_labels.std(unbiased=True).clamp_min(1e-6)
                     normed_set = (set_labels - mean_val) / std_val
                 else:
                     assert False
@@ -97,21 +91,35 @@ class BinDistribution(nn.Module):
             idx = torch.randperm(all_normed.numel(), device=device)[:max_samples]
             all_normed = all_normed[idx]
 
-        probabilities = torch.linspace(0, 1, self.n_bins + 1, device=device)
-        quantiles = torch.quantile(all_normed, probabilities)
+        if self.normalization == "zscore":
+            # Fit quantile-based edges
+            probabilities = torch.linspace(0, 1, self.n_bins + 1, device=device)
+            quantiles = torch.quantile(all_normed, probabilities)
+            self.edges.copy_(quantiles)
 
-        self.edges.copy_(quantiles)
+            if self.exp_tails:
+                self._init_side_normals()
 
-        if self.exp_tails:
-            self._init_side_normals()
+            logger.info(
+                f"Fitted {self.n_bins} bins with edges: "
+                f"[{self.edges[0]:.3f}, ..., {self.edges[-1]:.3f}]"
+            )
+            logger.info(
+                f"Median bin width: {(self.edges[1:] - self.edges[:-1]).median():.3f}"
+            )
 
-        logger.info(
-            f"Fitted {self.n_bins} bins with edges: "
-            f"[{self.edges[0]:.3f}, ..., {self.edges[-1]:.3f}]"
-        )
-        logger.info(
-            f"Median bin width: {(self.edges[1:] - self.edges[:-1]).median():.3f}"
-        )
+        elif self.normalization == "minmax":
+            # Fit bin ratios instead of quantiles
+            counts = torch.histc(
+                all_normed.clamp(0, 1), bins=self.n_bins, min=0.0, max=1.0
+            )
+            ratios = counts / counts.sum().clamp_min(1e-8)
+            self.weights.copy_(ratios)
+
+            logger.info(
+                f"Fitted min-max bin weights (ratios): "
+                f"min={ratios.min():.4f}, max={ratios.max():.4f}, mean={ratios.mean():.4f}"
+            )
 
         if prop_set_ratio is not None and hasattr(loader.dataset, "property_set_ratio"):
             loader.dataset.property_set_ratio = prop_set_ratio
@@ -136,29 +144,17 @@ class BinDistribution(nn.Module):
     def _halfnormal(
         range_max: float, p: float = 0.75
     ) -> torch.distributions.Distribution:
-        """
-        Create a half-normal distribution scaled so that P(X <= range_max) = p.
-
-        Args:
-            range_max: The value at which CDF should equal p
-            p: Target cumulative probability at range_max
-        """
-        if range_max <= 0:
-            range_max = 1e-8
-
+        """Create a half-normal distribution scaled so that P(X <= range_max) = p."""
+        range_max = max(range_max, 1e-8)
         standard_half_normal = torch.distributions.HalfNormal(torch.tensor(1.0))
         scale = range_max / standard_half_normal.icdf(torch.tensor(p))
-
         return torch.distributions.HalfNormal(scale.item())
 
     def labels(self, y: torch.Tensor) -> torch.Tensor:
         bucket_indices = torch.searchsorted(self.edges, y) - 1
-
         bucket_indices[y == self.edges[0]] = 0
         bucket_indices[y == self.edges[-1]] = self.n_bins - 1
-
         bucket_indices = bucket_indices.clamp(0, self.n_bins - 1)
-
         return bucket_indices.long()
 
     def dist(self, class_labels: torch.Tensor) -> torch.Tensor:
@@ -177,7 +173,6 @@ class BinDistribution(nn.Module):
 
             if left_mask.any():
                 y_left = y[left_mask]
-
                 distances = (self.edges[0] - y_left).clamp(min=0.0)
                 tail_log_density = self._side_normals[0].log_prob(distances + 1e-8)
                 log_ps[left_mask] = bucket_log_ps[left_mask, 0] + tail_log_density
@@ -194,7 +189,6 @@ class BinDistribution(nn.Module):
         return (self.edges[:-1] + self.edges[1:]) / 2
 
     def moment(self, logits: torch.Tensor, n: float = 1.0):
-        """Compute the n-th moment of the distribution."""
         loc = self.bucket_centers()
         probs = F.softmax(logits, dim=-1)
         return (probs * (loc.pow(n))).sum(dim=-1)

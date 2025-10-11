@@ -44,10 +44,10 @@ from dti.featurization import MolFingerprint
 from dti.training import (
     AssayRankAccuracy,
     train_and_evaluate_model,
-    train_and_evaluate_pfn_model,
     batch_pair_loss,
     corr_loss,
 )
+from dti.pfn_training import train_and_evaluate_pfn_model
 from dti.utils import (
     Method,
     device,
@@ -335,7 +335,7 @@ def run_split(
         patience_lr=10 if train_short else 100,
         fisher_transform=method not in [Method.IC50SETS, Method.IC50ALLSETS],
         unmasked_weight=unmasked_weight,
-        n_bins=100,
+        n_bins=50,
         smoothing=False,
     )
     if model_cls in [ComplexBayesianSetRankModel, MoleculeBayesianSetRankModel]:
