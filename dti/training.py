@@ -306,9 +306,13 @@ def train_with_batched_masked_sets(
     steps = 0
     masked_weight = 1.0
 
-    for protein_features, ligand_features, labels, _, metadata in (
-        pbar := tqdm.tqdm(loader, desc="training")
-    ):
+    for batch_idx, (
+        protein_features,
+        ligand_features,
+        labels,
+        _,
+        metadata,
+    ) in enumerate(pbar := tqdm.tqdm(loader, desc="training")):
         set_boundaries = metadata["set_boundaries"].squeeze()
         num_sets = metadata["num_sets"].squeeze().item()
         set_ids_tensor = metadata["set_ids_tensor"].to(device, non_blocking=True)
@@ -322,9 +326,14 @@ def train_with_batched_masked_sets(
             set_boundaries, num_sets, batch_size, mask_fraction
         )
 
-        normed_labels = _normalize_sets_minmax(
-            labels, set_boundaries, num_sets, mask=sample_mask, clip_range=clip_range
-        )
+        with torch.no_grad():
+            normed_labels = _normalize_sets_minmax(
+                labels,
+                set_boundaries,
+                num_sets,
+                mask=sample_mask,
+                clip_range=clip_range,
+            )
 
         preds = model(
             ligand_features,
@@ -347,9 +356,17 @@ def train_with_batched_masked_sets(
         batch_loss.backward()
         optimizer.step()
 
-        total_loss += batch_loss.item()
+        loss_value = batch_loss.detach().item()
+        total_loss += loss_value
         steps += 1
-        pbar.set_description(f"train batch loss={batch_loss.item():.4e}")
+        pbar.set_description(f"train batch loss={loss_value:.4e}")
+
+        del nll_losses, batch_loss, preds
+        if unmasked_weight != 1.0:
+            del weights
+
+        if (batch_idx + 1) % 10 == 0:
+            torch.cuda.empty_cache()
 
     return total_loss / max(1, steps)
 
@@ -382,7 +399,13 @@ def evaluate_with_batched_masked_sets(
     bin_widths = torch.diff(bin_edges)
     total_width = (bin_edges[-1] - bin_edges[0]).clamp_min(1e-6)
 
-    for protein_features, ligand_features, labels, info, metadata in (
+    for batch_idx, (
+        protein_features,
+        ligand_features,
+        labels,
+        info,
+        metadata,
+    ) in enumerate(
         pbar := tqdm.tqdm(loader, desc="testing" if save_preds else "evaluating")
     ):
         set_boundaries = metadata["set_boundaries"].squeeze()
@@ -434,12 +457,20 @@ def evaluate_with_batched_masked_sets(
             true_centers = bd.bucket_centers()[true_bins]
             total_mae += (pred_mean - true_centers).abs().sum().item()
 
+            del nll_losses, probs, true_bins, one_hot, cdf_pred, cdf_true
+            del wass_dists, pred_mean, true_centers, masked_preds, masked_normed
+
         if save_preds:
             all_info.append(info.cpu())
             all_labels.append(labels.cpu())
             all_normed.append(normed_labels.cpu())
             all_masks.append(sample_mask.cpu())
             all_probs.append(torch.softmax(preds, dim=-1).cpu())
+
+        del preds
+
+        if (batch_idx + 1) % 100 == 0:
+            torch.cuda.empty_cache()
 
     avg_loss = total_loss / max(1, n_masked)
     avg_wass = total_wass / max(1, n_masked)
