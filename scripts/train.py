@@ -101,7 +101,7 @@ def setup(method: Method, dataset: str) -> Tuple[type, type, type, Callable]:
 def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]:
     msa = partial(
         MultiSetActivityDataset,
-        sets_per_batch=(10 if method == Method.PFN else 20),
+        max_datapoints_per_batch=4096,
         max_set_size=(500 if method == Method.PFN else 1000),
         shuffle_within_target=(method != Method.PFN),
     )
@@ -110,7 +110,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
         case Method.PFN if mol_only:
             mswpds = partial(
                 MultiSetWithPropertiesDataset,
-                sets_per_batch=20,
+                max_datapoints_per_batch=8192,
                 max_set_size=500,
                 shuffle_within_target=False,
                 property_columns=[
