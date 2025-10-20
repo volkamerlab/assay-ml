@@ -864,67 +864,6 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
 
         return result
 
-    def _make_batches(self):
-        """Create batches with both assay and dynamically generated property sets."""
-        if self.inter_assay:
-            self._shuffle_data()
-
-        indices = np.arange(len(self.valid_sets))
-        self.random.shuffle(indices)
-        shuffled_assay_sets = [self.valid_sets[i] for i in indices]
-        shuffled_assay_ids = [self.set_ids[i] for i in indices]
-
-        self.batches = []
-        self.batch_set_ids = []
-        self.batch_set_types = []
-        self.batch_set_targets = []
-        self.batch_set_coefficients = []
-
-        for i in range(0, len(shuffled_assay_sets), self.sets_per_batch):
-            end_idx = min(i + self.sets_per_batch, len(shuffled_assay_sets))
-
-            assay_sets = shuffled_assay_sets[i:end_idx]
-            assay_ids = shuffled_assay_ids[i:end_idx]
-            num_assay_sets = len(assay_sets)
-
-            num_property_sets = int(num_assay_sets * self.property_set_ratio)
-
-            prop_sets, prop_ids, prop_types, prop_targets, prop_coeffs = (
-                self._create_property_sets_for_batch(num_property_sets)
-            )
-
-            combined_sets = assay_sets + prop_sets
-            combined_ids = assay_ids + prop_ids
-            combined_types = ["assay"] * num_assay_sets + prop_types
-            combined_targets = [self.base_target] * num_assay_sets + prop_targets
-            combined_coeffs = [None] * num_assay_sets + prop_coeffs
-
-            batch_indices = np.arange(len(combined_sets))
-            self.random.shuffle(batch_indices)
-
-            self.batches.append([combined_sets[j] for j in batch_indices])
-            self.batch_set_ids.append([combined_ids[j] for j in batch_indices])
-            self.batch_set_types.append([combined_types[j] for j in batch_indices])
-            self.batch_set_targets.append([combined_targets[j] for j in batch_indices])
-            self.batch_set_coefficients.append(
-                [combined_coeffs[j] for j in batch_indices]
-            )
-
-        self.used = np.full(len(self.batches), False, dtype=bool)
-
-        total_assay = sum(
-            sum(1 for t in types if t == "assay") for types in self.batch_set_types
-        )
-        total_property = sum(
-            sum(1 for t in types if t == "property") for types in self.batch_set_types
-        )
-
-        logger.debug(
-            f"Created {len(self.batches)} batches with up to "
-            f"{self.sets_per_batch * (1 + self.property_set_ratio):.0f} sets each "
-            f"({total_assay} assay, {total_property} property with linear combinations)"
-        )
-
     def __getitem__(self, idx):
         """Get a batch of multiple sets from the dataset.
 
