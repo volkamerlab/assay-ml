@@ -571,7 +571,7 @@ class SetTransformer(Module):
                         ISAB(
                             hidden_channels,
                             num_heads,
-                            128,
+                            16,
                             ffn_hidden_layers,
                             dropout=dropout,
                         )

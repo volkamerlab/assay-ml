@@ -102,7 +102,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
     msa = partial(
         MultiSetActivityDataset,
         max_batch_datapoints=4096,
-        max_set_size=(500 if method == Method.PFN else 1000),
+        max_set_size=1000,
         shuffle_within_target=(method != Method.PFN),
     )
     shuffled_multiset = partial(msa, inter_assay=True)
@@ -110,8 +110,8 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
         case Method.PFN if mol_only:
             mswpds = partial(
                 MultiSetWithPropertiesDataset,
-                max_batch_datapoints=2**13,
-                max_set_size=500,
+                max_batch_datapoints=2**12,
+                max_set_size=1000,
                 shuffle_within_target=False,
                 property_columns=[
                     "mw_freebase",
@@ -128,6 +128,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
                     "np_likeness_score",
                 ],
             )
+            logger.info("Induced attention")
             return MoleculeBayesianSetRankModel, mswpds, msa
         case Method.PFN:
             return ComplexBayesianSetRankModel, msa, msa
