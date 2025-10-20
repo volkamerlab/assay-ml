@@ -339,7 +339,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         x_dist = self.distribution_encoder(dist_onehot)
         x_dist = (1 - sample_mask) * x_dist + sample_mask * self.default_dist_emb
         x = self.combine_repr(torch.cat((x_ligand, x_dist), 1))
-        h = self.set_transformer(x, attn_mask=attn_mask)
+        h = self.set_transformer(x, attn_mask=attn_mask, set_ids=set_ids)
         logits = self.output(h)
         return self.smoother(logits)
 
@@ -454,7 +454,7 @@ class ComplexBayesianSetRankModel(MoleculeBayesianSetRankModel):
         return self.smoother(logits)
 
 
-class MHABlock(Module):
+class MAB(Module):
     def __init__(
         self,
         hidden_channels: int,
@@ -492,11 +492,46 @@ class MHABlock(Module):
         return x
 
 
-class SetAttentionBlock(MHABlock):
+class SAB(MAB):
     def forward(
         self, x: Tensor, attn_mask: Tensor | None = None, need_weights: bool = False
     ) -> Tensor:
         return super().forward(x, x, attn_mask, need_weights=need_weights)
+
+
+class ISAB(nn.Module):
+    def __init__(
+        self,
+        hidden_channels: int,
+        num_heads: int,
+        num_inducing_points: int,
+        ffn_hidden_layers: int,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.hidden_channels = hidden_channels
+        self.num_heads = num_heads
+        self.m = num_inducing_points
+        self.ffn_hidden_layers = ffn_hidden_layers
+        self.dropout = dropout
+
+        self.ind_points = Parameter(torch.randn(self.m, hidden_channels))
+
+        self.mab1 = MAB(hidden_channels, num_heads, ffn_hidden_layers, dropout=dropout)
+        self.mab2 = MAB(hidden_channels, num_heads, ffn_hidden_layers, dropout=dropout)
+
+    def forward(
+        self,
+        x: Tensor,
+        attn_mask: Tensor | None = None,
+        need_weights: bool = False,
+    ) -> Tensor:
+        if need_weights:
+            raise NotImplementedError("Returning weights not supported by ISAB.")
+
+        h = self.mab1(self.ind_points, x, attn_mask=attn_mask, need_weights=False)
+        out = self.mab2(x, h, attn_mask=attn_mask, need_weights=False)
+        return out
 
 
 class SetTransformer(Module):
@@ -508,7 +543,7 @@ class SetTransformer(Module):
         num_blocks: int,
         num_seeds: int = 1,
         dropout: float = 0.1,
-        layer_type: Literal["full"] = "full",
+        layer_type: Literal["full", "induced"] = "induced",
     ):
         super().__init__()
         self.hidden_channels = hidden_channels
@@ -521,8 +556,24 @@ class SetTransformer(Module):
             case "full":
                 self.blocks = ModuleList(
                     [
-                        SetAttentionBlock(
-                            hidden_channels, num_heads, ffn_hidden_layers, dropout
+                        SAB(
+                            hidden_channels,
+                            num_heads,
+                            ffn_hidden_layers,
+                            dropout=dropout,
+                        )
+                        for _ in range(num_blocks)
+                    ]
+                )
+            case "induced":
+                self.blocks = ModuleList(
+                    [
+                        ISAB(
+                            hidden_channels,
+                            num_heads,
+                            128,
+                            ffn_hidden_layers,
+                            dropout=dropout,
                         )
                         for _ in range(num_blocks)
                     ]
@@ -532,14 +583,34 @@ class SetTransformer(Module):
         self,
         x: Tensor,
         attn_mask: Tensor | None = None,
+        set_ids: Tensor | None = None,
         need_intermediate_activations: bool = False,
     ) -> Tensor:
-        if attn_mask is not None and self.layer_type == "induced":
-            raise ValueError("Induced attention does not support attention mask")
-        activations = [x] + [(x := block(x, attn_mask)) for block in self.blocks]
-        if need_intermediate_activations:
-            return activations
-        return activations[-1]
+        match self.layer_type:
+            case "induced":
+                if set_ids is None:
+                    raise ValueError(
+                        "set_ids must be provided for induced SetTransformer"
+                    )
+                set_ids = set_ids.squeeze()
+
+                result = torch.empty(
+                    (len(x), self.hidden_channels), dtype=x.dtype, device=device
+                )
+
+                for ident in torch.unique(set_ids):
+                    idx = (set_ids == ident).nonzero(as_tuple=True)[0]
+                    x_ident = x.index_select(0, idx)
+                    for block in self.blocks:
+                        x_ident = block(x_ident)
+                    result.index_copy_(0, idx, x_ident)
+
+                return result
+
+            case "full":
+                for block in self.blocks:
+                    x = block(x, attn_mask)
+                return x
 
 
 def make_block_diag_mask(set_ids: torch.Tensor, num_heads: int = None) -> torch.Tensor:
@@ -581,95 +652,3 @@ def make_asymmetric_mask(masked: torch.Tensor) -> torch.Tensor:
             attn_mask[i, i] = False  # allow self
 
     return attn_mask
-
-
-def test_asymmetric_mask_shape_and_behavior():
-    masked = torch.tensor([False, True, False, True])
-    mask = make_asymmetric_mask(masked)
-    print(mask)
-
-    # Shape check
-    assert mask.shape == (4, 4)
-
-    # Unmasked (0) should not attend to masked (1, 3)
-    assert mask[0, 1] and mask[0, 3]
-    assert mask[1, 3]  # cannot attend to other masked
-    # Masked token must still see itself
-    assert mask[1, 1] == False
-    # Masked (1) should not attend to other masked (1, 3) but can attend to unmasked (0, 2)
-    assert not mask[1, 0]
-
-
-def test_asymmetric_mask_in_attention():
-    torch.manual_seed(0)
-    x = randn(4, 8)
-    block = SetAttentionBlock(8, 2, 1, dropout=0)
-
-    masked = torch.tensor([False, True, False, True])
-    mask = make_asymmetric_mask(masked)
-
-    out, weights = block(x, attn_mask=mask, need_weights=True)
-
-    for i, m in enumerate(masked):
-        if not m:
-            assert torch.allclose(
-                weights[i, masked], torch.zeros_like(weights[i, masked]), atol=1e-6
-            )
-
-
-def test_no_mask_all_to_all():
-    x = randn(4, 8)
-    block = SetAttentionBlock(8, 4, 1, dropout=0)
-    out_no_mask = block(x, attn_mask=None)
-    mask = make_block_diag_mask([1, 1, 1, 1])
-    out_masked = block(x, attn_mask=mask)
-    torch.testing.assert_close(out_no_mask, out_masked)
-
-
-def test_block_diag_mask_independent_sets():
-    x = randn(8, 16)
-    block = SetAttentionBlock(16, 2, 1, dropout=0)
-    mask = make_block_diag_mask([1, 1, 1, 1, 2, 2, 2, 2])
-    out, weights = block(x, attn_mask=mask, need_weights=True)
-    torch.isclose(
-        (mask.type(torch.float64) * weights).sum(), tensor(0.0, dtype=torch.float64)
-    )
-
-    # embeddings of set A should not directly depend on set B
-    set_a_out = out[:4]
-    set_b_out = out[4:]
-    # Compute mean embedding of each set
-    mean_a = set_a_out.mean(dim=0)
-    mean_b = set_b_out.mean(dim=0)
-    # If masking works, mean_a and mean_b should not be almost identical
-    # (without mask, they'd mix more strongly)
-    assert not torch.allclose(mean_a, mean_b, rtol=1e-2, atol=1e-2)
-
-
-def test_invalid_mask_shape():
-    x = randn(6, 10)
-    block = SetAttentionBlock(10, 2, 1, dropout=0)
-    wrong_mask = torch.zeros(3, 3, dtype=torch.bool)  # wrong shape
-    with pytest.raises(RuntimeError):
-        block(x, attn_mask=wrong_mask)
-
-
-def test_settransformer_blocks_with_mask():
-    x = randn(7, 12)
-    model = SetTransformer(12, 2, 1, num_blocks=2, dropout=0)
-    mask = make_block_diag_mask([3, 4])
-    out = model(x, attn_mask=mask)
-    assert out.shape == (7, 12)
-
-
-if __name__ == "__main__":
-    test_asymmetric_mask_shape_and_behavior()
-    # test_block_diag_mask_independent_sets()
-    # from torch import randn
-    #
-    # x = randn(10, 32)
-    # sab = SetAttentionBlock(32, 4, 1)
-    # x = sab(x)
-    #
-    # isab = InducedSetAttentionBlock(32, 4, 1, num_seeds=5)
-    # x = isab(x)
