@@ -241,10 +241,12 @@ def prepare_dataset_splits(
     data_kwargs = dict(
         mol_featurizer=mol_feat,
         info_cols=info_cols,
-        property_set_ratio=property_set_ratio,
     )
 
-    val_dataset = val_dataset_cls(val_data, target=test_target, **data_kwargs)
+    train_data_kwargs = dict(data_kwargs)
+    train_data_kwargs["property_set_ratio"] = property_set_ratio
+
+    val_dataset = val_dataset_cls(val_data, target=test_target, **train_data_kwargs)
     test_dataset = val_dataset_cls(test_data, target=test_target, **data_kwargs)
     train_dataset = dataset_cls(train_data, target=train_target, **data_kwargs)
 
