@@ -276,7 +276,7 @@ def train_with_batched_masked_sets(
         protein_features,
         ligand_features,
         labels,
-        _,
+        info,
         metadata,
     ) in enumerate(pbar := tqdm.tqdm(loader, desc="training")):
         padding_mask = metadata["attention_mask"].squeeze().to(device)
@@ -375,9 +375,7 @@ def evaluate_with_batched_masked_sets(
         labels = labels.squeeze().to(device, non_blocking=True)
         batch_size = labels.size(0)
 
-        # info[:,0] is boolean mask indicator
-        sample_mask = info[:, 0].bool()
-        assert len(torch.unique(info[:, 0])) == 2
+        sample_mask = info[:, :, 0].bool()
 
         normed_labels = _normalize_sets_minmax(
             labels,
