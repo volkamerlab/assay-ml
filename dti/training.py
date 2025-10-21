@@ -287,15 +287,26 @@ def train_with_batched_masked_sets(
         batch_size = labels.size(0)
 
         sample_mask = _generate_mask_for_sets(padding_mask, mask_fraction)
+        # logger.debug(258 - padding_mask.sum(1))
+        # logger.debug(sample_mask.sum(1))
+        assert (sample_mask.sum(1) > 0).all()
 
         with torch.no_grad():
+            assert not torch.isnan(sample_mask).any()
+            assert not torch.isnan(ligand_features).any()
+            assert not torch.isnan(labels).any()
             normed_labels = _normalize_sets_minmax(
                 labels,
                 sample_mask,
                 padding_mask,
                 clip_range=clip_range,
             )
+            assert not torch.isnan(normed_labels).any()
 
+        # logger.debug(ligand_features.shape)
+        # logger.debug(normed_labels.shape)
+        # logger.debug(sample_mask.shape)
+        # logger.debug(padding_mask.shape)
         preds = model(
             ligand_features,
             protein_features,
@@ -303,6 +314,8 @@ def train_with_batched_masked_sets(
             sample_mask,
             padding_mask,
         )
+        # logger.debug(preds.shape)
+        assert not torch.isnan(preds).any(), preds
 
         nll_losses = -bd.log_prob(normed_labels, preds)
 
@@ -321,12 +334,6 @@ def train_with_batched_masked_sets(
         total_loss += loss_value
         steps += 1
         pbar.set_description(f"train batch loss={loss_value:.4e}")
-
-        if unmasked_weight != 1.0:
-            del weights
-
-        if (batch_idx + 1) % 10 == 0:
-            torch.cuda.empty_cache()
 
     return total_loss / max(1, steps)
 
