@@ -26,7 +26,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-_act = LeakyReLU
+_act = ReLU
 
 
 class MolecularModel(nn.Module):
@@ -107,7 +107,7 @@ class CombinedModel(nn.Module):
 
         scaled_hidden_dim = hidden_layer_size // 2
         self.combined_mlp = nn.Sequential(
-            nn.Dropout(0.05),
+            nn.Dropout(p_dropout),
             nn.BatchNorm1d(embedding_size),
             nn.Linear(embedding_size, hidden_layer_size),
             _act(),
@@ -310,6 +310,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         self.output = Sequential(
             Linear(hidden_channels, hidden_channels),
             _act(),
+            nn.LayerNorm(hidden_channels),
             Linear(hidden_channels, hidden_channels),
             _act(),
             Linear(hidden_channels, n_bins),
@@ -381,6 +382,7 @@ class ComplexSetRank(MoleculeSetRank):
             hidden_size=hidden_channels,
             output_size=hidden_channels,
             hidden_layers=1,
+            dropout=0.1,
         )
 
     def combine_with_query(self, x: Tensor, query: Tensor) -> Tensor:
@@ -416,12 +418,14 @@ def _mlp(
     output_size: int,
     hidden_layers: int,
     act=ReLU,
+    dropout: float = 0.0,
 ) -> Module:
     if hidden_layers == 0:
         return Linear(input_size, output_size)
-    layers = [Linear(input_size, hidden_size), act()]
+
+    layers = [Linear(input_size, hidden_size), act(), Dropout(dropout)]
     for _ in range(hidden_layers - 1):
-        layers.extend([Linear(hidden_size, hidden_size), act()])
+        layers.extend([Linear(hidden_size, hidden_size), act(), Dropout(dropout)])
     layers.append(Linear(hidden_size, output_size))
     return Sequential(*layers)
 
@@ -483,6 +487,7 @@ class MAB(Module):
         num_heads: int,
         ffn_hidden_layers: int,
         dropout: float = 0.1,
+        **kwargs,
     ):
         super().__init__()
         self.hidden_channels = hidden_channels
@@ -544,9 +549,9 @@ class ISAB(nn.Module):
         self,
         hidden_channels: int,
         num_heads: int,
-        num_inducing_points: int,
         ffn_hidden_layers: int,
         dropout: float = 0.1,
+        num_inducing_points: int = 10,
     ):
         super().__init__()
         self.hidden_channels = hidden_channels
@@ -587,7 +592,17 @@ class ISAB(nn.Module):
         return out
 
 
-class SetTransformer(Module):
+class PreNorm(nn.Module):
+    def __init__(self, dim, fn):
+        super().__init__()
+        self.norm = nn.LayerNorm(dim)
+        self.fn = fn
+
+    def forward(self, x, *args, **kwargs):
+        return self.fn(self.norm(x), *args, **kwargs)
+
+
+class SetTransformer(nn.Module):
     def __init__(
         self,
         hidden_channels: int,
@@ -595,8 +610,9 @@ class SetTransformer(Module):
         ffn_hidden_layers: int,
         num_blocks: int,
         num_seeds: int = 1,
-        dropout: float = 0.1,
+        dropout: float = 0.05,
         layer_type: Literal["full", "induced"] = "full",
+        prenorm: bool = True,
     ):
         super().__init__()
         self.hidden_channels = hidden_channels
@@ -605,66 +621,56 @@ class SetTransformer(Module):
         self.num_seeds = num_seeds
         self.dropout = dropout
         self.layer_type = layer_type
-        match layer_type:
-            case "full":
-                self.blocks = ModuleList(
-                    [
-                        SAB(
-                            hidden_channels,
-                            num_heads,
-                            ffn_hidden_layers,
-                            dropout=dropout,
-                        )
-                        for _ in range(num_blocks)
-                    ]
+
+        BlockType = SAB if layer_type == "full" else ISAB
+
+        def maybe_norm(block):
+            return PreNorm(hidden_channels, block) if prenorm else block
+
+        self.blocks = nn.ModuleList(
+            [
+                maybe_norm(
+                    BlockType(
+                        hidden_channels,
+                        num_heads,
+                        ffn_hidden_layers,
+                        dropout=dropout,
+                        num_inducing_points=16,
+                    )
                 )
-            case "induced":
-                self.blocks = ModuleList(
-                    [
-                        ISAB(
-                            hidden_channels,
-                            num_heads,
-                            16,
-                            ffn_hidden_layers,
-                            dropout=dropout,
-                        )
-                        for _ in range(num_blocks)
-                    ]
-                )
+                for _ in range(num_blocks)
+            ]
+        )
 
     def forward(
         self,
-        x: Tensor,
-        attn_mask: Tensor | None = None,
-        key_padding_mask: Tensor | None = None,
-        set_ids: Tensor | None = None,
+        x: torch.Tensor,
+        attn_mask: torch.Tensor | None = None,
+        key_padding_mask: torch.Tensor | None = None,
+        set_ids: torch.Tensor | None = None,
         need_intermediate_activations: bool = False,
-    ) -> Tensor:
-        match self.layer_type:
-            case "induced":
-                if set_ids is None:
-                    raise ValueError(
-                        "set_ids must be provided for induced SetTransformer"
-                    )
-                set_ids = set_ids.squeeze()
-
-                result = torch.empty(
-                    (len(x), self.hidden_channels), dtype=x.dtype, device=device
-                )
-
-                for ident in torch.unique(set_ids):
-                    idx = (set_ids == ident).nonzero(as_tuple=True)[0]
-                    x_ident = x.index_select(0, idx)
-                    for block in self.blocks:
-                        x_ident = block(x_ident, attn_mask, key_padding_mask)
-                    result.index_copy_(0, idx, x_ident)
-
-                return result
-
-            case "full":
+    ) -> torch.Tensor:
+        if self.layer_type == "induced":
+            if set_ids is None:
+                raise ValueError("set_ids must be provided for induced SetTransformer")
+            set_ids = set_ids.squeeze()
+            result = torch.empty(
+                (len(x), self.hidden_channels),
+                dtype=x.dtype,
+                device=device,
+            )
+            for ident in torch.unique(set_ids):
+                idx = (set_ids == ident).nonzero(as_tuple=True)[0]
+                x_ident = x.index_select(0, idx)
                 for block in self.blocks:
-                    x = block(x, attn_mask, key_padding_mask)
-                return x
+                    x_ident = block(x_ident, attn_mask, key_padding_mask)
+                result.index_copy_(0, idx, x_ident)
+            return result
+
+        else:  # full
+            for block in self.blocks:
+                x = block(x, attn_mask, key_padding_mask)
+            return x
 
 
 def make_block_diag_mask(set_ids: torch.Tensor, num_heads: int = None) -> torch.Tensor:
