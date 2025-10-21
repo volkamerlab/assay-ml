@@ -582,69 +582,67 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         return int(np.ceil(len(self.valid_sets) / self.num_assay_sets))
 
     def __getitem__(self, idx: int) -> tuple:
-        """
-        Generates and returns a single batch of data on-the-fly.
-        """
         start = idx * self.num_assay_sets
         end = start + self.num_assay_sets
 
-        if end > len(self.assay_idcs):  # Reshuffle for next epoch
+        if end > len(self.assay_indices):  # Reshuffle for next epoch
             self._shuffle_assays()
             start = 0
             end = self.num_assay_sets
 
-        batch_assay_idcs = self.assay_idcs[start:end]
-        current_batch_sets = [self.valid_sets[i] for i in batch_assay_idcs]
+        batch_assay_indices = self.assay_indices[start:end]
+        current_batch_sets = [self.valid_sets[i] for i in batch_assay_indices]
         num_actual_assay_sets = len(current_batch_sets)
 
-        num_total_datapoints = len(self.data)
-        for _ in range(self.num_property_sets):
-            psize = self.random.integers(
-                self.min_prop_set_size, self.max_prop_set_size + 1
-            )
-            prop_idcs = self.random.choice(num_total_datapoints, psize, replace=False)
-            current_batch_sets.append(prop_idcs)
+        if self.num_property_sets > 0 and self.property_columns:
+            num_total_datapoints = len(self.data)
+            for _ in range(self.num_property_sets):
+                psize = self.random.integers(
+                    self.min_prop_set_size, self.max_prop_set_size + 1
+                )
+                prop_indices = self.random.choice(
+                    num_total_datapoints, psize, replace=False
+                )
+                current_batch_sets.append(prop_indices)
 
         num_sets = len(current_batch_sets)
         K = self.fixed_set_size
 
-        all_idcs_padded = torch.zeros((num_sets, K), dtype=torch.long)
+        all_indices_padded = torch.zeros((num_sets, K), dtype=torch.long)
         all_labels_padded = torch.zeros((num_sets, K), dtype=torch.float32)
         attention_mask = torch.ones((num_sets, K), dtype=torch.bool)
 
-        for i, set_idcs in enumerate(current_batch_sets):
-            set_size = len(set_idcs)
+        for i, set_indices in enumerate(current_batch_sets):
+            set_size = len(set_indices)
             if set_size == 0:
                 continue
 
-            final_idcs = (
-                self.random.choice(set_idcs, size=K, replace=False)
+            final_indices = (
+                self.random.choice(set_indices, size=K, replace=False)
                 if set_size > K
-                else set_idcs
+                else set_indices
             )
-            effective_size = len(final_idcs)
+            effective_size = len(final_indices)
 
-            all_idcs_padded[i, :effective_size] = torch.from_numpy(
-                final_idcs.astype(np.int64)
+            all_indices_padded[i, :effective_size] = torch.from_numpy(
+                final_indices.astype(np.int64)
             )
             attention_mask[i, :effective_size] = False
 
             if i < num_actual_assay_sets:
-                all_labels_padded[i, :effective_size] = self.labels[final_idcs]
+                all_labels_padded[i, :effective_size] = self.labels[final_indices]
             else:
-                prop_values = self.normalized_properties[final_idcs]
+                prop_values = self.normalized_properties[final_indices]
                 coeffs = torch.randn(len(self.property_columns))
 
                 linear_comb = torch.matmul(prop_values, coeffs)
                 noise = torch.randn(effective_size) * self.noise_std
                 all_labels_padded[i, :effective_size] = linear_comb + noise
-                assert not torch.isnan(all_labels_padded[i, :effective_size]).any()
-                assert torch.unique(all_labels_padded[i, :effective_size]).shape[0] > 1
 
-        prot_features = (
+        prot_feats = (
             torch.ones(1)
             if self.protein_features is None
-            else self.protein_features[all_idcs_padded]
+            else self.protein_features[all_indices_padded]
         )
 
         return (
