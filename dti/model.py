@@ -14,7 +14,7 @@ from torch.nn import (
 )
 from torch.nn import MultiheadAttention as MHA
 from torch import nn
-from torch.nn import SiLU, BatchNorm1d
+from torch.nn import SiLU, ReLU, LeakyReLU, BatchNorm1d
 import torch.nn.functional as F
 
 import pytest
@@ -25,6 +25,8 @@ from .bin_distribution import BinDistribution
 import logging
 
 logger = logging.getLogger(__name__)
+
+_act = LeakyReLU
 
 
 class MolecularModel(nn.Module):
@@ -44,9 +46,9 @@ class MolecularModel(nn.Module):
             nn.Dropout(0.05),
             nn.BatchNorm1d(embedding_size),
             nn.Linear(embedding_size, embedding_size),
-            nn.SiLU(),
+            _act(),
             nn.Linear(embedding_size, scaled_hidden_dim),
-            nn.SiLU(),
+            _act(),
             nn.Linear(scaled_hidden_dim, 1),
         )
 
@@ -108,9 +110,9 @@ class CombinedModel(nn.Module):
             nn.Dropout(0.05),
             nn.BatchNorm1d(embedding_size),
             nn.Linear(embedding_size, hidden_layer_size),
-            nn.SiLU(),
+            _act(),
             nn.Linear(hidden_layer_size, scaled_hidden_dim),
-            nn.SiLU(),
+            _act(),
             nn.Linear(scaled_hidden_dim, 1),
         )
 
@@ -193,11 +195,11 @@ class MoleculeSetRank(Module):
         )
         self.ouput = Sequential(
             Linear(hidden_channels, hidden_channels),
-            SiLU(),
+            _act(),
             BatchNorm1d(hidden_channels),
             Dropout(p_dropout),
             Linear(hidden_channels, hidden_channels),
-            SiLU(),
+            _act(),
             Linear(hidden_channels, 1),
         )
 
@@ -295,7 +297,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         self.default_dist_emb = Parameter(torch.zeros(hidden_channels, device=device))
         self.combine_repr = Sequential(
             Linear(hidden_channels * 2, hidden_channels * 2),
-            SiLU(),
+            _act(),
             Linear(hidden_channels * 2, hidden_channels),
         )
         self.set_transformer = SetTransformer(
@@ -307,10 +309,9 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         )
         self.output = Sequential(
             Linear(hidden_channels, hidden_channels),
-            SiLU(),
-            BatchNorm1d(hidden_channels),
+            _act(),
             Linear(hidden_channels, hidden_channels),
-            SiLU(),
+            _act(),
             Linear(hidden_channels, n_bins),
         )
         self.smoother = (
@@ -335,8 +336,10 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         dist_onehot = self.bin_dist.dist(class_labels)  # [N, n_bins]
         x_dist = self.distribution_encoder(dist_onehot)
         attn_mask = make_attn_mask(sample_mask, self.num_heads)
-        sample_mask = sample_mask.float().unsqueeze(1)
-        x_dist = (1 - sample_mask) * x_dist + sample_mask * self.default_dist_emb
+        sample_mask = sample_mask.float().unsqueeze(-1)
+        x_dist = (1 - sample_mask) * x_dist + sample_mask * self.default_dist_emb.view(
+            1, 1, -1
+        )
         x = self.combine_repr(torch.cat((x_ligand, x_dist), -1))
         h = self.set_transformer(x, attn_mask=attn_mask, key_padding_mask=padding_mask)
         logits = self.output(h)
@@ -446,7 +449,7 @@ class ComplexBayesianSetRankModel(MoleculeBayesianSetRankModel):
         )
         self.combine_repr = Sequential(
             Linear(hidden_channels * 3, hidden_channels * 3),
-            SiLU(),
+            _act(),
             Linear(hidden_channels * 3, hidden_channels),
         )
 
