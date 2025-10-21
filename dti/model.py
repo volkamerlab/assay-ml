@@ -327,21 +327,40 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         ligand: Tensor,
         _protein: Tensor,  # ignored
         y: Tensor,  # raw regression targets
-        sample_mask: Tensor,
-        set_ids: Tensor,
+        sample_mask: Tensor,  # [n_sets, set_size]
+        padding_mask: Tensor,  # [n_sets, set_size]
     ) -> Tensor:
-        attn_mask = make_block_diag_mask(set_ids, num_heads=self.num_heads)
-        attn_mask = torch.logical_or(attn_mask, make_asymmetric_mask(sample_mask))
-        sample_mask = sample_mask.float().unsqueeze(1)
         x_ligand = self.embed_ligand(ligand)
         class_labels = self.bin_dist.labels(y)
         dist_onehot = self.bin_dist.dist(class_labels)  # [N, n_bins]
         x_dist = self.distribution_encoder(dist_onehot)
+        attn_mask = make_attn_mask(sample_mask, self.num_heads)
+        sample_mask = sample_mask.float().unsqueeze(1)
         x_dist = (1 - sample_mask) * x_dist + sample_mask * self.default_dist_emb
-        x = self.combine_repr(torch.cat((x_ligand, x_dist), 1))
-        h = self.set_transformer(x, attn_mask=attn_mask, set_ids=set_ids)
+        x = self.combine_repr(torch.cat((x_ligand, x_dist), -1))
+        h = self.set_transformer(x, attn_mask=attn_mask, key_padding_mask=padding_mask)
         logits = self.output(h)
         return self.smoother(logits)
+
+
+def make_attn_mask(sample_mask, num_heads):
+    n_sets, set_size = sample_mask.shape
+    q_mask = sample_mask.unsqueeze(-1)  # [n_sets, set_size, 1]
+    k_mask = sample_mask.unsqueeze(-2)  # [n_sets, 1, set_size]
+
+    mask = torch.zeros(n_sets, set_size, set_size, dtype=torch.bool, device=device)
+
+    # non-query cannot attend to query
+    mask |= (~q_mask) & k_mask
+
+    # query cannot attend to other queries (except itself)
+    same_idx = torch.eye(set_size, dtype=torch.bool, device=device).unsqueeze(0)
+    mask |= q_mask & k_mask & (~same_idx)
+
+    mask = mask.unsqueeze(1).expand(-1, num_heads, -1, -1)
+    mask = mask.reshape(n_sets * num_heads, set_size, set_size)
+
+    return mask
 
 
 class ComplexSetRank(MoleculeSetRank):
@@ -467,7 +486,7 @@ class MAB(Module):
         self.num_heads = num_heads
         self.ffn_hidden_layers = ffn_hidden_layers
         self.dropout = dropout
-        self.attn = MHA(hidden_channels, num_heads, dropout=dropout)
+        self.attn = MHA(hidden_channels, num_heads, dropout=dropout, batch_first=True)
         self.dropout = Dropout(dropout)
         self.ffn = _mlp(
             hidden_channels, hidden_channels, hidden_channels, ffn_hidden_layers
@@ -480,11 +499,19 @@ class MAB(Module):
         x: Tensor,
         y: Tensor | None = None,
         attn_mask: Tensor | None = None,
+        key_padding_mask: Tensor | None = None,
         need_weights: bool = False,
     ) -> Tensor:
         if y is None:
             y = x
-        x_, attn_weights = self.attn(x, y, y, attn_mask=attn_mask, need_weights=True)
+        x_, attn_weights = self.attn(
+            x,
+            y,
+            y,
+            attn_mask=attn_mask,
+            key_padding_mask=key_padding_mask,
+            need_weights=True,
+        )
         x = self.ln1(x + x_)
         x = self.ln2(x + self.ffn(x))
         if need_weights:
@@ -494,9 +521,19 @@ class MAB(Module):
 
 class SAB(MAB):
     def forward(
-        self, x: Tensor, attn_mask: Tensor | None = None, need_weights: bool = False
+        self,
+        x: Tensor,
+        attn_mask: Tensor | None = None,
+        key_padding_mask: Tensor | None = None,
+        need_weights: bool = False,
     ) -> Tensor:
-        return super().forward(x, x, attn_mask, need_weights=need_weights)
+        return super().forward(
+            x,
+            x,
+            attn_mask,
+            key_padding_mask=key_padding_mask,
+            need_weights=need_weights,
+        )
 
 
 class ISAB(nn.Module):
@@ -524,13 +561,26 @@ class ISAB(nn.Module):
         self,
         x: Tensor,
         attn_mask: Tensor | None = None,
+        key_padding_mask: Tensor | None = None,
         need_weights: bool = False,
     ) -> Tensor:
         if need_weights:
             raise NotImplementedError("Returning weights not supported by ISAB.")
 
-        h = self.mab1(self.ind_points, x, attn_mask=attn_mask, need_weights=False)
-        out = self.mab2(x, h, attn_mask=attn_mask, need_weights=False)
+        h = self.mab1(
+            self.ind_points,
+            x,
+            attn_mask=attn_mask,
+            key_padding_mask=key_padding_mask,
+            need_weights=False,
+        )
+        out = self.mab2(
+            x,
+            h,
+            attn_mask=attn_mask,
+            key_padding_mask=key_padding_mask,
+            need_weights=False,
+        )
         return out
 
 
@@ -543,7 +593,7 @@ class SetTransformer(Module):
         num_blocks: int,
         num_seeds: int = 1,
         dropout: float = 0.1,
-        layer_type: Literal["full", "induced"] = "induced",
+        layer_type: Literal["full", "induced"] = "full",
     ):
         super().__init__()
         self.hidden_channels = hidden_channels
@@ -583,6 +633,7 @@ class SetTransformer(Module):
         self,
         x: Tensor,
         attn_mask: Tensor | None = None,
+        key_padding_mask: Tensor | None = None,
         set_ids: Tensor | None = None,
         need_intermediate_activations: bool = False,
     ) -> Tensor:
@@ -602,28 +653,18 @@ class SetTransformer(Module):
                     idx = (set_ids == ident).nonzero(as_tuple=True)[0]
                     x_ident = x.index_select(0, idx)
                     for block in self.blocks:
-                        x_ident = block(x_ident)
+                        x_ident = block(x_ident, attn_mask, key_padding_mask)
                     result.index_copy_(0, idx, x_ident)
 
                 return result
 
             case "full":
                 for block in self.blocks:
-                    x = block(x, attn_mask)
+                    x = block(x, attn_mask, key_padding_mask)
                 return x
 
 
 def make_block_diag_mask(set_ids: torch.Tensor, num_heads: int = None) -> torch.Tensor:
-    """
-    Create a mask where elements can only attend within their set.
-
-    Args:
-        set_ids: Tensor of shape (N,) with set identifier for each element
-        num_heads: Number of attention heads (if None, returns 2D mask)
-
-    Returns:
-        Attention mask of shape (N, N) or (num_heads, N, N) where True means "mask out" (no attention)
-    """
     set_ids = set_ids.flatten()
     mask = set_ids.unsqueeze(0) != set_ids.unsqueeze(1)  # (N, N)
 
@@ -634,15 +675,6 @@ def make_block_diag_mask(set_ids: torch.Tensor, num_heads: int = None) -> torch.
 
 
 def make_asymmetric_mask(masked: torch.Tensor) -> torch.Tensor:
-    """
-    Build an asymmetric attention mask:
-    - masked tokens (True) can attend to unmasked tokens (False) and themselves
-    - unmasked tokens cannot attend to masked tokens
-    Args:
-        masked: Bool tensor of shape (N,), True if the token is masked
-    Returns:
-        attn_mask: Bool tensor of shape (N, N)
-    """
     N = masked.shape[0]
     attn_mask = torch.zeros(N, N, dtype=torch.bool, device=device)
 

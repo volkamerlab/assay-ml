@@ -212,46 +212,13 @@ def corr_loss(x: Tensor, y: Tensor) -> float:
     return -torch.sum(vx * vy) / denom
 
 
-def create_set_attention_mask_from_ids(
-    set_ids: torch.Tensor, num_heads: int = None
-) -> torch.Tensor:
-    """
-    Create a mask where elements can only attend within their set.
-
-    Args:
-        set_ids: Tensor of shape (N,) with set identifier for each element
-        num_heads: Number of attention heads (if None, returns 2D mask)
-
-    Returns:
-        Attention mask of shape (N, N) or (num_heads, N, N) where True means "mask out" (no attention)
-    """
-    set_ids = set_ids.flatten()
-    mask = set_ids.unsqueeze(0) != set_ids.unsqueeze(1)  # (N, N)
-
-    if num_heads is not None:
-        mask = mask.unsqueeze(0).expand(num_heads, -1, -1)  # (num_heads, N, N)
-
-    return mask
-
-
-def _normalize_sets_minmax(
-    labels, set_boundaries, num_sets, mask=None, clip_range=None
-):
-    normed_labels = torch.zeros_like(labels)
+def _normalize_sets_minmax(labels, sample_mask, padding_mask, clip_range=None):
+    num_sets, K = sample_mask.shape
+    normed_labels = torch.zeros_like(labels, device=device)
 
     for i in range(num_sets):
-        start_idx = set_boundaries[i]
-        end_idx = set_boundaries[i + 1]
-        set_labels = labels[start_idx:end_idx]
-        set_size = end_idx - start_idx
-        if set_size < 2:
-            continue
-
-        if mask is not None:
-            set_mask = mask[start_idx:end_idx]
-            unmasked = set_labels[~set_mask]
-        else:
-            unmasked = set_labels
+        set_labels = labels[i]
+        unmasked = set_labels[~sample_mask[i] & ~padding_mask[i]]
 
         if unmasked.numel() < 2:
             continue
@@ -259,29 +226,28 @@ def _normalize_sets_minmax(
         min_val = unmasked.min()
         max_val = unmasked.max()
         range_val = (max_val - min_val).clamp_min(1e-6)
-        normed = (set_labels - min_val) / range_val
+        normed = (set_labels[~padding_mask[i]] - min_val) / range_val
 
         if clip_range is not None:
             normed = normed.clamp(*clip_range)
 
-        normed_labels[start_idx:end_idx] = normed
+        normed_labels[i][~padding_mask[i]] = normed
 
     return normed_labels
 
 
-def _generate_mask_for_sets(set_boundaries, num_sets, total_size, mask_fraction):
-    sample_mask = torch.zeros(total_size, dtype=torch.bool, device=device)
+def _generate_mask_for_sets(padding_mask, mask_fraction):
+    num_sets, k = padding_mask.shape
+    set_sizes = k - padding_mask.sum(1)
+    sample_mask = torch.zeros_like(padding_mask, device=device).bool()
 
-    for i in range(num_sets):
-        start_idx = set_boundaries[i]
-        end_idx = set_boundaries[i + 1]
-        set_size = end_idx - start_idx
+    for i, set_size in enumerate(set_sizes):
         if set_size < 2:
             continue
 
         n_masked = max(1, int(set_size * mask_fraction))
         mask_idx = torch.randperm(set_size, device=device)[:n_masked]
-        sample_mask[start_idx:end_idx][mask_idx] = True
+        sample_mask[i][mask_idx] = True
 
     return sample_mask
 
@@ -313,25 +279,20 @@ def train_with_batched_masked_sets(
         _,
         metadata,
     ) in enumerate(pbar := tqdm.tqdm(loader, desc="training")):
-        set_boundaries = metadata["set_boundaries"].squeeze()
-        num_sets = metadata["num_sets"].squeeze().item()
-        set_ids_tensor = metadata["set_ids_tensor"].to(device, non_blocking=True)
+        padding_mask = metadata["attention_mask"].squeeze().to(device)
 
         ligand_features = ligand_features.squeeze().to(device, non_blocking=True)
         protein_features = protein_features.squeeze().to(device, non_blocking=True)
         labels = labels.squeeze().to(device, non_blocking=True)
         batch_size = labels.size(0)
 
-        sample_mask = _generate_mask_for_sets(
-            set_boundaries, num_sets, batch_size, mask_fraction
-        )
+        sample_mask = _generate_mask_for_sets(padding_mask, mask_fraction)
 
         with torch.no_grad():
             normed_labels = _normalize_sets_minmax(
                 labels,
-                set_boundaries,
-                num_sets,
-                mask=sample_mask,
+                sample_mask,
+                padding_mask,
                 clip_range=clip_range,
             )
 
@@ -340,7 +301,7 @@ def train_with_batched_masked_sets(
             protein_features,
             normed_labels,
             sample_mask,
-            set_ids_tensor,
+            padding_mask,
         )
 
         nll_losses = -bd.log_prob(normed_labels, preds)
@@ -361,7 +322,6 @@ def train_with_batched_masked_sets(
         steps += 1
         pbar.set_description(f"train batch loss={loss_value:.4e}")
 
-        del nll_losses, batch_loss, preds
         if unmasked_weight != 1.0:
             del weights
 
@@ -408,21 +368,22 @@ def evaluate_with_batched_masked_sets(
     ) in enumerate(
         pbar := tqdm.tqdm(loader, desc="testing" if save_preds else "evaluating")
     ):
-        set_boundaries = metadata["set_boundaries"].squeeze()
-        num_sets = metadata["num_sets"].squeeze()
-        set_ids_tensor = metadata["set_ids_tensor"].to(device, non_blocking=True)
-
+        padding_mask = metadata["attention_mask"].squeeze().to(device)
+        info = info.squeeze().to(device, non_blocking=True)
         ligand_features = ligand_features.squeeze().to(device, non_blocking=True)
         protein_features = protein_features.squeeze().to(device, non_blocking=True)
         labels = labels.squeeze().to(device, non_blocking=True)
-        info = info.squeeze().to(device, non_blocking=True)
+        batch_size = labels.size(0)
 
         # info[:,0] is boolean mask indicator
         sample_mask = info[:, 0].bool()
         assert len(torch.unique(info[:, 0])) == 2
 
         normed_labels = _normalize_sets_minmax(
-            labels, set_boundaries, num_sets, mask=sample_mask, clip_range=clip_range
+            labels,
+            sample_mask,
+            padding_mask,
+            clip_range=clip_range,
         )
 
         preds = model(
@@ -430,7 +391,7 @@ def evaluate_with_batched_masked_sets(
             protein_features,
             normed_labels,
             sample_mask,
-            set_ids_tensor,
+            padding_mask,
         )
 
         if sample_mask.any():
@@ -902,6 +863,7 @@ def train_and_evaluate_pfn_model(
     optimization = []
 
     for epoch in range(opts["num_epochs"]):
+        train_loader.dataset._make_batches()
         train_loss = train_with_batched_masked_sets(
             model,
             train_loader,

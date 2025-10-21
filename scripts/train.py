@@ -110,9 +110,9 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
         case Method.PFN if mol_only:
             mswpds = partial(
                 MultiSetWithPropertiesDataset,
-                max_batch_datapoints=2**12,
-                max_set_size=1000,
                 shuffle_within_target=False,
+                batch_size=32,
+                fixed_set_size=32,
                 property_columns=[
                     "mw_freebase",
                     "alogp",
@@ -128,8 +128,15 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
                     "np_likeness_score",
                 ],
             )
-            logger.info("Induced attention")
-            return MoleculeBayesianSetRankModel, mswpds, msa
+            mswpds_val = partial(
+                MultiSetWithPropertiesDataset,
+                batch_size=32,
+                fixed_set_size=32,
+                shuffle_within_target=False,
+                property_set_ratio=0.0,
+                property_columns=[],
+            )
+            return MoleculeBayesianSetRankModel, mswpds, mswpds_val
         case Method.PFN:
             return ComplexBayesianSetRankModel, msa, msa
         case Method.PAIRS if mol_only:

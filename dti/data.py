@@ -501,12 +501,16 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
     more diverse sampling across epochs.
 
     Args:
-        property_set_ratio (float): Ratio of property sets to assay sets per batch
-            (0.0 = no property sets, 1.0 = equal numbers, 2.0 = twice as many property sets).
+        property_set_ratio (float): Ratio of property sets within the fixed batch size
+            (0.0 = all assay sets, 0.5 = half property/half assay, 1.0 = all property sets).
         property_columns (List[str]): List of property column names from data to use as targets.
             These should be columns already present in the data DataFrame (e.g., 'mw_freebase', 'alogp').
         noise_std (float): Standard deviation of Gaussian noise to add to linear combinations.
             Default is 0.1 (relative to normalized property values).
+        batch_size (int): Fixed total number of sets (assay + property) in each batch.
+            Default is 32.
+        fixed_set_size (int): Fixed number of items per set in the output tensor.
+            Sets larger than this will be subsampled; smaller sets will be padded.
     """
 
     def __init__(
@@ -517,7 +521,8 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         property_set_ratio: float = 0.5,
         property_columns: list[str] = None,
         noise_std: float = 0.1,
-        max_batch_datapoints: int = 2048,  # Total datapoints across all sets in batch
+        batch_size: int = 32,
+        fixed_set_size: int = 512,
         **kwargs,
     ):
         super().__init__(data, target=target, info_cols=info_cols, **kwargs)
@@ -527,9 +532,11 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self.base_target = target
         self.property_columns = property_columns or []
         self.noise_std = noise_std
-        self.max_batch_datapoints = max_batch_datapoints
+        self.batch_size = batch_size
+        self.fixed_set_size = fixed_set_size
 
-        logger.info(f"Max total datapoints per batch: {max_batch_datapoints}")
+        logger.info(f"Fixed batch size (total sets per batch): {self.batch_size}")
+        logger.info(f"Fixed set size (padding/subsampling): {self.fixed_set_size}")
 
         if self.property_columns:
             missing_cols = [
@@ -552,11 +559,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             self.property_values = None
 
     def _make_batches(self):
-        """Create batches with both assay and dynamically generated property sets.
-
-        Batches are created by adding sets until the total number of datapoints
-        across all sets would exceed max_batch_datapoints.
-        """
+        """Create batches with a fixed total size split between assay and property sets."""
         if self.inter_assay:
             self._shuffle_data()
 
@@ -571,58 +574,76 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self.batch_set_targets = []
         self.batch_set_coefficients = []
 
-        current_batch_sets = []
-        current_batch_ids = []
-        current_batch_types = []
-        current_batch_targets = []
-        current_batch_coeffs = []
-        current_total_datapoints = 0
+        num_assay_sets = len(shuffled_assay_sets)
 
-        assay_idx = 0
+        # Calculate split based on ratio
+        num_property_per_batch = int(self.batch_size * self.property_set_ratio)
+        num_assay_per_batch = self.batch_size - num_property_per_batch
 
-        while assay_idx < len(shuffled_assay_sets):
-            assay_set = shuffled_assay_sets[assay_idx]
-            assay_size = len(assay_set)
+        logger.info(
+            f"Each batch will contain {num_assay_per_batch} assay sets and {num_property_per_batch} property sets"
+        )
 
-            if current_total_datapoints + assay_size <= self.max_batch_datapoints:
-                current_batch_sets.append(assay_set)
-                current_batch_ids.append(shuffled_assay_ids[assay_idx])
-                current_batch_types.append("assay")
-                current_batch_targets.append(self.base_target)
-                current_batch_coeffs.append(None)
-                current_total_datapoints += assay_size
-                assay_idx += 1
+        # Handle case where all sets are property sets
+        if num_assay_per_batch == 0:
+            # Create batches with only property sets
+            num_batches = max(1, num_assay_sets // self.batch_size)
+            for batch_idx in range(num_batches):
+                if num_property_per_batch > 0:
+                    (
+                        prop_sets,
+                        prop_ids,
+                        prop_types,
+                        prop_targets,
+                        prop_coeffs,
+                    ) = self._create_property_sets_for_batch(num_property_per_batch)
 
-                num_assay_sets = sum(1 for t in current_batch_types if t == "assay")
-                target_property_sets = int(num_assay_sets * self.property_set_ratio)
-                current_property_sets = sum(
-                    1 for t in current_batch_types if t == "property"
-                )
+                    if prop_sets:
+                        self._finalize_batch(
+                            prop_sets,
+                            prop_ids,
+                            prop_types,
+                            prop_targets,
+                            prop_coeffs,
+                        )
+        else:
+            # Normal case with both assay and property sets
+            for i in range(0, num_assay_sets, num_assay_per_batch):
+                start_idx = i
+                end_idx = min(i + num_assay_per_batch, num_assay_sets)
 
-                while current_property_sets < target_property_sets:
-                    prop_sets, prop_ids, prop_types, prop_targets, prop_coeffs = (
-                        self._create_property_sets_for_batch(1)
-                    )
+                if start_idx == end_idx:
+                    continue
 
-                    if not prop_sets:
-                        break
+                current_batch_sets = [
+                    shuffled_assay_sets[j] for j in range(start_idx, end_idx)
+                ]
+                current_batch_ids = [
+                    shuffled_assay_ids[j] for j in range(start_idx, end_idx)
+                ]
+                num_assay_in_batch = len(current_batch_sets)
 
-                    prop_size = len(prop_sets[0])
+                current_batch_types = ["assay"] * num_assay_in_batch
+                current_batch_targets = [self.base_target] * num_assay_in_batch
+                current_batch_coeffs = [None] * num_assay_in_batch
 
-                    if (
-                        current_total_datapoints + prop_size
-                        <= self.max_batch_datapoints
-                    ):
-                        current_batch_sets.append(prop_sets[0])
-                        current_batch_ids.append(prop_ids[0])
-                        current_batch_types.append(prop_types[0])
-                        current_batch_targets.append(prop_targets[0])
-                        current_batch_coeffs.append(prop_coeffs[0])
-                        current_total_datapoints += prop_size
-                        current_property_sets += 1
-                    else:
-                        break
-            else:
+                # Add property sets to reach fixed batch size
+                if num_property_per_batch > 0:
+                    (
+                        prop_sets,
+                        prop_ids,
+                        prop_types,
+                        prop_targets,
+                        prop_coeffs,
+                    ) = self._create_property_sets_for_batch(num_property_per_batch)
+
+                    if prop_sets:
+                        current_batch_sets.extend(prop_sets)
+                        current_batch_ids.extend(prop_ids)
+                        current_batch_types.extend(prop_types)
+                        current_batch_targets.extend(prop_targets)
+                        current_batch_coeffs.extend(prop_coeffs)
+
                 if current_batch_sets:
                     self._finalize_batch(
                         current_batch_sets,
@@ -631,36 +652,6 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
                         current_batch_targets,
                         current_batch_coeffs,
                     )
-
-                    current_batch_sets = []
-                    current_batch_ids = []
-                    current_batch_types = []
-                    current_batch_targets = []
-                    current_batch_coeffs = []
-                    current_total_datapoints = 0
-                else:
-                    logger.warning(
-                        f"Assay set {shuffled_assay_ids[assay_idx]} has {assay_size} datapoints, "
-                        f"exceeding max_batch_datapoints={self.max_batch_datapoints}. "
-                        f"Creating oversized batch."
-                    )
-                    self._finalize_batch(
-                        [assay_set],
-                        [shuffled_assay_ids[assay_idx]],
-                        ["assay"],
-                        [self.base_target],
-                        [None],
-                    )
-                    assay_idx += 1
-
-        if current_batch_sets:
-            self._finalize_batch(
-                current_batch_sets,
-                current_batch_ids,
-                current_batch_types,
-                current_batch_targets,
-                current_batch_coeffs,
-            )
 
         self.used = np.full(len(self.batches), False, dtype=bool)
 
@@ -671,17 +662,8 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             sum(1 for t in types if t == "property") for types in self.batch_set_types
         )
 
-        batch_datapoint_counts = [sum(len(s) for s in batch) for batch in self.batches]
-        total_datapoints = sum(batch_datapoint_counts)
-        avg_datapoints = total_datapoints / len(self.batches) if self.batches else 0
-        max_datapoints = max(batch_datapoint_counts) if batch_datapoint_counts else 0
-        min_datapoints = min(batch_datapoint_counts) if batch_datapoint_counts else 0
-
-        logger.debug(
-            f"Created {len(self.batches)} batches: "
-            f"datapoints/batch: avg={avg_datapoints:.1f}, min={min_datapoints}, max={max_datapoints}, "
-            f"target={self.max_batch_datapoints} | "
-            f"sets: {total_assay_sets} assay, {total_property_sets} property"
+        logger.info(
+            f"Created {len(self.batches)} batches with {total_assay_sets} assay sets and {total_property_sets} property sets total"
         )
 
     def _finalize_batch(
@@ -759,15 +741,19 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             self.property_stats[prop_col] = {"mean": mean_val, "std": std_val}
 
         if self.property_values:
-            common_indices = set(
-                self.property_values[self.property_columns[0]]["valid_indices"]
-            )
-            for prop_col in self.property_columns[1:]:
-                if prop_col in self.property_values:
+            prepared_properties = list(self.property_values.keys())
+            if not prepared_properties:
+                self.common_valid_indices = np.array([])
+            else:
+                common_indices = set(
+                    self.property_values[prepared_properties[0]]["valid_indices"]
+                )
+                for prop_col in prepared_properties[1:]:
                     common_indices &= set(
                         self.property_values[prop_col]["valid_indices"]
                     )
-            self.common_valid_indices = np.array(sorted(common_indices))
+                self.common_valid_indices = np.array(sorted(common_indices))
+
             logger.info(
                 f"Common valid indices across all properties: {len(self.common_valid_indices)}"
             )
@@ -779,14 +765,6 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         )
 
     def _create_property_sets_for_batch(self, num_sets: int):
-        """Dynamically create property sets using linear combinations of properties.
-
-        Args:
-            num_sets (int): Number of property sets to create
-
-        Returns:
-            tuple: (property_sets, property_ids, property_types, property_targets, property_coefficients)
-        """
         if (
             not self.property_values
             or num_sets <= 0
@@ -842,15 +820,6 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         )
 
     def _compute_linear_combination(self, indices, coefficients):
-        """Compute linear combination of normalized properties with Gaussian noise.
-
-        Args:
-            indices: Indices of molecules
-            coefficients: Coefficients for linear combination
-
-        Returns:
-            torch.Tensor: Linear combination values with added noise
-        """
         available_properties = list(self.property_values.keys())
 
         result = torch.zeros(len(indices), dtype=torch.float32)
@@ -865,58 +834,69 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         return result
 
     def __getitem__(self, idx):
-        """Get a batch of multiple sets from the dataset.
-
-        Returns:
-            tuple: Protein features, ligand features, labels, info for each set in the batch,
-                  and metadata to track set boundaries and types for the loss function.
-        """
         batch_sets, batch_ids, batch_types, batch_targets, batch_coeffs = (
             self._get_next_batch(idx)
         )
 
-        set_sizes = [len(set_idcs) for set_idcs in batch_sets]
-        cumulative_sizes = np.cumsum([0] + set_sizes)
-        total_size = cumulative_sizes[-1]
+        num_sets = len(batch_sets)
+        K = self.fixed_set_size
 
-        all_indices = np.concatenate(batch_sets)
+        # Use 0 for padding indices.
+        all_indices_padded = torch.zeros((num_sets, K), dtype=torch.long)
+        all_labels_padded = torch.zeros((num_sets, K), dtype=torch.float32)
+        attention_mask = torch.ones((num_sets, K), dtype=torch.bool)  # True = pad
 
-        set_ids_tensor = torch.repeat_interleave(
-            torch.arange(len(set_sizes), dtype=torch.long),
-            torch.tensor(set_sizes, dtype=torch.long),
-        )
+        for i, set_idcs in enumerate(batch_sets):
+            set_type = batch_types[i]
+            coeffs = batch_coeffs[i]
+            set_size = len(set_idcs)
 
-        all_labels = torch.empty(total_size, dtype=torch.float32)
+            if set_size == 0:
+                continue
 
-        offset = 0
-        for set_idcs, set_type, coeffs in zip(batch_sets, batch_types, batch_coeffs):
-            size = len(set_idcs)
-            if set_type == "assay":
-                all_labels[offset : offset + size] = self.labels[set_idcs]
+            if set_size > K:
+                sample_idx = self.random.choice(set_size, size=K, replace=False)
+                final_indices = set_idcs[sample_idx]
+
+                all_indices_padded[i, :] = torch.from_numpy(final_indices)
+                attention_mask[i, :] = False
+
+                if set_type == "assay":
+                    all_labels_padded[i, :] = self.labels[final_indices]
+                else:
+                    all_labels_padded[i, :] = self._compute_linear_combination(
+                        final_indices, coeffs
+                    )
+
             else:
-                all_labels[offset : offset + size] = self._compute_linear_combination(
-                    set_idcs, coeffs
-                )
-            offset += size
+                final_indices = set_idcs
+
+                all_indices_padded[i, :set_size] = torch.from_numpy(final_indices)
+                attention_mask[i, :set_size] = False
+
+                if set_type == "assay":
+                    all_labels_padded[i, :set_size] = self.labels[final_indices]
+                else:
+                    all_labels_padded[i, :set_size] = self._compute_linear_combination(
+                        final_indices, coeffs
+                    )
 
         prot_feats = (
-            torch.ones(1, device=device)
+            torch.ones(1)
             if self.protein_features is None
-            else self.protein_features[all_indices]
+            else self.protein_features[all_indices_padded]
         )
 
         return (
             prot_feats,
-            self.ligand_features[all_indices],
-            all_labels,
-            self.info[all_indices],
+            self.ligand_features[all_indices_padded],
+            all_labels_padded,
+            self.info[all_indices_padded],
             {
-                "set_boundaries": cumulative_sizes,
                 "set_ids": batch_ids,
                 "set_types": batch_types,
                 "set_targets": batch_targets,
-                "set_ids_tensor": set_ids_tensor,
-                "num_sets": len(batch_sets),
+                "attention_mask": attention_mask,
             },
         )
 
