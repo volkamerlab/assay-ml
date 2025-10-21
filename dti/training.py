@@ -902,6 +902,7 @@ def train_and_evaluate_pfn_model(
     optimization = []
 
     for epoch in range(opts["num_epochs"]):
+        train_loader.dataset._make_batches()
         train_loss = train_with_batched_masked_sets(
             model,
             train_loader,

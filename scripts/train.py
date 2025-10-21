@@ -102,7 +102,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
     msa = partial(
         MultiSetActivityDataset,
         max_batch_datapoints=2048,
-        max_set_size=1000,
+        max_set_size=500,
         shuffle_within_target=(method != Method.PFN),
     )
     shuffled_multiset = partial(msa, inter_assay=True)
@@ -111,7 +111,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
             mswpds = partial(
                 MultiSetWithPropertiesDataset,
                 max_batch_datapoints=2048,
-                max_set_size=1000,
+                max_set_size=500,
                 shuffle_within_target=False,
                 property_columns=[
                     "mw_freebase",
