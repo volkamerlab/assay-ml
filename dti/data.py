@@ -632,7 +632,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             if i < num_actual_assay_sets:
                 all_labels_padded[i, :effective_size] = self.labels[final_idcs]
             else:
-                prop_values = self.normalized_properties[final_indices]
+                prop_values = self.normalized_properties[final_idcs]
                 coeffs = torch.randn(len(self.property_columns))
 
                 linear_comb = torch.matmul(prop_values, coeffs)
