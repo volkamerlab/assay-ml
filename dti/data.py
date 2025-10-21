@@ -3,6 +3,7 @@ import functools
 import logging
 from pathlib import Path
 
+import tqdm.auto as tqdm
 import pandas as pd
 import numpy as np
 
@@ -584,9 +585,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             f"Each batch will contain {num_assay_per_batch} assay sets and {num_property_per_batch} property sets"
         )
 
-        # Handle case where all sets are property sets
         if num_assay_per_batch == 0:
-            # Create batches with only property sets
             num_batches = max(1, num_assay_sets // self.batch_size)
             for batch_idx in range(num_batches):
                 if num_property_per_batch > 0:
@@ -608,7 +607,10 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
                         )
         else:
             # Normal case with both assay and property sets
-            for i in range(0, num_assay_sets, num_assay_per_batch):
+            for i in tqdm.tqdm(
+                range(0, num_assay_sets, num_assay_per_batch),
+                desc="Generating synthetic targets",
+            ):
                 start_idx = i
                 end_idx = min(i + num_assay_per_batch, num_assay_sets)
 
