@@ -585,12 +585,12 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         start = idx * self.num_assay_sets
         end = start + self.num_assay_sets
 
-        if end > len(self.assay_indices):  # Reshuffle for next epoch
+        if end > len(self.assay_idcs):  # Reshuffle for next epoch
             self._shuffle_assays()
             start = 0
             end = self.num_assay_sets
 
-        batch_assay_indices = self.assay_indices[start:end]
+        batch_assay_indices = self.assay_idcs[start:end]
         current_batch_sets = [self.valid_sets[i] for i in batch_assay_indices]
         num_actual_assay_sets = len(current_batch_sets)
 
@@ -608,7 +608,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         num_sets = len(current_batch_sets)
         K = self.fixed_set_size
 
-        all_indices_padded = torch.zeros((num_sets, K), dtype=torch.long)
+        all_idcs_padded = torch.zeros((num_sets, K), dtype=torch.long)
         all_labels_padded = torch.zeros((num_sets, K), dtype=torch.float32)
         attention_mask = torch.ones((num_sets, K), dtype=torch.bool)
 
@@ -624,7 +624,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             )
             effective_size = len(final_indices)
 
-            all_indices_padded[i, :effective_size] = torch.from_numpy(
+            all_idcs_padded[i, :effective_size] = torch.from_numpy(
                 final_indices.astype(np.int64)
             )
             attention_mask[i, :effective_size] = False
@@ -642,11 +642,11 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         prot_feats = (
             torch.ones(1)
             if self.protein_features is None
-            else self.protein_features[all_indices_padded]
+            else self.protein_features[all_idcs_padded]
         )
 
         return (
-            prot_features,
+            prot_feats,
             self.ligand_features[all_idcs_padded],
             all_labels_padded,
             self.info[all_idcs_padded],
