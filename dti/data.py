@@ -531,7 +531,14 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         property_set_size_range: tuple[int, int] = (32, 256),
         **kwargs,
     ):
-        super().__init__(data, target=target, info_cols=info_cols, **kwargs)
+        kwargs["shuffle_within_target"] = False
+        kwargs["inter_assay"] = False
+        super().__init__(
+            data,
+            target=target,
+            info_cols=info_cols,
+            **kwargs,
+        )
 
         self.batch_size = batch_size
         self.fixed_set_size = fixed_set_size
@@ -552,6 +559,9 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             f"dataset batch composition: {self.num_assay_sets} assay sets, "
             f"{self.num_property_sets} prop sets (ratio={property_set_ratio})"
         )
+
+    def _make_batches(self):
+        pass
 
     def _normalize_properties(self) -> torch.Tensor:
         """Normalizes property columns once and stores them as a tensor."""

@@ -1,5 +1,6 @@
 import logging
 import functools
+import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Union, Iterable, List, Tuple
@@ -9,8 +10,8 @@ from enum import StrEnum, auto
 import torch
 import tqdm.auto as tqdm
 from esm import FastaBatchedDataset, pretrained
-from rdkit import Chem
-from rdkit.Chem import rdFingerprintGenerator
+from rdkit import Chem, DataStructs
+from rdkit.Chem import rdFingerprintGenerator, MACCSkeys
 from transformers import AutoTokenizer, AutoModel
 
 from .constants import DATA, TID, SEQUENCE
@@ -26,7 +27,9 @@ class MolFingerprint(StrEnum):
     RDKIT = auto()
     TOPOTORSION = auto()
     ATOMPAIR = auto()
+    MACCS = auto()
     CHEMBERTA = auto()
+    ALL = auto()
 
     def _get_mfpgen(
         self,
@@ -58,6 +61,17 @@ class MolFingerprint(StrEnum):
     def dim(self):
         if self == MolFingerprint.CHEMBERTA:
             return 384
+        elif self == MolFingerprint.MACCS:
+            return 167
+        elif self == MolFingerprint.ALL:
+            # sum of all except ChemBERTa
+            return (
+                MolFingerprint.MORGAN.dim
+                + MolFingerprint.RDKIT.dim
+                + MolFingerprint.TOPOTORSION.dim
+                + MolFingerprint.ATOMPAIR.dim
+                + MolFingerprint.MACCS.dim
+            )
         else:
             return 2048
 
@@ -77,6 +91,34 @@ class MolFingerprint(StrEnum):
         if mol is None:
             logger.warning(f"No fp for SMILES={smi}")
             return None
+
+        if self is MolFingerprint.ALL:
+            fps = []
+            for fp_type in [
+                MolFingerprint.MORGAN,
+                MolFingerprint.RDKIT,
+                MolFingerprint.TOPOTORSION,
+                MolFingerprint.ATOMPAIR,
+                MolFingerprint.MACCS,
+            ]:
+                fp = fp_type.compute(smi, target="numpy")
+                if fp is not None:
+                    fps.append(fp)
+            if not fps:
+                return None
+            return np.concatenate(fps, axis=-1)
+
+        if self is MolFingerprint.MACCS:
+            fp = MACCSkeys.GenMACCSKeys(mol)
+            match target:
+                case "numpy":
+                    arr = np.zeros((fp.GetNumBits(),), dtype=np.uint8)
+                    DataStructs.ConvertToNumpyArray(fp, arr)
+                    return arr
+                case "native":
+                    return fp
+                case _:
+                    raise ValueError(f"Unknown fingerprint target: '{target}'")
 
         mfpgen = self._get_mfpgen()
 
