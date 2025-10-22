@@ -612,7 +612,7 @@ class SetTransformer(nn.Module):
         num_seeds: int = 1,
         dropout: float = 0.05,
         layer_type: Literal["full", "induced"] = "full",
-        prenorm: bool = True,
+        prenorm: bool = False,
     ):
         super().__init__()
         self.hidden_channels = hidden_channels
