@@ -292,6 +292,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             hidden_size=hidden_channels,
             output_size=hidden_channels,
             hidden_layers=4,
+            dropout=p_dropout,
         )
         self.num_heads = num_heads
         self.default_dist_emb = Parameter(torch.zeros(hidden_channels, device=device))
