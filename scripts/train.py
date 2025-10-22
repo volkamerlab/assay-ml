@@ -342,7 +342,7 @@ def run_split(
         batch_size=batch_size,
         num_epochs=num_epochs,
         training_loss=training_loss,
-        patience_termination=100 if train_short else 1000,
+        patience_termination=10 if train_short else 1000,
         patience_lr=10 if train_short else 100,
         fisher_transform=method not in [Method.IC50SETS, Method.IC50ALLSETS],
         unmasked_weight=unmasked_weight,

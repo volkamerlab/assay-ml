@@ -815,31 +815,12 @@ def train_and_evaluate_pfn_model(
 ) -> None:
     """
     Train and evaluate the model with learning rate adjustment and early stopping.
-
-    This function handles the complete training pipeline including model instantiation,
-    optimization, learning rate scheduling, early stopping, and model persistence.
-
-    Args:
-        model_cls (Type[nn.Module]): Model class to instantiate.
-        run_name (str): Name of the training run for logging and file naming.
-        train_loader (DataLoader): DataLoader for training data.
-        val_loader (DataLoader): DataLoader for validation data.
-        test_loader (DataLoader): DataLoader for test data.
-        target_name (str): Name of the target being predicted.
-        index (int): Index/fold number for cross-validation.
-
-    Returns:
-        None: The function saves the model and training statistics but doesn't return a value.
+    Testing is performed only once after termination (not during training).
     """
     logger.info(f"training model for target: {target_name}")
     Epoch = namedtuple(
         "Epoch",
-        [
-            "epoch",
-            "lr",
-            "train_loss",
-            "test_loss",
-        ],
+        ["epoch", "lr", "train_loss", "val_loss"],
     )
 
     opts: Dict[str, Any] = _defaults | kwargs
@@ -863,7 +844,7 @@ def train_and_evaluate_pfn_model(
         optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
     )
 
-    best_loss = 1000
+    best_loss = float("inf")
     epochs_without_improvement = 0
     optimization = []
 
@@ -875,12 +856,12 @@ def train_and_evaluate_pfn_model(
             optimizer,
             unmasked_weight=opts.get("unmasked_weight", 1.0),
         )
+
         val_results = evaluate_with_batched_masked_sets(model, val_loader)
         val_loss = val_results["nll"]
 
         scheduler.step(val_loss)
         lr = scheduler.get_last_lr()
-        logger.debug(f"learning rate: {lr}")
 
         logger.info(f"epoch: {epoch + 1}")
         logger.info(f" train loss: {train_loss:.4e}")
@@ -893,22 +874,25 @@ def train_and_evaluate_pfn_model(
             OUTPUT / run_name / "optimization.csv", index=False
         )
 
+        # Early stopping check
         if val_loss < best_loss:
-            logger.info("updating test set predictions")
             best_loss = val_loss
             epochs_without_improvement = 0
             torch.save(model.state_dict(), OUTPUT / run_name / "model.pt")
-            test_results = evaluate_with_batched_masked_sets(
-                model,
-                test_loader,
-                predictions_file=OUTPUT / run_name / "predictions.npz",
-            )
-            logger.info(f"test epoch: {epoch + 1} ")
-            logger.info(f" test masked NLL: {test_results['nll']:.4e}")
-            logger.info(f" test masked EMD: {test_results['wasserstein']:.4e}")
-            logger.info(f" test masked MAE: {test_results['mae']:.4e}")
         else:
             epochs_without_improvement += 1
-            if epoch >= 10 and epochs_without_improvement >= opts["patience_termination"]:
+            if epochs_without_improvement >= opts["patience_termination"]:
                 logger.info(f"early stopping triggered after {epoch + 1} epochs.")
                 break
+
+    logger.info("loading best model for final testing...")
+    model.load_state_dict(torch.load(OUTPUT / run_name / "model.pt"))
+    test_results = evaluate_with_batched_masked_sets(
+        model,
+        test_loader,
+        predictions_file=OUTPUT / run_name / "predictions.npz",
+    )
+    logger.info("final test results:")
+    logger.info(f" test masked NLL: {test_results['nll']:.4e}")
+    logger.info(f" test masked EMD: {test_results['wasserstein']:.4e}")
+    logger.info(f" test masked MAE: {test_results['mae']:.4e}")
