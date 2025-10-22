@@ -1,3 +1,6 @@
+import os
+import hashlib
+import pickle
 import logging
 import functools
 import numpy as np
@@ -8,11 +11,13 @@ from multiprocessing import Pool
 from enum import StrEnum, auto
 
 import torch
+from torch.utils.data import get_worker_info
 import tqdm.auto as tqdm
 from esm import FastaBatchedDataset, pretrained
 from rdkit import Chem, DataStructs
 from rdkit.Chem import rdFingerprintGenerator, MACCSkeys
 from transformers import AutoTokenizer, AutoModel
+import portalocker
 
 from .constants import DATA, TID, SEQUENCE
 from .utils import device
@@ -20,6 +25,18 @@ from .utils import device
 
 logger = logging.getLogger(__name__)
 _mfpgen_cache: dict[Tuple, object] = {}
+_cache_root = Path(os.getenv("FP_CACHE_DIR", Path.home() / ".cache" / "mol_fps"))
+
+
+def _get_worker_cache():
+    """Return a worker-specific fingerprint generator cache."""
+    info = get_worker_info()
+    if info is None:
+        return _mfpgen_cache
+    wid = info.id
+    if wid not in _mfpgen_cache:
+        _mfpgen_cache[wid] = {}
+    return _mfpgen_cache[wid]
 
 
 class MolFingerprint(StrEnum):
@@ -31,31 +48,55 @@ class MolFingerprint(StrEnum):
     CHEMBERTA = auto()
     ALL = auto()
 
+    def _cache_path(self, smi: str) -> Path:
+        """Compute cache file path for a given SMILES."""
+        key = f"{self.value}-{smi}".encode("utf-8")
+        hexhash = hashlib.sha1(key).hexdigest()
+        subdir = _cache_root / self.value / hexhash[:2]
+        subdir.mkdir(parents=True, exist_ok=True)
+        return subdir / f"{hexhash}.pkl"
+
+    def _load_from_cache(self, smi: str):
+        """Try to load a cached fingerprint, return None if not found."""
+        path = self._cache_path(smi)
+        if not path.exists():
+            return None
+        try:
+            with open(path, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            return None
+
+    def _save_to_cache(self, smi: str, fp: np.ndarray):
+        """Save fingerprint to cache safely."""
+        path = self._cache_path(smi)
+        tmp_path = path.with_suffix(".tmp")
+        with portalocker.Lock(str(tmp_path), "wb", timeout=10) as f:
+            pickle.dump(fp, f, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp_path, path)
+
     def _get_mfpgen(
         self,
         fpSize: int = 2048,
     ):
         key = (self.value, fpSize)
-        if key not in _mfpgen_cache:
+        cache = _get_worker_cache()
+        if key not in cache:
             if self is MolFingerprint.MORGAN:
-                _mfpgen_cache[key] = rdFingerprintGenerator.GetMorganGenerator(
+                cache[key] = rdFingerprintGenerator.GetMorganGenerator(
                     radius=3, fpSize=fpSize
                 )
             elif self is MolFingerprint.RDKIT:
-                _mfpgen_cache[key] = rdFingerprintGenerator.GetRDKitFPGenerator(
-                    fpSize=fpSize
-                )
+                cache[key] = rdFingerprintGenerator.GetRDKitFPGenerator(fpSize=fpSize)
             elif self is MolFingerprint.TOPOTORSION:
-                _mfpgen_cache[key] = (
-                    rdFingerprintGenerator.GetTopologicalTorsionGenerator(fpSize=fpSize)
+                cache[key] = rdFingerprintGenerator.GetTopologicalTorsionGenerator(
+                    fpSize=fpSize
                 )
             elif self is MolFingerprint.ATOMPAIR:
-                _mfpgen_cache[key] = rdFingerprintGenerator.GetAtomPairGenerator(
-                    fpSize=fpSize
-                )
+                cache[key] = rdFingerprintGenerator.GetAtomPairGenerator(fpSize=fpSize)
             else:
                 raise ValueError(f"{self} does not support RDKit generators")
-        return _mfpgen_cache[key]
+        return cache[key]
 
     @property
     def dim(self):
@@ -76,12 +117,8 @@ class MolFingerprint(StrEnum):
             return 2048
 
     @functools.cache
-    def compute(
-        self,
-        smi: str,
-        target: str = "numpy",
-    ):
-        """Compute fingerprint or embedding for a single SMILES."""
+    def compute(self, smi: str, target: str = "numpy", use_cache: bool = True):
+        """Compute or load fingerprint for a single SMILES."""
         if self is MolFingerprint.CHEMBERTA:
             return smiles_to_dl_embedding(
                 [smi], model_name="DeepChem/ChemBERTa-77M-MLM", pooling="mean"
@@ -92,6 +129,11 @@ class MolFingerprint(StrEnum):
             logger.warning(f"No fp for SMILES={smi}")
             return None
 
+        if use_cache:
+            cached = self._load_from_cache(smi)
+            if cached is not None:
+                return cached
+
         if self is MolFingerprint.ALL:
             fps = []
             for fp_type in [
@@ -101,47 +143,28 @@ class MolFingerprint(StrEnum):
                 MolFingerprint.ATOMPAIR,
                 MolFingerprint.MACCS,
             ]:
-                fp = fp_type.compute(smi, target="numpy")
+                fp = fp_type.compute(smi, target="numpy", use_cache=use_cache)
                 if fp is not None:
                     fps.append(fp)
-            if not fps:
-                return None
-            return np.concatenate(fps, axis=-1)
+            result = np.concatenate(fps, axis=-1) if fps else None
 
-        if self is MolFingerprint.MACCS:
+        elif self is MolFingerprint.MACCS:
             fp = MACCSkeys.GenMACCSKeys(mol)
-            match target:
-                case "numpy":
-                    arr = np.zeros((fp.GetNumBits(),), dtype=np.uint8)
-                    DataStructs.ConvertToNumpyArray(fp, arr)
-                    return arr
-                case "native":
-                    return fp
-                case _:
-                    raise ValueError(f"Unknown fingerprint target: '{target}'")
+            arr = np.zeros((fp.GetNumBits(),), dtype=np.uint8)
+            DataStructs.ConvertToNumpyArray(fp, arr)
+            result = arr
 
-        mfpgen = self._get_mfpgen()
+        else:
+            mfpgen = self._get_mfpgen()
+            result = mfpgen.GetFingerprintAsNumPy(mol)
 
-        match target:
-            case "numpy":
-                return mfpgen.GetFingerprintAsNumPy(mol)
-            case "native":
-                return mfpgen.GetFingerprint(mol)
-            case _:
-                raise ValueError(f"Unknown fingerprint target: '{target}'")
+        if use_cache and result is not None:
+            try:
+                self._save_to_cache(smi, result)
+            except Exception as e:
+                logger.warning(f"Could not cache fingerprint for {smi}: {e}")
 
-    def compute_parallel(
-        self, smiles: Iterable[str], n_jobs: int = 16, pbar: bool = True, **kwargs
-    ):
-        if self is MolFingerprint.CHEMBERTA:
-            logger.warning("Parallel compute not supported for ChemBERTa")
-            return [self.compute(s, **kwargs) for s in tqdm.tqdm(smiles)]
-
-        with Pool(n_jobs) as p:
-            return p.map(
-                functools.partial(self.compute, **kwargs),
-                tqdm.tqdm(smiles) if pbar else smiles,
-            )
+        return result
 
 
 @functools.cache
