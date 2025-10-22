@@ -1,6 +1,7 @@
 import os
 import hashlib
 import pickle
+import tempfile
 import logging
 import functools
 import numpy as np
@@ -26,6 +27,7 @@ from .utils import device
 logger = logging.getLogger(__name__)
 _mfpgen_cache: dict[Tuple, object] = {}
 _cache_root = Path(os.getenv("FP_CACHE_DIR", Path.home() / ".cache" / "mol_fps"))
+logger.debug(f"cache path: {_cache_root}")
 
 
 def _get_worker_cache():
@@ -56,8 +58,20 @@ class MolFingerprint(StrEnum):
         subdir.mkdir(parents=True, exist_ok=True)
         return subdir / f"{hexhash}.pkl"
 
-    def _load_from_cache(self, smi: str):
-        """Try to load a cached fingerprint, return None if not found."""
+    def _save_to_cache(self, smi, fp):
+        path = self._cache_path(smi)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(delete=False, dir=path.parent) as f:
+            pickle.dump(fp, f)
+            tmp = Path(f.name)
+
+        try:
+            tmp.replace(path)
+        except FileNotFoundError:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp.replace(path)
+
+    def _load_from_cache(self, smi):
         path = self._cache_path(smi)
         if not path.exists():
             return None
@@ -66,14 +80,6 @@ class MolFingerprint(StrEnum):
                 return pickle.load(f)
         except Exception:
             return None
-
-    def _save_to_cache(self, smi: str, fp: np.ndarray):
-        """Save fingerprint to cache safely."""
-        path = self._cache_path(smi)
-        tmp_path = path.with_suffix(".tmp")
-        with portalocker.Lock(str(tmp_path), "wb", timeout=10) as f:
-            pickle.dump(fp, f, protocol=pickle.HIGHEST_PROTOCOL)
-        os.replace(tmp_path, path)
 
     def _get_mfpgen(
         self,
