@@ -549,9 +549,8 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self._shuffle_assays()  # Initial shuffle for the first epoch
 
         logger.info(
-            f"Dataset configured for on-the-fly batching. "
-            f"Batch composition: {self.num_assay_sets} assay sets, "
-            f"{self.num_property_sets} property sets."
+            f"dataset batch composition: {self.num_assay_sets} assay sets, "
+            f"{self.num_property_sets} prop sets (ratio={property_set_ratio})"
         )
 
     def _normalize_properties(self) -> torch.Tensor:

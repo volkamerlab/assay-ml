@@ -238,17 +238,18 @@ def prepare_dataset_splits(
         scale_targets=method != Method.PFN,
     )
     mol_feat = MolFingerprint(mol_feat)
-    data_kwargs = dict(
+    val_data_kwargs = dict(
         mol_featurizer=mol_feat,
         info_cols=info_cols,
+        property_set_ratio=0.0,
     )
 
-    train_data_kwargs = dict(data_kwargs)
+    train_data_kwargs = dict(val_data_kwargs)
     train_data_kwargs["property_set_ratio"] = property_set_ratio
 
-    val_dataset = val_dataset_cls(val_data, target=test_target, **train_data_kwargs)
-    test_dataset = val_dataset_cls(test_data, target=test_target, **data_kwargs)
-    train_dataset = dataset_cls(train_data, target=train_target, **data_kwargs)
+    val_dataset = val_dataset_cls(val_data, target=test_target, **val_data_kwargs)
+    test_dataset = val_dataset_cls(test_data, target=test_target, **val_data_kwargs)
+    train_dataset = dataset_cls(train_data, target=train_target, **train_data_kwargs)
 
     assert len(train_dataset) > 0
 
