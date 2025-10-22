@@ -909,6 +909,6 @@ def train_and_evaluate_pfn_model(
             logger.info(f" test masked MAE: {test_results['mae']:.4e}")
         else:
             epochs_without_improvement += 1
-            if epochs_without_improvement >= opts["patience_termination"]:
+            if epoch >= 10 and epochs_without_improvement >= opts["patience_termination"]:
                 logger.info(f"early stopping triggered after {epoch + 1} epochs.")
                 break
