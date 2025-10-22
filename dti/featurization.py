@@ -1,4 +1,5 @@
 import os
+import uuid
 import hashlib
 import pickle
 import tempfile
@@ -61,15 +62,15 @@ class MolFingerprint(StrEnum):
     def _save_to_cache(self, smi, fp):
         path = self._cache_path(smi)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(delete=False, dir=path.parent) as f:
-            pickle.dump(fp, f)
-            tmp = Path(f.name)
 
-        try:
-            tmp.replace(path)
-        except FileNotFoundError:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp.replace(path)
+        tmp = path.parent / f"{path.name}.{uuid.uuid4().hex}.tmp"
+        with open(tmp, "wb") as f:
+            pickle.dump(fp, f)
+            f.flush()
+            f.flush()
+
+        tmp.replace(path)
+        del fp, tmp
 
     def _load_from_cache(self, smi):
         path = self._cache_path(smi)
@@ -122,7 +123,7 @@ class MolFingerprint(StrEnum):
         else:
             return 2048
 
-    @functools.cache
+    @functools.lru_cache(maxsize=10_000)
     def compute(self, smi: str, target: str = "numpy", use_cache: bool = True):
         """Compute or load fingerprint for a single SMILES."""
         if self is MolFingerprint.CHEMBERTA:
