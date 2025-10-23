@@ -113,6 +113,12 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
                 MultiSetWithPropertiesDataset,
                 shuffle_within_target=False,
                 target_attn_load=load_tgt,
+                bucket_specs=[
+                    (0, 16, 16),
+                    (17, 64, 64),
+                    (65, 256, 256),
+                    (257, float("inf"), 1024),
+                ],
                 property_columns=[
                     "mw_freebase",
                     "alogp",
@@ -134,6 +140,13 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
                 shuffle_within_target=False,
                 property_set_ratio=0.0,
                 property_columns=[],
+                bucket_specs=[
+                    (0, 16, 16),
+                    (17, 64, 64),
+                    (65, 256, 256),
+                    (257, 1024, 1024),
+                    (1025, float("inf"), 2048),
+                ],
             )
             return MoleculeBayesianSetRankModel, mswpds, mswpds_val
         case Method.PFN:

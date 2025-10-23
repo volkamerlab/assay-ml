@@ -492,6 +492,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         property_set_ratio: float = 0.5,
         noise_std: float = 0.1,
         property_set_size_range: tuple[int, int] = (32, 256),
+        precompute_fingerprints: bool = True,
         **kwargs,
     ):
         """
@@ -500,6 +501,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
                 attention matrix (num_sets * K^2). This is used to
                 dynamically calculate the number of sets per batch.
             bucket_specs: List of (min_size, max_size, K) tuples.
+            precompute_fingerprints: If True, compute all fingerprints at init.
         """
         kwargs["shuffle_within_target"] = False
         kwargs["inter_assay"] = False
@@ -513,7 +515,8 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self.property_set_ratio = property_set_ratio
         self.noise_std = noise_std
         self.min_prop_set_size, self.max_prop_set_size = property_set_size_range
-        self.target_attn_load = target_attn_load  # *** STORED ***
+        self.target_attn_load = target_attn_load
+        self.precompute_fingerprints = precompute_fingerprints
 
         if bucket_specs is None:
             self.bucket_specs = [
@@ -529,6 +532,11 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self.property_columns = [p for p in property_columns if p in data.columns]
         self.normalized_properties = self._normalize_properties()
 
+        # Pre-compute fingerprints if requested
+        self.precomputed_fps = None
+        if self.precompute_fingerprints:
+            self._compute_all_fingerprints()
+
         self.batch_definitions = []
         self._create_batch_definitions()
         self._shuffle_batches()
@@ -537,6 +545,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             f"Created {len(self.batch_definitions)} batches from "
             f"{len(self.valid_sets)} sets, using {len(self.bucket_specs)} buckets."
             f" Target attention load: {self.target_attn_load}"
+            f"{' (fingerprints pre-computed)' if self.precompute_fingerprints else ''}"
         )
 
     # override
@@ -546,6 +555,62 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
     # override
     def _make_batches(self):
         self._shuffle_batches()
+
+    def _compute_all_fingerprints(self):
+        """Pre-compute fingerprints for all molecules, parallelized over unique SMILES."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import os
+
+        logger.info("Pre-computing fingerprints for all molecules...")
+
+        # Get unique SMILES and their indices
+        smiles_series = self.data[SMILES]
+        unique_smiles = smiles_series.unique()
+        logger.info(
+            f"Computing fingerprints for {len(unique_smiles)} unique SMILES "
+            f"(out of {len(self.data)} total molecules)..."
+        )
+
+        # Parallel computation for unique SMILES
+        def compute_fp(smi):
+            fp = self.mol_featurizer.compute(smi, use_cache=True)
+            if fp is None:
+                fp = np.zeros(self.mol_featurizer.dim, dtype=np.float32)
+            return smi, fp
+
+        smiles_to_fp = {}
+        max_workers = 16
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(compute_fp, smi): smi for smi in unique_smiles}
+
+            for future in as_completed(futures):
+                try:
+                    smi, fp = future.result()
+                    smiles_to_fp[smi] = fp
+                except Exception as e:
+                    smi = futures[future]
+                    logger.warning(
+                        f"Failed to compute fingerprint for SMILES {smi}: {e}"
+                    )
+                    smiles_to_fp[smi] = np.zeros(
+                        self.mol_featurizer.dim, dtype=np.float32
+                    )
+
+        # Map back to original data order
+        fps = []
+        for i in range(len(self.data)):
+            smi = smiles_series.iloc[i]
+            fps.append(
+                smiles_to_fp.get(
+                    smi, np.zeros(self.mol_featurizer.dim, dtype=np.float32)
+                )
+            )
+
+        self.precomputed_fps = torch.tensor(np.stack(fps), dtype=torch.float32)
+        logger.info(
+            f"Pre-computed {len(fps)} fingerprints from {len(unique_smiles)} unique SMILES."
+        )
 
     def _normalize_properties(self) -> torch.Tensor:
         if not self.property_columns:
@@ -713,17 +778,21 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             else self.protein_features[all_idcs_padded]
         )
 
-        lig_feats = []
-        for row in all_idcs_padded:
-            fps = []
-            for j in row:
-                smi = self.data[SMILES].iloc[j.item()]
-                fp = self.mol_featurizer.compute(smi, use_cache=True)
-                if fp is None:
-                    fp = np.zeros(self.mol_featurizer.dim, dtype=np.float32)
-                fps.append(fp)
-            lig_feats.append(torch.tensor(np.stack(fps), dtype=torch.float32))
-        lig_feats = torch.stack(lig_feats)
+        # Use pre-computed fingerprints if available
+        if self.precomputed_fps is not None:
+            lig_feats = self.precomputed_fps[all_idcs_padded]
+        else:
+            lig_feats = []
+            for row in all_idcs_padded:
+                fps = []
+                for j in row:
+                    smi = self.data[SMILES].iloc[j.item()]
+                    fp = self.mol_featurizer.compute(smi, use_cache=True)
+                    if fp is None:
+                        fp = np.zeros(self.mol_featurizer.dim, dtype=np.float32)
+                    fps.append(fp)
+                lig_feats.append(torch.tensor(np.stack(fps), dtype=torch.float32))
+            lig_feats = torch.stack(lig_feats)
 
         return (
             prot_feats,
