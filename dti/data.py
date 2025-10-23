@@ -509,7 +509,8 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
                 (17, 64, 64),
                 (65, 256, 256),
                 (257, 1024, 1024),
-                (1025, float("inf"), 2048),
+                (1025, 2048, 2048),
+                (2049, float("inf"), 4096),
             ]
         else:
             self.bucket_specs = bucket_specs
@@ -553,25 +554,16 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
     def _create_batch_definitions(self):
         """
         Sorts all valid_sets into buckets and chunks them into
-        batch definitions.
+        batch definitions, scaling by K^2.
         """
         set_sizes = [len(s) for s in self.valid_sets]
 
-        # 1. Sort set indices into buckets
         buckets = [[] for _ in self.bucket_specs]
-        unbucketed_count = 0
         for i, size in enumerate(set_sizes):
-            found = False
             for j, (min_s, max_s, K) in enumerate(self.bucket_specs):
                 if min_s <= size <= max_s:
                     buckets[j].append(i)
-                    found = True
                     break
-            if not found:
-                unbucketed_count += 1
-
-        if unbucketed_count > 0:
-            logger.warning(f"{unbucketed_count} sets did not fit into any bucket.")
 
         self.batch_definitions = []
         for i, bucket_indices in enumerate(buckets):
@@ -580,10 +572,14 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
 
             min_s, max_s, K = self.bucket_specs[i]
 
-            if K == 0:
-                continue  # Avoid division by zero
-            num_assay_sets_per_batch = max(1, self.target_batch_elements // K)
+            # Calculate num_assay_sets based on target ATTENTION load and K^2
+            if K <= 0:
+                continue
+            K_squared = K * K
 
+            num_assay_sets_per_batch = max(1, int(self.target_attn_load // K_squared))
+
+            # Calculate corresponding property sets
             if self.property_set_ratio <= 0.0:
                 num_prop_sets_per_batch = 0
             elif self.property_set_ratio >= 1.0:
@@ -595,14 +591,14 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
                 )
                 num_prop_sets_per_batch = total_sets - num_assay_sets_per_batch
 
+            # Chunk the indices into batches
             for j in range(0, len(bucket_indices), num_assay_sets_per_batch):
                 batch_assay_idcs = bucket_indices[j : j + num_assay_sets_per_batch]
-
                 if not batch_assay_idcs:
                     continue
-
                 actual_num_assay_sets = len(batch_assay_idcs)
 
+                # Re-calculate prop sets for the last partial batch
                 if self.property_set_ratio <= 0.0:
                     actual_num_prop_sets = 0
                 elif self.property_set_ratio >= 1.0:

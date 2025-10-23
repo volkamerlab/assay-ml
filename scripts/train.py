@@ -111,7 +111,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
             mswpds = partial(
                 MultiSetWithPropertiesDataset,
                 shuffle_within_target=False,
-                target_batch_elements=16 * 2048,
+                target_batch_elements=2 * 4096,
                 property_columns=[
                     "mw_freebase",
                     "alogp",
@@ -129,7 +129,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
             )
             mswpds_val = partial(
                 MultiSetWithPropertiesDataset,
-                target_batch_elements=16 * 2048,
+                target_batch_elements=2 * 4096,
                 shuffle_within_target=False,
                 property_set_ratio=0.0,
                 property_columns=[],
