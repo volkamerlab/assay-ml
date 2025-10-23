@@ -509,9 +509,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
                 (17, 64, 64),
                 (65, 256, 256),
                 (257, 1024, 1024),
-                (1025, 2048, 2048),
-                (2049, 4096, 4096),
-                (4097, float("inf"), 8192),
+                (1025, float("inf"), 2048),
             ]
         else:
             self.bucket_specs = bucket_specs
@@ -645,7 +643,6 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             raise IndexError("Dataset index out of range.")
 
         batch_def = self.batch_definitions[idx]
-        logger.debug(f"K: {batch_def['K']} n: {batch_def['num_assay_sets']}")
         batch_assay_indices = batch_def["assay_indices"]
         K = batch_def["K"]
         num_actual_assay_sets = batch_def["num_assay_sets"]
