@@ -609,12 +609,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         return torch.from_numpy(normalized)
 
     def _create_batch_definitions(self):
-        """
-        Sorts all valid_sets into buckets and chunks them into
-        batch definitions, scaling by K^2.
-        """
         set_sizes = [len(s) for s in self.valid_sets]
-
         buckets = [[] for _ in self.bucket_specs]
         for i, size in enumerate(set_sizes):
             for j, (min_s, max_s, K) in enumerate(self.bucket_specs):
@@ -627,51 +622,30 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             if not bucket_indices:
                 continue
 
-            min_s, max_s, K = self.bucket_specs[i]
-
-            # Calculate num_assay_sets based on target ATTENTION load and K^2
-            if K <= 0:
-                continue
+            _, _, K = self.bucket_specs[i]
             K_squared = K * K
 
-            num_assay_sets_per_batch = max(1, int(self.target_attn_load // K_squared))
+            total_sets = max(1, int(self.target_attn_load // K_squared))
 
-            # Calculate corresponding property sets
-            if self.property_set_ratio <= 0.0:
-                num_prop_sets_per_batch = 0
-            elif self.property_set_ratio >= 1.0:
-                num_prop_sets_per_batch = num_assay_sets_per_batch
-                num_assay_sets_per_batch = 0
-            else:
-                total_sets = int(
-                    num_assay_sets_per_batch / (1.0 - self.property_set_ratio)
-                )
-                num_prop_sets_per_batch = total_sets - num_assay_sets_per_batch
+            num_prop_sets = int(total_sets * self.property_set_ratio)
+            num_assay_sets = total_sets - num_prop_sets
 
-            # Chunk the indices into batches
-            for j in range(0, len(bucket_indices), num_assay_sets_per_batch):
-                batch_assay_idcs = bucket_indices[j : j + num_assay_sets_per_batch]
+            for j in range(0, len(bucket_indices), num_assay_sets):
+                batch_assay_idcs = bucket_indices[j : j + num_assay_sets]
                 if not batch_assay_idcs:
                     continue
-                actual_num_assay_sets = len(batch_assay_idcs)
 
-                # Re-calculate prop sets for the last partial batch
-                if self.property_set_ratio <= 0.0:
-                    actual_num_prop_sets = 0
-                elif self.property_set_ratio >= 1.0:
-                    actual_num_prop_sets = num_prop_sets_per_batch
-                else:
-                    total_sets = int(
-                        actual_num_assay_sets / (1.0 - self.property_set_ratio)
-                    )
-                    actual_num_prop_sets = total_sets - actual_num_assay_sets
+                actual_total = int(
+                    len(batch_assay_idcs) / (1 - self.property_set_ratio)
+                )
+                actual_prop_sets = max(0, actual_total - len(batch_assay_idcs))
 
                 self.batch_definitions.append(
                     {
                         "assay_indices": batch_assay_idcs,
                         "K": K,
-                        "num_assay_sets": actual_num_assay_sets,
-                        "num_property_sets": actual_num_prop_sets,
+                        "num_assay_sets": len(batch_assay_idcs),
+                        "num_property_sets": actual_prop_sets,
                     }
                 )
 
