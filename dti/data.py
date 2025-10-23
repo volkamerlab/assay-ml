@@ -558,7 +558,6 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
 
     def _compute_all_fingerprints(self):
         """Pre-compute fingerprints for all molecules, parallelized over unique SMILES."""
-        from concurrent.futures import ThreadPoolExecutor, as_completed
         import os
 
         logger.info("Pre-computing fingerprints for all molecules...")
@@ -571,33 +570,16 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             f"(out of {len(self.data)} total molecules)..."
         )
 
-        # Parallel computation for unique SMILES
-        def compute_fp(smi):
-            fp = self.mol_featurizer.compute(smi, use_cache=True)
-            if fp is None:
-                fp = np.zeros(self.mol_featurizer.dim, dtype=np.float32)
-            return smi, fp
+        unique_fps = self.mol_featurizer.compute_parallel(
+            unique_smiles, n_jobs=16, use_cache=False
+        )
 
         smiles_to_fp = {}
-        max_workers = 16
+        for smi, fp in zip(unique_smiles, unique_fps):
+            if fp is None:
+                fp = np.zeros(self.mol_featurizer.dim, dtype=np.float32)
+            smiles_to_fp[smi] = fp
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(compute_fp, smi): smi for smi in unique_smiles}
-
-            for future in as_completed(futures):
-                try:
-                    smi, fp = future.result()
-                    smiles_to_fp[smi] = fp
-                except Exception as e:
-                    smi = futures[future]
-                    logger.warning(
-                        f"Failed to compute fingerprint for SMILES {smi}: {e}"
-                    )
-                    smiles_to_fp[smi] = np.zeros(
-                        self.mol_featurizer.dim, dtype=np.float32
-                    )
-
-        # Map back to original data order
         fps = []
         for i in range(len(self.data)):
             smi = smiles_series.iloc[i]

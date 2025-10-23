@@ -173,6 +173,14 @@ class MolFingerprint(StrEnum):
 
         return result
 
+    def compute_parallel(self, smiles: Iterable[str], n_jobs: int = 16, **kwargs):
+        if self is MolFingerprint.CHEMBERTA:
+            logger.warning("Parallel compute not supported for ChemBERTa")
+            return [self.compute(s, **kwargs) for s in tqdm.tqdm(smiles)]
+
+        with Pool(n_jobs) as p:
+            return p.map(functools.partial(self.compute, **kwargs), tqdm.tqdm(smiles))
+
 
 @functools.cache
 def _get_tokenizer_and_model(model_name: str) -> Tuple[object, object]:
