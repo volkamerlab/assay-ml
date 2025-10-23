@@ -123,7 +123,7 @@ class MolFingerprint(StrEnum):
         else:
             return 2048
 
-    @functools.lru_cache(maxsize=10_000)
+    @functools.cache
     def compute(self, smi: str, target: str = "numpy", use_cache: bool = True):
         """Compute or load fingerprint for a single SMILES."""
         if self is MolFingerprint.CHEMBERTA:

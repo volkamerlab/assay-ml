@@ -26,7 +26,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-_act = ReLU
+_act = SiLU
 
 
 class MolecularModel(nn.Module):
@@ -418,7 +418,7 @@ def _mlp(
     hidden_size: int,
     output_size: int,
     hidden_layers: int,
-    act=ReLU,
+    act=_act,
     dropout: float = 0.0,
 ) -> Module:
     if hidden_layers == 0:
