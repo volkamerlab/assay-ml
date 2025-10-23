@@ -482,8 +482,8 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         target: str,
         info_cols: list[str],
         property_columns: list[str],
-        batch_size: int = 32,
-        fixed_set_size: int = 128,
+        target_batch_elements: int = 64 * 256,
+        bucket_specs: list[tuple[int, int, int]] = None,
         property_set_ratio: float = 0.5,
         noise_std: float = 0.1,
         property_set_size_range: tuple[int, int] = (32, 256),
@@ -498,24 +498,36 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             **kwargs,
         )
 
-        self.batch_size = batch_size
-        self.fixed_set_size = fixed_set_size
         self.property_set_ratio = property_set_ratio
         self.noise_std = noise_std
         self.min_prop_set_size, self.max_prop_set_size = property_set_size_range
+        self.target_batch_elements = target_batch_elements
+
+        if bucket_specs is None:
+            self.bucket_specs = [
+                (0, 16, 16),
+                (17, 64, 64),
+                (65, 256, 256),
+                (257, 1024, 1024),
+                (1025, 2048, 2048),
+                (2049, 4096, 4096),
+                (4097, float("inf"), 8192),
+            ]
+        else:
+            self.bucket_specs = bucket_specs
 
         self.property_columns = [p for p in property_columns if p in data.columns]
         self.normalized_properties = self._normalize_properties()
 
-        self.num_property_sets = int(self.batch_size * self.property_set_ratio)
-        self.num_assay_sets = self.batch_size - self.num_property_sets
+        # This list will hold all pre-computed batch definitions for one epoch
+        self.batch_definitions = []
 
-        self.assay_idcs = np.arange(len(self.valid_sets))
-        self._shuffle_assays()
+        self._create_batch_definitions()
+        self._shuffle_batches()  # Initial shuffle
 
         logger.info(
-            f"dataset batch composition: {self.num_assay_sets} assay sets, "
-            f"{self.num_property_sets} prop sets (ratio={property_set_ratio})"
+            f"Created {len(self.batch_definitions)} batches from "
+            f"{len(self.valid_sets)} sets, using {len(self.bucket_specs)} buckets."
         )
 
     # override
@@ -524,7 +536,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
 
     # override
     def _make_batches(self):
-        pass
+        self._shuffle_batches()
 
     def _normalize_properties(self) -> torch.Tensor:
         if not self.property_columns:
@@ -540,30 +552,110 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         logger.info(f"Normalized {len(self.property_columns)} properties.")
         return torch.from_numpy(normalized)
 
-    def _shuffle_assays(self):
-        self.random.shuffle(self.assay_idcs)
+    def _create_batch_definitions(self):
+        """
+        Sorts all valid_sets into buckets and chunks them into
+        batch definitions.
+        """
+        set_sizes = [len(s) for s in self.valid_sets]
+
+        # 1. Sort set indices into buckets
+        buckets = [[] for _ in self.bucket_specs]
+        unbucketed_count = 0
+        for i, size in enumerate(set_sizes):
+            found = False
+            for j, (min_s, max_s, K) in enumerate(self.bucket_specs):
+                if min_s <= size <= max_s:
+                    buckets[j].append(i)
+                    found = True
+                    break
+            if not found:
+                unbucketed_count += 1
+
+        if unbucketed_count > 0:
+            logger.warning(f"{unbucketed_count} sets did not fit into any bucket.")
+
+        self.batch_definitions = []
+        for i, bucket_indices in enumerate(buckets):
+            if not bucket_indices:
+                continue
+
+            min_s, max_s, K = self.bucket_specs[i]
+
+            if K == 0:
+                continue  # Avoid division by zero
+            num_assay_sets_per_batch = max(1, self.target_batch_elements // K)
+
+            if self.property_set_ratio <= 0.0:
+                num_prop_sets_per_batch = 0
+            elif self.property_set_ratio >= 1.0:
+                num_prop_sets_per_batch = num_assay_sets_per_batch
+                num_assay_sets_per_batch = 0
+            else:
+                total_sets = int(
+                    num_assay_sets_per_batch / (1.0 - self.property_set_ratio)
+                )
+                num_prop_sets_per_batch = total_sets - num_assay_sets_per_batch
+
+            for j in range(0, len(bucket_indices), num_assay_sets_per_batch):
+                batch_assay_idcs = bucket_indices[j : j + num_assay_sets_per_batch]
+
+                if not batch_assay_idcs:
+                    continue
+
+                actual_num_assay_sets = len(batch_assay_idcs)
+
+                if self.property_set_ratio <= 0.0:
+                    actual_num_prop_sets = 0
+                elif self.property_set_ratio >= 1.0:
+                    actual_num_prop_sets = num_prop_sets_per_batch
+                else:
+                    total_sets = int(
+                        actual_num_assay_sets / (1.0 - self.property_set_ratio)
+                    )
+                    actual_num_prop_sets = total_sets - actual_num_assay_sets
+
+                self.batch_definitions.append(
+                    {
+                        "assay_indices": batch_assay_idcs,
+                        "K": K,
+                        "num_assay_sets": actual_num_assay_sets,
+                        "num_property_sets": actual_num_prop_sets,
+                    }
+                )
+
+    def _shuffle_batches(self):
+        """Shuffles the order of pre-computed batches."""
+        self.random.shuffle(self.batch_definitions)
 
     def __len__(self) -> int:
-        if self.num_assay_sets == 0:
-            return 100
-        return int(np.ceil(len(self.valid_sets) / self.num_assay_sets))
+        """Returns the total number of batches in one epoch."""
+        return len(self.batch_definitions)
 
     def __getitem__(self, idx: int) -> tuple:
-        start = idx * self.num_assay_sets
-        end = start + self.num_assay_sets
+        """
+        Fetches the pre-defined batch at index `idx`.
 
-        if end > len(self.assay_idcs):
-            self._shuffle_assays()
-            start = 0
-            end = self.num_assay_sets
+        Note: The DataLoader should be used with `shuffle=True` to shuffle
+        the batches each epoch. This dataset's internal shuffling
+        only happens once at init.
+        """
+        if idx >= len(self):
+            # This case should ideally be handled by the DataLoader's sampler
+            raise IndexError("Dataset index out of range.")
 
-        batch_assay_indices = self.assay_idcs[start:end]
+        batch_def = self.batch_definitions[idx]
+        logger.debug(f"K: {batch_def['K']} n: {batch_def['num_assay_sets']}")
+        batch_assay_indices = batch_def["assay_indices"]
+        K = batch_def["K"]
+        num_actual_assay_sets = batch_def["num_assay_sets"]
+        num_property_sets = batch_def["num_property_sets"]
+
         current_batch_sets = [self.valid_sets[i] for i in batch_assay_indices]
-        num_actual_assay_sets = len(current_batch_sets)
 
-        if self.num_property_sets > 0 and self.property_columns:
+        if num_property_sets > 0 and self.property_columns:
             num_total_datapoints = len(self.data)
-            for _ in range(self.num_property_sets):
+            for _ in range(num_property_sets):
                 psize = self.random.integers(
                     self.min_prop_set_size, self.max_prop_set_size + 1
                 )
@@ -573,28 +665,35 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
                 current_batch_sets.append(prop_indices)
 
         num_sets = len(current_batch_sets)
-        K = self.fixed_set_size
+        if num_sets == 0:
+            return (
+                torch.tensor([]),
+                torch.tensor([]),
+                torch.tensor([]),
+                torch.tensor([]),
+                {},
+            )
 
         all_idcs_padded = torch.zeros((num_sets, K), dtype=torch.long)
         all_labels_padded = torch.zeros((num_sets, K), dtype=torch.float32)
-        attention_mask = torch.ones((num_sets, K), dtype=torch.bool)
+        attention_mask = torch.ones((num_sets, K), dtype=torch.bool)  # True = MASKED
 
         for i, set_indices in enumerate(current_batch_sets):
             set_size = len(set_indices)
             if set_size == 0:
                 continue
 
-            final_indices = (
-                self.random.choice(set_indices, size=K, replace=False)
-                if set_size > K
-                else set_indices
-            )
-            effective_size = len(final_indices)
+            if set_size > K:
+                final_indices = self.random.choice(set_indices, size=K, replace=False)
+                effective_size = K
+            else:
+                final_indices = set_indices
+                effective_size = set_size
 
             all_idcs_padded[i, :effective_size] = torch.from_numpy(
-                final_indices.astype(np.int64)
+                np.array(final_indices, dtype=np.int64)
             )
-            attention_mask[i, :effective_size] = False
+            attention_mask[i, :effective_size] = False  # False = NOT MASKED
 
             if i < num_actual_assay_sets:
                 all_labels_padded[i, :effective_size] = self.labels[final_indices]
@@ -606,7 +705,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
                 all_labels_padded[i, :effective_size] = linear_comb + noise
 
         prot_feats = (
-            torch.ones(1)
+            torch.ones(1)  # Stub
             if self.protein_features is None
             else self.protein_features[all_idcs_padded]
         )

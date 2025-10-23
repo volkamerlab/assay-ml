@@ -44,10 +44,10 @@ from dti.featurization import MolFingerprint
 from dti.training import (
     AssayRankAccuracy,
     train_and_evaluate_model,
-    train_and_evaluate_pfn_model,
     batch_pair_loss,
     corr_loss,
 )
+from dti.pfn_training import train_and_evaluate_pfn_model
 from dti.utils import (
     Method,
     device,
@@ -111,8 +111,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
             mswpds = partial(
                 MultiSetWithPropertiesDataset,
                 shuffle_within_target=False,
-                batch_size=384,
-                fixed_set_size=256,
+                target_batch_elements=64 * 2048,
                 property_columns=[
                     "mw_freebase",
                     "alogp",
@@ -130,8 +129,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
             )
             mswpds_val = partial(
                 MultiSetWithPropertiesDataset,
-                batch_size=160,
-                fixed_set_size=1024,
+                target_batch_elements=64 * 2048,
                 shuffle_within_target=False,
                 property_set_ratio=0.0,
                 property_columns=[],
