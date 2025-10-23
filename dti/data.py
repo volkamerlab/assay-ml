@@ -476,19 +476,31 @@ class MultiSetActivityDataset(ActivityDataset):
 
 
 class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
+    """
+    Implements bucketing, scaling batch size by K^2 to keep
+    total attention load (num_sets * K^2) constant.
+    """
+
     def __init__(
         self,
         data: pd.DataFrame,
         target: str,
         info_cols: list[str],
         property_columns: list[str],
-        target_batch_elements: int = 64 * 256,
+        target_attn_load: int = 16 * (128**2),
         bucket_specs: list[tuple[int, int, int]] = None,
         property_set_ratio: float = 0.5,
         noise_std: float = 0.1,
         property_set_size_range: tuple[int, int] = (32, 256),
         **kwargs,
     ):
+        """
+        Args:
+            target_attn_load: The target number of elements in the
+                attention matrix (num_sets * K^2). This is used to
+                dynamically calculate the number of sets per batch.
+            bucket_specs: List of (min_size, max_size, K) tuples.
+        """
         kwargs["shuffle_within_target"] = False
         kwargs["inter_assay"] = False
         super().__init__(
@@ -501,7 +513,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self.property_set_ratio = property_set_ratio
         self.noise_std = noise_std
         self.min_prop_set_size, self.max_prop_set_size = property_set_size_range
-        self.target_batch_elements = target_batch_elements
+        self.target_attn_load = target_attn_load  # *** STORED ***
 
         if bucket_specs is None:
             self.bucket_specs = [
@@ -509,8 +521,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
                 (17, 64, 64),
                 (65, 256, 256),
                 (257, 1024, 1024),
-                (1025, 2048, 2048),
-                (2049, float("inf"), 4096),
+                (1025, float("inf"), 2048),
             ]
         else:
             self.bucket_specs = bucket_specs
@@ -518,15 +529,14 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self.property_columns = [p for p in property_columns if p in data.columns]
         self.normalized_properties = self._normalize_properties()
 
-        # This list will hold all pre-computed batch definitions for one epoch
         self.batch_definitions = []
-
         self._create_batch_definitions()
-        self._shuffle_batches()  # Initial shuffle
+        self._shuffle_batches()
 
         logger.info(
             f"Created {len(self.batch_definitions)} batches from "
             f"{len(self.valid_sets)} sets, using {len(self.bucket_specs)} buckets."
+            f" Target attention load: {self.target_attn_load}"
         )
 
     # override

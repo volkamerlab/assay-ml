@@ -108,10 +108,11 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
     shuffled_multiset = partial(msa, inter_assay=True)
     match method:
         case Method.PFN if mol_only:
+            load_tgt = 16 * (128**2)
             mswpds = partial(
                 MultiSetWithPropertiesDataset,
                 shuffle_within_target=False,
-                target_batch_elements=2 * 4096,
+                target_attn_load=load_tgt,
                 property_columns=[
                     "mw_freebase",
                     "alogp",
@@ -129,7 +130,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
             )
             mswpds_val = partial(
                 MultiSetWithPropertiesDataset,
-                target_batch_elements=2 * 4096,
+                target_attn_load=load_tgt,
                 shuffle_within_target=False,
                 property_set_ratio=0.0,
                 property_columns=[],
