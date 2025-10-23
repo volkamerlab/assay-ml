@@ -66,6 +66,7 @@ def _normalize_sets_minmax(labels, sample_mask, padding_mask, clip_range=None):
 
 
 def _generate_mask_for_sets(padding_mask, mask_fraction):
+    logger.debug(padding_mask.shape)
     num_sets, k = padding_mask.shape
     set_sizes = k - padding_mask.sum(1)
     sample_mask = torch.zeros_like(padding_mask, device=device).bool()
@@ -108,11 +109,11 @@ def train_with_batched_masked_sets(
         info,
         metadata,
     ) in enumerate(pbar := tqdm.tqdm(loader, desc="training")):
-        padding_mask = metadata["attention_mask"].squeeze().to(device)
+        padding_mask = metadata["attention_mask"].to(device)
 
-        ligand_features = ligand_features.squeeze().to(device, non_blocking=True)
-        protein_features = protein_features.squeeze().to(device, non_blocking=True)
-        labels = labels.squeeze().to(device, non_blocking=True)
+        ligand_features = ligand_features.to(device, non_blocking=True)
+        protein_features = protein_features.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
         batch_size = labels.size(0)
 
         sample_mask = _generate_mask_for_sets(padding_mask, mask_fraction)
@@ -204,11 +205,11 @@ def evaluate_with_batched_masked_sets(
     ) in enumerate(
         pbar := tqdm.tqdm(loader, desc="testing" if save_preds else "evaluating")
     ):
-        padding_mask = metadata["attention_mask"].squeeze().to(device)
-        info = info.squeeze().to(device, non_blocking=True)
-        ligand_features = ligand_features.squeeze().to(device, non_blocking=True)
-        protein_features = protein_features.squeeze().to(device, non_blocking=True)
-        labels = labels.squeeze().to(device, non_blocking=True)
+        padding_mask = metadata["attention_mask"].to(device)
+        info = info.to(device, non_blocking=True)
+        ligand_features = ligand_features.to(device, non_blocking=True)
+        protein_features = protein_features.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
         batch_size = labels.size(0)
 
         sample_mask = info[:, :, 0].bool()
