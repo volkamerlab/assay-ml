@@ -111,8 +111,8 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
             mswpds = partial(
                 MultiSetWithPropertiesDataset,
                 shuffle_within_target=False,
-                batch_size=32,
-                fixed_set_size=32,
+                batch_size=384,
+                fixed_set_size=256,
                 property_columns=[
                     "mw_freebase",
                     "alogp",
@@ -130,8 +130,8 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
             )
             mswpds_val = partial(
                 MultiSetWithPropertiesDataset,
-                batch_size=32,
-                fixed_set_size=32,
+                batch_size=160,
+                fixed_set_size=1024,
                 shuffle_within_target=False,
                 property_set_ratio=0.0,
                 property_columns=[],
@@ -257,20 +257,20 @@ def prepare_dataset_splits(
         train_dataset,
         batch_size=train_batch(method, batch_size),
         shuffle=True,
-        num_workers=0,
+        num_workers=16,
         drop_last=method.on_pairs,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=test_batch(method, batch_size),
         shuffle=False,
-        num_workers=0,
+        num_workers=16,
     )
     test_loader = DataLoader(
         test_dataset,
         batch_size=test_batch(method, batch_size),
         shuffle=False,
-        num_workers=0,
+        num_workers=16,
     )
 
     return (

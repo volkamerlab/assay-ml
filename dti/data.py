@@ -32,16 +32,6 @@ logger = logging.getLogger(__name__)
 
 
 class ActivityDataset(Dataset):
-    """Dataset class for molecular activity data with protein and ligand features.
-
-    Args:
-        data (pd.DataFrame): DataFrame containing activity data.
-        target (str): Column name for target values. Defaults to ACT.
-        info_cols (List[str]): Column names to include as information. Defaults to [].
-        model_name (str): Name of the protein language model. Defaults to "esm2_t33_650M_UR50D".
-        n_jobs (int): Number of parallel jobs for fingerprint computation. Defaults to 16.
-    """
-
     def __init__(
         self,
         data: pd.DataFrame,
@@ -53,8 +43,25 @@ class ActivityDataset(Dataset):
     ):
         super().__init__()
         logger.info(f"creating dataset of size {len(data)}")
-        # for line in str(data.dtypes).split("\n"):
-        #     logger.debug(line)
+        logger.info("computing protein features")
+        self.data = data.reset_index(drop=True)
+        self.mol_featurizer = mol_featurizer
+        self._compute_fingerprints(mol_featurizer, data)
+        self.protein_features = esm2_features(data, model_name=model_name)
+        self.labels = torch.tensor(
+            self.data[target].values, dtype=torch.float32, device="cpu"
+        )
+        missing_info_cols = [c for c in info_cols if c not in data.columns]
+        if len(missing_info_cols) > 0:
+            logger.warn(f"missing info cols: {missing_info_cols}")
+            info_cols = [c for c in info_cols if c not in missing_info_cols]
+        logger.info(f"info cols: {info_cols}")
+        self.info_cols = info_cols
+        self.info = torch.tensor(
+            self.data[info_cols].values.astype(np.int64), device="cpu"
+        )
+
+    def _compute_fingerprints(self, mol_featurizer, data):
         logger.info("computing fingerprints")
         fps = mol_featurizer.compute_parallel(data[SMILES].values)
         mask = [fp is not None for fp in fps]
@@ -70,54 +77,28 @@ class ActivityDataset(Dataset):
             dtype=torch.float32,
             device="cpu",
         )
-        self.protein_features = esm2_features(data, model_name=model_name)
-        self.labels = torch.tensor(
-            self.data[target].values, dtype=torch.float32, device="cpu"
-        )
-        missing_info_cols = [c for c in info_cols if c not in data.columns]
-        if len(missing_info_cols) > 0:
-            logger.warn(f"missing info cols: {missing_info_cols}")
-            info_cols = [c for c in info_cols if c not in missing_info_cols]
-        logger.info(f"info cols: {info_cols}")
-        self.info_cols = info_cols
-        self.info = torch.tensor(
-            self.data[info_cols].values.astype(np.int64), device="cpu"
-        )
 
     @functools.cached_property
     def weights(self):
-        """Get sample weights for the dataset.
-
-        Returns:
-            torch.Tensor: Uniform weights for all samples.
-        """
         return torch.ones(len(self.labels)).to(device)
 
     def __len__(self):
-        """Get the number of samples in the dataset.
-
-        Returns:
-            int: Number of samples.
-        """
         return len(self.labels)
 
     def __getitem__(self, idx):
-        """Get a sample from the dataset.
-
-        Args:
-            idx (int): Index of the sample.
-
-        Returns:
-            tuple: Protein features, ligand features, label, and info for the sample.
-        """
         prot_feats = (
             torch.ones(1).to(device)
             if self.protein_features is None
             else self.protein_features[idx]
         )
+        smi = self.data[SMILES].iloc[idx]
+        fp = self.mol_featurizer.compute(smi, use_cache=True)
+        if fp is None:
+            fp = np.zeros(self.mol_featurizer.dim, dtype=np.float32)
+        ligand_fp = torch.tensor(fp, dtype=torch.float32)
         return (
             prot_feats,
-            self.ligand_features[idx],
+            ligand_fp,
             self.labels[idx],
             self.info[idx],
             torch.ones(1).to(device),
@@ -495,29 +476,6 @@ class MultiSetActivityDataset(ActivityDataset):
 
 
 class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
-    """
-    An efficient, on-the-fly dataset for mixing assay sets with dynamically
-    generated property sets.
-
-    This class avoids pre-computation of batches. Instead, it generates each batch
-    dynamically in `__getitem__`, significantly speeding up initialization and
-    reducing memory overhead.
-
-    Args:
-        data (pd.DataFrame): The input dataframe containing features, labels, and assay IDs.
-        target (str): The name of the column containing the activity labels.
-        info_cols (List[str]): Columns to be used as informational features.
-        property_columns (List[str]): Columns for physicochemical properties to be used for
-                                    dynamic target generation.
-        batch_size (int): The total number of sets (assay + property) in each batch.
-        fixed_set_size (int): The fixed size for each set tensor. Larger sets are
-                              subsampled, and smaller sets are padded.
-        property_set_ratio (float): The target ratio of property sets in each batch.
-        noise_std (float): The standard deviation of Gaussian noise added to property targets.
-        property_set_size_range (tuple[int, int]): The min and max size for randomly
-                                                   generated property sets.
-    """
-
     def __init__(
         self,
         data: pd.DataFrame,
@@ -553,18 +511,22 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self.num_assay_sets = self.batch_size - self.num_property_sets
 
         self.assay_idcs = np.arange(len(self.valid_sets))
-        self._shuffle_assays()  # Initial shuffle for the first epoch
+        self._shuffle_assays()
 
         logger.info(
             f"dataset batch composition: {self.num_assay_sets} assay sets, "
             f"{self.num_property_sets} prop sets (ratio={property_set_ratio})"
         )
 
+    # override
+    def _compute_fingerprints(self, _mf, _data):
+        pass
+
+    # override
     def _make_batches(self):
         pass
 
     def _normalize_properties(self) -> torch.Tensor:
-        """Normalizes property columns once and stores them as a tensor."""
         if not self.property_columns:
             logger.warning("No valid property columns found for normalization.")
             return torch.tensor([])
@@ -572,29 +534,25 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         properties = self.data[self.property_columns].values.astype(np.float32)
         mean = np.nanmean(properties, axis=0)
         std = np.nanstd(properties, axis=0)
-        std[std < 1e-8] = 1.0  # Avoid division by zero
-
+        std[std < 1e-8] = 1.0
         normalized = (properties - mean) / std
-        normalized = np.nan_to_num(normalized)  # Replace any remaining NaNs with 0
-
+        normalized = np.nan_to_num(normalized)
         logger.info(f"Normalized {len(self.property_columns)} properties.")
         return torch.from_numpy(normalized)
 
     def _shuffle_assays(self):
-        """Shuffles the order of assay sets for a new epoch."""
         self.random.shuffle(self.assay_idcs)
 
     def __len__(self) -> int:
-        """Defines the number of batches available in one epoch."""
         if self.num_assay_sets == 0:
-            return 100  # Arbitrary number of batches if no assay sets are used
+            return 100
         return int(np.ceil(len(self.valid_sets) / self.num_assay_sets))
 
     def __getitem__(self, idx: int) -> tuple:
         start = idx * self.num_assay_sets
         end = start + self.num_assay_sets
 
-        if end > len(self.assay_idcs):  # Reshuffle for next epoch
+        if end > len(self.assay_idcs):
             self._shuffle_assays()
             start = 0
             end = self.num_assay_sets
@@ -643,7 +601,6 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             else:
                 prop_values = self.normalized_properties[final_indices]
                 coeffs = torch.randn(len(self.property_columns))
-
                 linear_comb = torch.matmul(prop_values, coeffs)
                 noise = torch.randn(effective_size) * self.noise_std
                 all_labels_padded[i, :effective_size] = linear_comb + noise
@@ -654,9 +611,21 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             else self.protein_features[all_idcs_padded]
         )
 
+        lig_feats = []
+        for row in all_idcs_padded:
+            fps = []
+            for j in row:
+                smi = self.data[SMILES].iloc[j.item()]
+                fp = self.mol_featurizer.compute(smi, use_cache=True)
+                if fp is None:
+                    fp = np.zeros(self.mol_featurizer.dim, dtype=np.float32)
+                fps.append(fp)
+            lig_feats.append(torch.tensor(np.stack(fps), dtype=torch.float32))
+        lig_feats = torch.stack(lig_feats)
+
         return (
             prot_feats,
-            self.ligand_features[all_idcs_padded],
+            lig_feats,
             all_labels_padded,
             self.info[all_idcs_padded],
             {"attention_mask": attention_mask, "num_sets": num_sets},
