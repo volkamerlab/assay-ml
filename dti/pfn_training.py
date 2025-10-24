@@ -36,7 +36,7 @@ _defaults = dict(
     training_loss=nn.MSELoss(),
     cosine_agg=True,
     normalize_training_batches=False,
-    lr=1e-4,
+    lr=5e-5,
     fisher_transform=True,
 )
 
