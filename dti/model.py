@@ -266,7 +266,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         ligand_input_size: int,
         n_bins: int = 20,
         hidden_channels: int = 512,
-        p_dropout: float = 0.05,
+        p_dropout: float = 0.0,
         num_heads: int = 8,
         smoothing: bool = True,
         **kwargs,
@@ -279,7 +279,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         )
         self.n_bins = n_bins
         self.bin_dist = BinDistribution(
-            n_bins=n_bins, tail_mode="dirac", normalization="minmax"
+            n_bins=n_bins, tail_mode="none", normalization="minmax"
         )
         self.distribution_encoder = _mlp(
             input_size=self.n_bins,
@@ -339,9 +339,8 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         x_dist = self.distribution_encoder(dist_onehot)
         attn_mask = make_attn_mask(sample_mask, self.num_heads)
         sample_mask = sample_mask.float().unsqueeze(-1)
-        x_dist = (1 - sample_mask) * x_dist + sample_mask * self.default_dist_emb.view(
-            1, 1, -1
-        )
+        x_def_dist = self.default_dist_emb.view(1, 1, -1)
+        x_dist = (1 - sample_mask) * x_dist + sample_mask * x_def_dist
         x = self.combine_repr(torch.cat((x_ligand, x_dist), -1))
         h = self.set_transformer(x, attn_mask=attn_mask, key_padding_mask=padding_mask)
         logits = self.output(h)

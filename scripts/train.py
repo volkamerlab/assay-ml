@@ -109,16 +109,16 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
     match method:
         case Method.PFN if mol_only:
             load_tgt = 16 * (128**2)
+            buckets = [
+                (0, 128, 128),
+                (129, 1024, 1024),
+                (1025, float("inf"), 4096),
+            ]
             mswpds = partial(
                 MultiSetWithPropertiesDataset,
                 shuffle_within_target=False,
                 target_attn_load=load_tgt,
-                bucket_specs=[
-                    (0, 16, 16),
-                    (17, 64, 64),
-                    (65, 256, 256),
-                    (257, float("inf"), 1024),
-                ],
+                bucket_specs=buckets,
                 property_columns=[
                     "mw_freebase",
                     "alogp",
@@ -140,13 +140,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
                 shuffle_within_target=False,
                 property_set_ratio=0.0,
                 property_columns=[],
-                bucket_specs=[
-                    (0, 16, 16),
-                    (17, 64, 64),
-                    (65, 256, 256),
-                    (257, 1024, 1024),
-                    (1025, float("inf"), 2048),
-                ],
+                bucket_specs=buckets,
             )
             return MoleculeBayesianSetRankModel, mswpds, mswpds_val
         case Method.PFN:
@@ -361,7 +355,7 @@ def run_split(
         patience_lr=10 if train_short else 100,
         fisher_transform=method not in [Method.IC50SETS, Method.IC50ALLSETS],
         unmasked_weight=unmasked_weight,
-        n_bins=12,
+        n_bins=10,
         smoothing=False,
     )
     if model_cls in [ComplexBayesianSetRankModel, MoleculeBayesianSetRankModel]:
@@ -402,6 +396,9 @@ def main():
         default=0.5,
         help="[PFN] Proportion of physiochemical property sets during training. (default: 0.5)",
     )
+    # parser.add_argument(
+    #     "--n_bins", type=int, default=100, help="[PFN] Number of bins in posterior"
+    # )
 
     args = parser.parse_args()
 
