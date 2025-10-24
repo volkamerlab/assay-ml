@@ -493,6 +493,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         noise_std: float = 0.1,
         property_set_size_range: tuple[int, int] = (32, 256),
         precompute_fingerprints: bool = True,
+        fp_cache_file: Path | None = None,
         **kwargs,
     ):
         """
@@ -517,6 +518,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self.min_prop_set_size, self.max_prop_set_size = property_set_size_range
         self.target_attn_load = target_attn_load
         self.precompute_fingerprints = precompute_fingerprints
+        self.fp_cache_file = fp_cache_file
 
         if bucket_specs is None:
             self.bucket_specs = [
@@ -559,16 +561,22 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
     def _compute_all_fingerprints(self):
         """Pre-compute fingerprints for all molecules, parallelized over unique SMILES."""
         import os
+        import torch
+        import numpy as np
 
         logger.info("Pre-computing fingerprints for all molecules...")
 
-        # Get unique SMILES and their indices
         smiles_series = self.data[SMILES]
         unique_smiles = smiles_series.unique()
         logger.info(
             f"Computing fingerprints for {len(unique_smiles)} unique SMILES "
             f"(out of {len(self.data)} total molecules)..."
         )
+
+        if self.fp_cache_file is not None and os.path.exists(self.fp_cache_file):
+            logger.info(f"loading fingerprints from {self.fp_cache_file}")
+            self.precomputed_fps = torch.load(self.fp_cache_file, map_location="cpu")
+            return
 
         unique_fps = self.mol_featurizer.compute_parallel(
             unique_smiles, n_jobs=16, use_cache=False
@@ -580,19 +588,19 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
                 fp = np.zeros(self.mol_featurizer.dim, dtype=np.float32)
             smiles_to_fp[smi] = fp
 
-        fps = []
-        for i in range(len(self.data)):
-            smi = smiles_series.iloc[i]
-            fps.append(
-                smiles_to_fp.get(
-                    smi, np.zeros(self.mol_featurizer.dim, dtype=np.float32)
-                )
-            )
+        fps = [
+            smiles_to_fp.get(smi, np.zeros(self.mol_featurizer.dim, dtype=np.float32))
+            for smi in smiles_series
+        ]
 
         self.precomputed_fps = torch.tensor(np.stack(fps), dtype=torch.float32)
         logger.info(
             f"Pre-computed {len(fps)} fingerprints from {len(unique_smiles)} unique SMILES."
         )
+
+        if self.fp_cache_file is not None:
+            torch.save(self.precomputed_fps, self.fp_cache_file)
+            logger.info(f"save fingerprints to {self.fp_cache_file}.")
 
     def _normalize_properties(self) -> torch.Tensor:
         if not self.property_columns:

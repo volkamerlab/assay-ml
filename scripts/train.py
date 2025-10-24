@@ -233,9 +233,6 @@ def prepare_dataset_splits(
     elif need_data:
         data = load_data()
 
-    train_dataset_path = data_dir / str(fold) / "train.pt"
-    val_dataset_path = data_dir / str(fold) / "val.pt"
-    test_dataset_path = data_dir / str(fold) / "test.pt"
     train_data, val_data, test_data = load_split(
         fold,
         data_dir,
@@ -253,9 +250,24 @@ def prepare_dataset_splits(
     train_data_kwargs = dict(val_data_kwargs)
     train_data_kwargs["property_set_ratio"] = property_set_ratio
 
-    val_dataset = val_dataset_cls(val_data, target=test_target, **val_data_kwargs)
-    test_dataset = val_dataset_cls(test_data, target=test_target, **val_data_kwargs)
-    train_dataset = dataset_cls(train_data, target=train_target, **train_data_kwargs)
+    val_dataset = val_dataset_cls(
+        val_data,
+        target=test_target,
+        fp_cache_file=data_dir / str(fold) / "train.pt",
+        **val_data_kwargs,
+    )
+    test_dataset = val_dataset_cls(
+        test_data,
+        target=test_target,
+        fp_cache_file=data_dir / str(fold) / "val.pt",
+        **val_data_kwargs,
+    )
+    train_dataset = dataset_cls(
+        train_data,
+        target=train_target,
+        fp_cache_file=data_dir / str(fold) / "test.pt",
+        **train_data_kwargs,
+    )
 
     assert len(train_dataset) > 0
 
