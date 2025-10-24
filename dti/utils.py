@@ -1,4 +1,7 @@
 from typing import Union
+import uuid
+import re
+import os
 import functools
 import subprocess
 import time
@@ -335,3 +338,21 @@ def read_predictions(
         df["coldtgt"] = parts[-1] == "coldtgt"
         predictions.append(df)
     return pd.concat(predictions)
+
+
+def get_condor_job_id():
+    job_ad_path = os.getenv("_CONDOR_JOB_AD")
+    if job_ad_path and os.path.exists(job_ad_path):
+        with open(job_ad_path) as f:
+            text = f.read()
+        cluster = re.search(r"(?m)^ClusterId\s*=\s*(\d+)", text)
+        proc = re.search(r"(?m)^ProcId\s*=\s*(\d+)", text)
+        if cluster and proc:
+            return f"{cluster.group(1)}.{proc.group(1)}"
+
+    starter_pid = os.getenv("CONDOR_STARTER_PID")
+    if starter_pid:
+        return f"starter{starter_pid}"
+
+    # fallback if nothing else found
+    return uuid.uuid4().hex[:4]

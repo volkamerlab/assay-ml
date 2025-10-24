@@ -1,7 +1,6 @@
 import argparse
 import logging
 import traceback
-import uuid
 import sys
 from functools import partial
 from typing import Tuple, Callable
@@ -54,6 +53,7 @@ from dti.utils import (
     init_logging,
     set_random_seeds,
     save_code_snapshot,
+    get_condor_job_id,
 )
 from dti.constants import ACT, DATA, ASSAY, COMPOUND, HODGE, INTRA_ASSAY_TEST, IDENT
 
@@ -108,12 +108,12 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
     shuffled_multiset = partial(msa, inter_assay=True)
     match method:
         case Method.PFN if mol_only:
-            load_tgt = 16 * (128**2)
             buckets = [
                 (0, 128, 128),
                 (129, 1024, 1024),
                 (1025, float("inf"), 4096),
             ]
+            load_tgt = 128 * (256**2)
             mswpds = partial(
                 MultiSetWithPropertiesDataset,
                 shuffle_within_target=False,
@@ -259,12 +259,13 @@ def prepare_dataset_splits(
 
     assert len(train_dataset) > 0
 
+    num_workers = 2
     train_loader = DataLoader(
         train_dataset,
         batch_size=None,
         collate_fn=lambda x: x,
         shuffle=True,
-        num_workers=8,
+        num_workers=num_workers,
         drop_last=method.on_pairs,
     )
     val_loader = DataLoader(
@@ -272,14 +273,14 @@ def prepare_dataset_splits(
         batch_size=None,
         collate_fn=lambda x: x,
         shuffle=False,
-        num_workers=8,
+        num_workers=num_workers,
     )
     test_loader = DataLoader(
         test_dataset,
         batch_size=None,
         collate_fn=lambda x: x,
         shuffle=False,
-        num_workers=8,
+        num_workers=num_workers,
     )
 
     return (
@@ -352,11 +353,12 @@ def run_split(
         num_epochs=num_epochs,
         training_loss=training_loss,
         patience_termination=10 if train_short else 1000,
-        patience_lr=10 if train_short else 100,
+        patience_lr=5 if train_short else 100,
         fisher_transform=method not in [Method.IC50SETS, Method.IC50ALLSETS],
         unmasked_weight=unmasked_weight,
-        n_bins=10,
+        n_bins=100,
         smoothing=False,
+        dropout_p=0.01,
     )
     if model_cls in [ComplexBayesianSetRankModel, MoleculeBayesianSetRankModel]:
         train_and_evaluate_pfn_model(*args, **kwargs)
@@ -408,7 +410,7 @@ def main():
 
     run_name = "_".join(
         map(
-            str, [dataset_name, mol_feat, args.fold, repr(method), uuid.uuid4().hex[:4]]
+            str, [dataset_name, mol_feat, args.fold, repr(method), get_condor_job_id()]
         )
     )
     init_logging(run_name)
