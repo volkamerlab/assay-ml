@@ -257,11 +257,11 @@ def evaluate_with_batched_masked_sets(
             del wass_dists, pred_mean, true_centers, masked_preds, masked_normed
 
         if save_preds:
-            all_info.append(info.cpu())
-            all_labels.append(labels.cpu())
-            all_normed.append(normed_labels.cpu())
-            all_masks.append(sample_mask.cpu())
-            all_probs.append(torch.softmax(preds, dim=-1).cpu())
+            all_info.append(info.unsqueeze(0).cpu())
+            all_labels.append(labels.unsqueeze(0).cpu())
+            all_normed.append(normed_labels.unsqueeze(0).cpu())
+            all_masks.append(sample_mask.unsqueeze(0).cpu())
+            all_probs.append(torch.unsqueeze(0).softmax(preds, dim=-1).cpu())
 
         del preds
 
@@ -284,10 +284,7 @@ def evaluate_with_batched_masked_sets(
             "probs": torch.cat(all_probs).numpy(),
         }
 
-        def save_async():
-            np.savez_compressed(predictions_file, **data_to_save)
-
-        Thread(target=save_async, daemon=False).start()
+        np.savez_compressed(predictions_file, **data_to_save)
 
     return {"nll": avg_loss, "wasserstein": avg_wass, "mae": avg_mae}
 
