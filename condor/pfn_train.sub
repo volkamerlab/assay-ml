@@ -1,18 +1,20 @@
 universe = docker
 docker_image = astral/uv:debian
 executable = run_pfn_training.sh
-arguments = $(script) $(seed) $(dataset) $(method) $(fold) $(mol_feat) $(unmasked_weight) $(physchem)
+arguments = $(script) $(seed) $(dataset) $(method) $(fold) $(mol_feat) $(unmasked_weight) $(physchem) $(n_bins)
 output = logs/pfn_train.$(ClusterId).$(ProcId).out
 error = logs/pfn_train.$(ClusterId).$(ProcId).err
 log = logs/pfn_train.$(ClusterId).$(ProcId).log
 should_transfer_files   = YES
 when_to_transfer_output = ON_EXIT
 request_GPUs = 1
-request_CPUs = 16
+request_CPUs = 8
 request_memory = 400GB
 requirements = UidDomain == "cs.uni-saarland.de"
 +WantGPUHomeMounted = true
 +WantScratchMounted = true
-queue fold, script, seed, dataset, method, mol_feat, unmasked_weight, physchem from (
-    0, scripts/train.py, 0, chembl, pfn, morgan, 0.0, 0.25
+queue fold, script, seed, dataset, method, mol_feat, unmasked_weight, physchem, n_bins from (
+    0, scripts/train.py, 0, chembl, pfn, morgan, 0.0, 0.25, 1000
+    0, scripts/train.py, 0, chembl, pfn, morgan, 0.0, 0.25, 100
+    0, scripts/train.py, 0, chembl, pfn, morgan, 0.0, 0.25, 10
 )

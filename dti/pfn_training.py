@@ -316,7 +316,7 @@ def train_and_evaluate_pfn_model(
 
     optimizer = torch.optim.Adam(model.parameters(), lr=opts["lr"])
     scheduler = ReduceLROnPlateau(
-        optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
+        optimizer, mode="max", factor=0.75, patience=opts["patience_lr"]
     )
 
     best_loss = float("inf")
@@ -343,6 +343,7 @@ def train_and_evaluate_pfn_model(
         logger.info(f" val masked NLL: {val_results['nll']:.4e}")
         logger.info(f" val masked EMD: {val_results['wasserstein']:.4e}")
         logger.info(f" val masked MAE: {val_results['mae']:.4e}")
+        logger.info(f" learning rate: {lr:.2e}")
 
         optimization.append(Epoch(epoch, lr, train_loss, val_loss))
         pd.DataFrame(optimization).to_csv(

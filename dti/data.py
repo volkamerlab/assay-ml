@@ -2,8 +2,9 @@ from collections.abc import Iterator, Iterable
 import functools
 import logging
 from pathlib import Path
+import os
+import json
 
-import tqdm.auto as tqdm
 import pandas as pd
 import numpy as np
 
@@ -559,52 +560,97 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self._shuffle_batches()
 
     def _compute_all_fingerprints(self):
-        """Pre-compute fingerprints for all molecules, parallelized over unique SMILES."""
-        import os
-        import torch
-        import numpy as np
-
-        logger.info("Pre-computing fingerprints for all molecules...")
+        logger.info("pre-computing fingerprints...")
 
         smiles_series = self.data[SMILES]
         unique_smiles = smiles_series.unique()
-        logger.info(
-            f"Computing fingerprints for {len(unique_smiles)} unique SMILES "
-            f"(out of {len(self.data)} total molecules)..."
-        )
+        n_mols = len(self.data)
+        fp_dim = self.mol_featurizer.dim
+        meta_file = f"{self.fp_cache_file}.meta.json" if self.fp_cache_file else None
+
+        logger.info(f"computing fingerprints for {len(unique_smiles)} unique SMILES")
 
         if self.fp_cache_file is not None and os.path.exists(self.fp_cache_file):
-            logger.info(f"loading fingerprints from {self.fp_cache_file}")
-            self.precomputed_fps = torch.load(self.fp_cache_file, map_location="cpu")
-            return
+            try:
+                if meta_file and os.path.exists(meta_file):
+                    with open(meta_file, "r") as f:
+                        meta = json.load(f)
+                    cached_shape = tuple(meta.get("shape", ()))
+                    cached_dtype = meta.get("dtype", "float32")
+                    cached_type = meta.get("type", "")
+                else:
+                    cached_shape = ()
+                    cached_dtype = "float32"
+                    cached_type = ""
+
+                expected_shape = (n_mols, fp_dim)
+                expected_size = np.prod(expected_shape)
+                file_size = (
+                    os.path.getsize(self.fp_cache_file)
+                    // np.dtype(cached_dtype).itemsize
+                )
+
+                if (
+                    file_size == expected_size
+                    and cached_shape == expected_shape
+                    and cached_type == str(self.mol_featurizer)
+                ):
+                    logger.info(f"loading fingerprints from {self.fp_cache_file}...")
+                    arr = np.fromfile(self.fp_cache_file, dtype=cached_dtype).reshape(
+                        expected_shape
+                    )
+                    self.precomputed_fps = torch.from_numpy(arr.astype(np.float32))
+                    logger.info(
+                        f"loaded fingerprints {tuple(self.precomputed_fps.shape)}."
+                    )
+                    return
+                else:
+                    logger.warning(
+                        f"cache mismatch: expected shape {expected_shape}, found {cached_shape or '(unknown)'}; "
+                        "recomputing fingerprints..."
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"failed to load fingerprint cache ({e}), recomputing..."
+                )
 
         unique_fps = self.mol_featurizer.compute_parallel(
             unique_smiles, n_jobs=16, use_cache=False
         )
 
-        smiles_to_fp = {}
-        for smi, fp in zip(unique_smiles, unique_fps):
-            if fp is None:
-                fp = np.zeros(self.mol_featurizer.dim, dtype=np.float32)
-            smiles_to_fp[smi] = fp
+        smiles_to_fp = {
+            smi: fp if fp is not None else np.zeros(fp_dim, dtype=np.float32)
+            for smi, fp in zip(unique_smiles, unique_fps)
+        }
 
-        fps = [
-            smiles_to_fp.get(smi, np.zeros(self.mol_featurizer.dim, dtype=np.float32))
-            for smi in smiles_series
-        ]
+        fps = np.stack(
+            [
+                smiles_to_fp.get(smi, np.zeros(fp_dim, dtype=np.float32))
+                for smi in smiles_series
+            ]
+        )
 
-        self.precomputed_fps = torch.tensor(np.stack(fps), dtype=torch.float32)
+        self.precomputed_fps = torch.from_numpy(fps).float()
         logger.info(
             f"Pre-computed {len(fps)} fingerprints from {len(unique_smiles)} unique SMILES."
         )
 
         if self.fp_cache_file is not None:
-            torch.save(self.precomputed_fps, self.fp_cache_file)
-            logger.info(f"save fingerprints to {self.fp_cache_file}.")
+            fps.astype(np.float32).tofile(self.fp_cache_file)
+            meta = {
+                "shape": list(fps.shape),
+                "dtype": "float32",
+                "type": str(self.mol_featurizer),
+            }
+            with open(meta_file, "w") as f:
+                json.dump(meta, f)
+            logger.info(
+                f"saved fingerprints to {self.fp_cache_file} with metadata."
+            )
 
     def _normalize_properties(self) -> torch.Tensor:
         if not self.property_columns:
-            logger.warning("No valid property columns found for normalization.")
+            logger.warning("no valid property columns found for normalization.")
             return torch.tensor([])
 
         properties = self.data[self.property_columns].values.astype(np.float32)

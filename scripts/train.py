@@ -1,7 +1,9 @@
+import os
 import argparse
 import logging
 import traceback
 import sys
+from pathlib import Path
 from functools import partial
 from typing import Tuple, Callable
 
@@ -102,7 +104,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
     msa = partial(
         MultiSetActivityDataset,
         max_batch_datapoints=4096,
-        max_set_size=1000,
+        max_set_size=100,
         shuffle_within_target=(method != Method.PFN),
     )
     shuffled_multiset = partial(msa, inter_assay=True)
@@ -113,7 +115,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
                 (129, 1024, 1024),
                 (1025, float("inf"), 4096),
             ]
-            load_tgt = 128 * (256**2)
+            load_tgt = 160 * (256**2)
             mswpds = partial(
                 MultiSetWithPropertiesDataset,
                 shuffle_within_target=False,
@@ -249,29 +251,31 @@ def prepare_dataset_splits(
 
     train_data_kwargs = dict(val_data_kwargs)
     train_data_kwargs["property_set_ratio"] = property_set_ratio
+    cache_root = Path(os.getenv("FP_CACHE_DIR", DATA / "processed")) / dataset_name / str(fold)
+    cache_root.mkdir(parents=True, exist_ok=True)
 
     val_dataset = val_dataset_cls(
         val_data,
         target=test_target,
-        fp_cache_file=data_dir / str(fold) / "train.pt",
+        fp_cache_file=cache_root / "val.npy",
         **val_data_kwargs,
     )
     test_dataset = val_dataset_cls(
         test_data,
         target=test_target,
-        fp_cache_file=data_dir / str(fold) / "val.pt",
+        fp_cache_file=cache_root / "test.npy",
         **val_data_kwargs,
     )
     train_dataset = dataset_cls(
         train_data,
         target=train_target,
-        fp_cache_file=data_dir / str(fold) / "test.pt",
+        fp_cache_file=cache_root / "train.npy",
         **train_data_kwargs,
     )
 
     assert len(train_dataset) > 0
 
-    num_workers = 2
+    num_workers = 0
     train_loader = DataLoader(
         train_dataset,
         batch_size=None,
@@ -314,6 +318,7 @@ def run_split(
     seed: int,
     unmasked_weight: float,
     property_set_ratio: float,
+    n_bins: int,
 ):
     batch_size = 512
     num_epochs = 50_000  # early stopping in place
@@ -364,11 +369,11 @@ def run_split(
         batch_size=batch_size,
         num_epochs=num_epochs,
         training_loss=training_loss,
-        patience_termination=10 if train_short else 1000,
-        patience_lr=5 if train_short else 100,
+        patience_termination=30 if train_short else 1000,
+        patience_lr=10 if train_short else 100,
         fisher_transform=method not in [Method.IC50SETS, Method.IC50ALLSETS],
         unmasked_weight=unmasked_weight,
-        n_bins=100,
+        n_bins=n_bins,
         smoothing=False,
         dropout_p=0.01,
     )
@@ -410,9 +415,9 @@ def main():
         default=0.5,
         help="[PFN] Proportion of physiochemical property sets during training. (default: 0.5)",
     )
-    # parser.add_argument(
-    #     "--n_bins", type=int, default=100, help="[PFN] Number of bins in posterior"
-    # )
+    parser.add_argument(
+        "--n_bins", type=int, default=100, help="[PFN] Number of bins in posterior"
+    )
 
     args = parser.parse_args()
 
@@ -421,9 +426,7 @@ def main():
     mol_feat = args.mol_feat.lower()
 
     run_name = "_".join(
-        map(
-            str, [dataset_name, mol_feat, args.fold, repr(method), get_condor_job_id()]
-        )
+        map(str, [dataset_name, mol_feat, args.fold, repr(method), get_condor_job_id()])
     )
     init_logging(run_name)
     logger = logging.getLogger(run_name)
@@ -443,6 +446,7 @@ def main():
         args.seed,
         args.unmasked_weight,
         args.property_set_ratio,
+        args.n_bins,
     )
 
 
