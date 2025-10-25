@@ -644,9 +644,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             }
             with open(meta_file, "w") as f:
                 json.dump(meta, f)
-            logger.info(
-                f"saved fingerprints to {self.fp_cache_file} with metadata."
-            )
+            logger.info(f"saved fingerprints to {self.fp_cache_file} with metadata.")
 
     def _normalize_properties(self) -> torch.Tensor:
         if not self.property_columns:
