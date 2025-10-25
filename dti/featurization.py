@@ -2,7 +2,6 @@ import os
 import uuid
 import hashlib
 import pickle
-import tempfile
 import logging
 import functools
 import numpy as np
@@ -19,7 +18,6 @@ from esm import FastaBatchedDataset, pretrained
 from rdkit import Chem, DataStructs
 from rdkit.Chem import rdFingerprintGenerator, MACCSkeys
 from transformers import AutoTokenizer, AutoModel
-import portalocker
 
 from .constants import DATA, TID, SEQUENCE
 from .utils import device

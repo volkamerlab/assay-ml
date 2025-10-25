@@ -1,23 +1,19 @@
 from typing import Literal
 
 import torch
-from torch import Tensor, tensor, randn
+from torch import Tensor
 from torch.nn import (
     Dropout,
     Parameter,
     LayerNorm,
     Linear,
     Module,
-    ReLU,
     Sequential,
-    ModuleList,
 )
 from torch.nn import MultiheadAttention as MHA
 from torch import nn
-from torch.nn import SiLU, ReLU, LeakyReLU, BatchNorm1d
-import torch.nn.functional as F
+from torch.nn import SiLU, BatchNorm1d
 
-import pytest
 
 from .utils import device
 from .bin_distribution import BinDistribution
