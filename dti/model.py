@@ -279,7 +279,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         )
         self.distribution_encoder = _mlp(
             input_size=self.n_bins,
-            hidden_size=self.n_bins * 2,
+            hidden_size=hidden_channels,
             output_size=hidden_channels,
             hidden_layers=1,
         )
@@ -287,7 +287,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             input_size=ligand_input_size,
             hidden_size=hidden_channels,
             output_size=hidden_channels,
-            hidden_layers=4,
+            hidden_layers=1,
             dropout=p_dropout,
         )
         self.num_heads = num_heads
@@ -571,18 +571,20 @@ class ISAB(nn.Module):
         if need_weights:
             raise NotImplementedError("Returning weights not supported by ISAB.")
 
-        h = self.mab1(
-            self.ind_points,
+        B = x.size(0)
+        I = self.ind_points.expand(B, -1, -1)
+        H = self.mab1(
+            I,
             x,
-            attn_mask=attn_mask,
+            attn_mask=None,
             key_padding_mask=key_padding_mask,
             need_weights=False,
         )
         out = self.mab2(
             x,
-            h,
-            attn_mask=attn_mask,
-            key_padding_mask=key_padding_mask,
+            H,
+            attn_mask=None,
+            key_padding_mask=None,  # K=H has no padding
             need_weights=False,
         )
         return out
@@ -623,20 +625,24 @@ class SetTransformer(nn.Module):
         def maybe_norm(block):
             return PreNorm(hidden_channels, block) if prenorm else block
 
-        self.blocks = nn.ModuleList(
-            [
-                maybe_norm(
-                    BlockType(
-                        hidden_channels,
-                        num_heads,
-                        ffn_hidden_layers,
-                        dropout=dropout,
-                        num_inducing_points=16,
-                    )
+        self.blocks = nn.ModuleList()
+        for _ in range(num_blocks):
+            if BlockType == ISAB:
+                block = ISAB(
+                    hidden_channels,
+                    num_heads,
+                    ffn_hidden_layers,
+                    dropout=dropout,
+                    num_inducing_points=16,
                 )
-                for _ in range(num_blocks)
-            ]
-        )
+            else:
+                block = SAB(
+                    hidden_channels,
+                    num_heads,
+                    ffn_hidden_layers,
+                    dropout=dropout,
+                )
+            self.blocks.append(maybe_norm(block))
 
     def forward(
         self,
@@ -646,27 +652,10 @@ class SetTransformer(nn.Module):
         set_ids: torch.Tensor | None = None,
         need_intermediate_activations: bool = False,
     ) -> torch.Tensor:
-        if self.layer_type == "induced":
-            if set_ids is None:
-                raise ValueError("set_ids must be provided for induced SetTransformer")
-            set_ids = set_ids.squeeze()
-            result = torch.empty(
-                (len(x), self.hidden_channels),
-                dtype=x.dtype,
-                device=device,
-            )
-            for ident in torch.unique(set_ids):
-                idx = (set_ids == ident).nonzero(as_tuple=True)[0]
-                x_ident = x.index_select(0, idx)
-                for block in self.blocks:
-                    x_ident = block(x_ident, attn_mask, key_padding_mask)
-                result.index_copy_(0, idx, x_ident)
-            return result
+        for block in self.blocks:
+            x = block(x, attn_mask=attn_mask, key_padding_mask=key_padding_mask)
 
-        else:  # full
-            for block in self.blocks:
-                x = block(x, attn_mask, key_padding_mask)
-            return x
+        return x
 
 
 def make_block_diag_mask(set_ids: torch.Tensor, num_heads: int = None) -> torch.Tensor:
