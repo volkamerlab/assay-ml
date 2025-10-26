@@ -38,6 +38,7 @@ class BinDistribution(nn.Module):
             f"and '{self.normalization}' normalization"
         )
 
+        self.width_scaling = False
         if self.tail_mode == "dirac":
             edges = torch.linspace(0.0, 1.0, n_bins - 1, device=device)
             edges = torch.cat([edges[:1], edges, edges[-1:]])  # duplicates 0 and 1
@@ -51,6 +52,9 @@ class BinDistribution(nn.Module):
     def fit(self, loader, max_samples: int = 1_000_000):
         if self.normalization == "minmax":
             return
+
+        # no longer equidistant (dirac weight the same)
+        self.width_scaling = True
 
         all_normed_values = []
 
@@ -156,8 +160,9 @@ class BinDistribution(nn.Module):
     def log_prob(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
         bucket_idcs = self.labels(y)
         bucket_log_ps = F.log_softmax(logits, dim=-1)
-        scaled_log_ps = bucket_log_ps - torch.log(self.widths.clamp_min(1e-8))
-        log_ps = scaled_log_ps.gather(-1, bucket_idcs.unsqueeze(-1)).squeeze(-1)
+        if self.width_scaling:
+            bucket_log_ps = bucket_log_ps - torch.log(self.widths.clamp_min(1e-8))
+        log_ps = bucket_log_ps.gather(-1, bucket_idcs.unsqueeze(-1)).squeeze(-1)
 
         if self.tail_mode == "exp" and self._side_normals is not None:
             left_mask = bucket_idcs == 0
