@@ -5,7 +5,12 @@ import pandas as pd
 import numpy as np
 import torch
 from torch import nn
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import (
+    ReduceLROnPlateau,
+    LinearLR,
+    CosineAnnealingLR,
+    ChainedScheduler,
+)
 from torch.utils.data import DataLoader
 import logging
 from functools import namedtuple
@@ -305,9 +310,15 @@ def train_and_evaluate_pfn_model(
     with open(OUTPUT / run_name / "bin_dist", "w") as f_bins:
         f_bins.write(f"{','.join([str(x.item()) for x in model.bin_dist.edges])}")
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=opts["lr"])
-    scheduler = ReduceLROnPlateau(
-        optimizer, mode="max", factor=0.75, patience=opts["patience_lr"]
+    initial_lr = 1e-6
+    optimizer = torch.optim.Adam(model.parameters(), lr=initial_lr)
+
+    scheduler = ChainedScheduler(
+        [
+            LinearLR(optimizer, start_factor=0.1, total_iters=10),
+            CosineAnnealingLR(optimizer, T_max=200),
+        ],
+        optimizer=optimizer,
     )
 
     best_loss = float("inf")
