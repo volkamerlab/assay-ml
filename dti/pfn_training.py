@@ -38,25 +38,28 @@ _defaults = dict(
 
 
 def _normalize_sets_minmax(labels, sample_mask, padding_mask, clip_range=None):
-    num_sets, K = sample_mask.shape
-    normed_labels = torch.zeros_like(labels, device=device)
+    num_sets, set_size = labels.shape
 
-    for i in range(num_sets):
-        set_labels = labels[i]
-        unmasked = set_labels[~sample_mask[i] & ~padding_mask[i]]
+    context_mask = ~sample_mask & ~padding_mask
 
-        if unmasked.numel() < 2:
-            continue
+    labels_masked = labels.clone()
+    labels_masked[~context_mask] = float("inf")
+    min_vals, _ = labels_masked.min(dim=1, keepdim=True)
+    labels_masked = labels.clone()
+    labels_masked[~context_mask] = float("-inf")
+    max_vals, _ = labels_masked.max(dim=1, keepdim=True)
 
-        min_val = unmasked.min()
-        max_val = unmasked.max()
-        range_val = (max_val - min_val).clamp_min(1e-6)
-        normed = (set_labels[~padding_mask[i]] - min_val) / range_val
+    range_vals = (max_vals - min_vals).clamp_min(1e-6)
 
-        if clip_range is not None:
-            normed = normed.clamp(*clip_range)
+    normed_labels = (labels - min_vals) / range_vals
 
-        normed_labels[i][~padding_mask[i]] = normed
+    if clip_range is not None:
+        normed_labels = normed_labels.clamp(*clip_range)
+
+    normed_labels = normed_labels * (~padding_mask).float()
+
+    valid_sets = context_mask.sum(dim=1) >= 2
+    normed_labels[~valid_sets] = 0.0
 
     return normed_labels
 
@@ -148,6 +151,7 @@ def train_with_batched_masked_sets(
 
         optimizer.zero_grad(set_to_none=True)
         batch_loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         loss_value = batch_loss.detach().item()
