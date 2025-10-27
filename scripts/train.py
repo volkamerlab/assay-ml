@@ -12,6 +12,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from scipy.stats import pearsonr
+import yaml
 
 from dti.model import (
     CombinedModel,
@@ -21,7 +22,6 @@ from dti.model import (
     ComplexSetRank,
     MoleculeSetRank,
     MoleculeBayesianSetRankModel,
-    ComplexBayesianSetRankModel,
 )
 from dti.data import (
     ActivityDataset,
@@ -146,7 +146,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
             )
             return MoleculeBayesianSetRankModel, mswpds, mswpds_val
         case Method.PFN:
-            return ComplexBayesianSetRankModel, msa, msa
+            raise NotImplementedError
         case Method.PAIRS if mol_only:
             return PairMolecularModel, PairDataset, PairDataset
         case Method.PAIRS:
@@ -251,7 +251,9 @@ def prepare_dataset_splits(
 
     train_data_kwargs = dict(val_data_kwargs)
     train_data_kwargs["property_set_ratio"] = property_set_ratio
-    cache_root = Path(os.getenv("FP_CACHE_DIR", DATA / "processed")) / dataset_name / str(fold)
+    cache_root = (
+        Path(os.getenv("FP_CACHE_DIR", DATA / "processed")) / dataset_name / str(fold)
+    )
     cache_root.mkdir(parents=True, exist_ok=True)
 
     val_dataset = val_dataset_cls(
@@ -377,7 +379,7 @@ def run_split(
         smoothing=False,
         dropout_p=0.01,
     )
-    if model_cls in [ComplexBayesianSetRankModel, MoleculeBayesianSetRankModel]:
+    if model_cls in [MoleculeBayesianSetRankModel]:
         train_and_evaluate_pfn_model(*args, **kwargs)
     else:
         assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
@@ -385,6 +387,19 @@ def run_split(
         train_and_evaluate_model(*args, **kwargs)
 
     logger.info(f"{run_name} finished")
+
+
+def load_config(config_path: str) -> dict:
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+        return config
+    except FileNotFoundError:
+        logger.error(f"Config file not found: {config_path}")
+        sys.exit(1)
+    except yaml.YAMLError as e:
+        logger.error(f"Error parsing YAML file: {config_path}\n{e}")
+        sys.exit(1)
 
 
 def main():
@@ -417,6 +432,9 @@ def main():
     )
     parser.add_argument(
         "--n_bins", type=int, default=100, help="[PFN] Number of bins in posterior"
+    )
+    parser.add_argument(
+        "--config", type=str, default=None, help="Training config file (yaml)"
     )
 
     args = parser.parse_args()

@@ -13,6 +13,7 @@ from torch.nn import (
 from torch.nn import MultiheadAttention as MHA
 from torch import nn
 from torch.nn import SiLU, BatchNorm1d
+from torch.utils.checkpoint import checkpoint
 
 
 from .utils import device
@@ -256,102 +257,6 @@ class SparseBinSmoothing(nn.Module):
         return torch.sparse.mm(self.kernel, x.T).T
 
 
-class MoleculeBayesianSetRankModel(MoleculeSetRank):
-    def __init__(
-        self,
-        ligand_input_size: int,
-        n_bins: int = 20,
-        hidden_channels: int = 512,
-        p_dropout: float = 0.0,
-        num_heads: int = 8,
-        smoothing: bool = True,
-        **kwargs,
-    ):
-        super().__init__(
-            ligand_input_size=ligand_input_size,
-            hidden_channels=hidden_channels,
-            p_dropout=p_dropout,
-            num_heads=num_heads,
-        )
-        self.n_bins = n_bins
-        self.bin_dist = BinDistribution(
-            n_bins=n_bins, tail_mode="dirac", normalization="minmax"
-        )
-        self.distribution_encoder = _mlp(
-            input_size=1,
-            hidden_size=hidden_channels,
-            output_size=hidden_channels,
-            hidden_layers=1,
-        )
-        self.embed_ligand = _mlp(
-            input_size=ligand_input_size,
-            hidden_size=hidden_channels,
-            output_size=hidden_channels,
-            hidden_layers=2,
-            dropout=p_dropout,
-        )
-        self.num_heads = num_heads
-        self.default_dist_emb = Parameter(torch.zeros(hidden_channels, device=device))
-        self.combine_repr = Sequential(
-            Linear(hidden_channels * 2, hidden_channels * 2),
-            _act(),
-            Linear(hidden_channels * 2, hidden_channels),
-        )
-        self.set_transformer = SetTransformer(
-            hidden_channels=hidden_channels,
-            num_heads=self.num_heads,
-            ffn_hidden_layers=2,
-            num_blocks=8,
-            dropout=p_dropout,
-        )
-        self.output = Sequential(
-            Linear(hidden_channels, hidden_channels),
-            _act(),
-            nn.LayerNorm(hidden_channels),
-            Linear(hidden_channels, hidden_channels),
-            _act(),
-            Linear(hidden_channels, n_bins),
-        )
-
-    def forward(
-        self,
-        ligand: Tensor,
-        _protein: Tensor,  # ignored
-        y: Tensor,  # raw regression targets
-        sample_mask: Tensor,  # [n_sets, set_size]
-        padding_mask: Tensor,  # [n_sets, set_size]
-    ) -> Tensor:
-        x_ligand = self.embed_ligand(ligand)
-        x_dist = self.distribution_encoder(y.unsqueeze(-1))
-        attn_mask = make_attn_mask(sample_mask, self.num_heads)
-        sample_mask = sample_mask.float().unsqueeze(-1)
-        x_def_dist = self.default_dist_emb.view(1, 1, -1)
-        x_dist = (1 - sample_mask) * x_dist + sample_mask * x_def_dist
-        x = self.combine_repr(torch.cat((x_ligand, x_dist), -1))
-        h = self.set_transformer(x, attn_mask=attn_mask, key_padding_mask=padding_mask)
-        return self.output(h)
-
-
-def make_attn_mask(sample_mask, num_heads):
-    n_sets, set_size = sample_mask.shape
-    q_mask = sample_mask.unsqueeze(-1)  # [n_sets, set_size, 1]
-    k_mask = sample_mask.unsqueeze(-2)  # [n_sets, 1, set_size]
-
-    mask = torch.zeros(n_sets, set_size, set_size, dtype=torch.bool, device=device)
-
-    # non-query cannot attend to query
-    mask |= (~q_mask) & k_mask
-
-    # query cannot attend to other queries (except itself)
-    same_idx = torch.eye(set_size, dtype=torch.bool, device=device).unsqueeze(0)
-    mask |= q_mask & k_mask & (~same_idx)
-
-    mask = mask.unsqueeze(1).expand(-1, num_heads, -1, -1)
-    mask = mask.reshape(n_sets * num_heads, set_size, set_size)
-
-    return mask
-
-
 class ComplexSetRank(MoleculeSetRank):
     def __init__(
         self,
@@ -397,72 +302,98 @@ class ComplexSetRank(MoleculeSetRank):
         return self.ouput(h).squeeze()
 
 
-def _mlp(
-    input_size: int,
-    hidden_size: int,
-    output_size: int,
-    hidden_layers: int,
-    act=_act,
-    dropout: float = 0.0,
-) -> Module:
-    if hidden_layers == 0:
-        return Linear(input_size, output_size)
-
-    layers = [Linear(input_size, hidden_size), act(), Dropout(dropout)]
-    for _ in range(hidden_layers - 1):
-        layers.extend([Linear(hidden_size, hidden_size), act(), Dropout(dropout)])
-    layers.append(Linear(hidden_size, output_size))
-    return Sequential(*layers)
-
-
-class ComplexBayesianSetRankModel(MoleculeBayesianSetRankModel):
+class MoleculeBayesianSetRankModel(MoleculeSetRank):
     def __init__(
         self,
         ligand_input_size: int,
-        protein_input_size: int,
-        hidden_channels: int,
-        n_bins: int = 10,
+        n_bins: int = 20,
+        hidden_channels: int = 512,
+        p_dropout: float = 0.0,
+        num_heads: int = 8,
+        smoothing: bool = True,
         **kwargs,
     ):
         super().__init__(
-            n_bins=n_bins,
             ligand_input_size=ligand_input_size,
-            protein_input_size=protein_input_size,
-            **kwargs,
+            hidden_channels=hidden_channels,
+            p_dropout=p_dropout,
+            num_heads=num_heads,
         )
-        self.embed_protein = _mlp(
-            input_size=protein_input_size,
+        self.n_bins = n_bins
+        self.bin_dist = BinDistribution(
+            n_bins=n_bins, tail_mode="dirac", normalization="minmax"
+        )
+        self.distribution_encoder = _mlp(
+            input_size=1,
             hidden_size=hidden_channels,
             output_size=hidden_channels,
-            hidden_layers=4,
+            hidden_layers=1,
         )
+        self.embed_ligand = _mlp(
+            input_size=ligand_input_size,
+            hidden_size=hidden_channels,
+            output_size=hidden_channels,
+            hidden_layers=2,
+            dropout=p_dropout,
+        )
+        self.num_heads = num_heads
+        self.default_dist_emb = Parameter(torch.randn(hidden_channels) * 0.02)
         self.combine_repr = Sequential(
-            Linear(hidden_channels * 3, hidden_channels * 3),
+            Linear(hidden_channels * 2, hidden_channels * 2),
             _act(),
-            Linear(hidden_channels * 3, hidden_channels),
+            Dropout(p_dropout),
+            Linear(hidden_channels * 2, hidden_channels),
         )
+        self.set_transformer = SetTransformer(
+            hidden_channels=hidden_channels,
+            num_heads=self.num_heads,
+            ffn_hidden_layers=2,
+            num_blocks=8,
+            dropout=p_dropout,
+        )
+        self.output = Sequential(
+            Linear(hidden_channels, hidden_channels),
+            _act(),
+            Dropout(p_dropout),
+        )
+        self.output_final = Linear(hidden_channels, n_bins)
+        num_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        logger.info(f"Intialized model with approx. {num_params} parameters.")
 
     def forward(
         self,
         ligand: Tensor,
-        protein: Tensor,
-        y: Tensor,
-        sample_mask: Tensor,
-        set_ids: Tensor,
+        _protein: Tensor,  # ignored
+        y: Tensor,  # raw regression targets
+        sample_mask: Tensor,  # [n_sets, set_size]
+        padding_mask: Tensor,  # [n_sets, set_size]
     ) -> Tensor:
-        attn_mask = make_block_diag_mask(set_ids, num_heads=self.num_heads)
-        attn_mask = torch.logical_or(attn_mask, make_asymmetric_mask(sample_mask))
-        sample_mask = sample_mask.float().unsqueeze(1)
         x_ligand = self.embed_ligand(ligand)
-        x_protein = self.embed_protein(protein)
-        class_labels = self.bin_dist.labels(y)
-        dist_onehot = self.bin_dist.dist(class_labels)  # [N, n_bins]
-        x_dist = self.distribution_encoder(dist_onehot)
-        x_dist = (1 - sample_mask) * x_dist + sample_mask * self.default_dist_emb
-        x = self.combine_repr(torch.cat((x_ligand, x_protein, x_dist), 1))
-        h = self.set_transformer(x, attn_mask=attn_mask)
-        logits = self.output(h)
-        return self.smoother(logits)
+        y_input = torch.where(sample_mask.bool(), torch.zeros_like(y), y)
+        x_dist = self.distribution_encoder(y_input.unsqueeze(-1))
+        x_def_dist = self.default_dist_emb.view(1, 1, -1)
+        sample_mask_expanded = sample_mask.unsqueeze(-1).float()
+        x_dist = (1 - sample_mask_expanded) * x_dist + sample_mask_expanded * x_def_dist
+        x = self.combine_repr(torch.cat((x_ligand, x_dist), -1))
+        attn_mask = make_attn_mask(sample_mask, self.num_heads)
+        h = self.set_transformer(x, attn_mask=attn_mask, key_padding_mask=padding_mask)
+        h = h + self.output(h)
+        return self.output_final(h)
+
+
+def make_attn_mask(sample_mask, num_heads):
+    n_sets, set_size = sample_mask.shape
+    q_mask = sample_mask.unsqueeze(-1)  # [n_sets, set_size, 1]
+    k_mask = sample_mask.unsqueeze(-2)  # [n_sets, 1, set_size]
+
+    mask = torch.zeros(n_sets, set_size, set_size, dtype=torch.bool, device=device)
+
+    mask |= q_mask & k_mask
+
+    mask = mask.unsqueeze(1).expand(-1, num_heads, -1, -1)
+    mask = mask.reshape(n_sets * num_heads, set_size, set_size)
+
+    return mask
 
 
 class MAB(Module):
@@ -544,7 +475,7 @@ class ISAB(nn.Module):
         self.ffn_hidden_layers = ffn_hidden_layers
         self.dropout = dropout
 
-        self.ind_points = Parameter(torch.randn(self.m, hidden_channels))
+        self.ind_points = Parameter(torch.randn(self.m, hidden_channels) * 0.02)
 
         self.mab1 = MAB(hidden_channels, num_heads, ffn_hidden_layers, dropout=dropout)
         self.mab2 = MAB(hidden_channels, num_heads, ffn_hidden_layers, dropout=dropout)
@@ -578,14 +509,22 @@ class ISAB(nn.Module):
         return out
 
 
-class PreNorm(nn.Module):
-    def __init__(self, dim, fn):
-        super().__init__()
-        self.norm = nn.LayerNorm(dim)
-        self.fn = fn
+def _mlp(
+    input_size: int,
+    hidden_size: int,
+    output_size: int,
+    hidden_layers: int,
+    act=_act,
+    dropout: float = 0.0,
+) -> Module:
+    if hidden_layers == 0:
+        return Linear(input_size, output_size)
 
-    def forward(self, x, *args, **kwargs):
-        return self.fn(self.norm(x), *args, **kwargs)
+    layers = [Linear(input_size, hidden_size), act(), Dropout(dropout)]
+    for _ in range(hidden_layers - 1):
+        layers.extend([Linear(hidden_size, hidden_size), act(), Dropout(dropout)])
+    layers.append(Linear(hidden_size, output_size))
+    return Sequential(*layers)
 
 
 class SetTransformer(nn.Module):
@@ -598,7 +537,6 @@ class SetTransformer(nn.Module):
         num_seeds: int = 1,
         dropout: float = 0.05,
         layer_type: Literal["full", "induced"] = "full",
-        prenorm: bool = False,
     ):
         super().__init__()
         self.hidden_channels = hidden_channels
@@ -610,6 +548,7 @@ class SetTransformer(nn.Module):
 
         BlockType = SAB if layer_type == "full" else ISAB
 
+        self.pre_ln = nn.LayerNorm(hidden_channels)
         self.blocks = nn.ModuleList()
         for _ in range(num_blocks):
             if BlockType == ISAB:
@@ -637,9 +576,9 @@ class SetTransformer(nn.Module):
         set_ids: torch.Tensor | None = None,
         need_intermediate_activations: bool = False,
     ) -> torch.Tensor:
+        x = self.pre_ln(x)
         for block in self.blocks:
-            x = block(x, attn_mask=attn_mask, key_padding_mask=key_padding_mask)
-
+            x = checkpoint(block, x, attn_mask, key_padding_mask, use_reentrant=False)
         return x
 
 
