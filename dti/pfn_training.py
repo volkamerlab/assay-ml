@@ -310,16 +310,18 @@ def train_and_evaluate_pfn_model(
     with open(OUTPUT / run_name / "bin_dist", "w") as f_bins:
         f_bins.write(f"{','.join([str(x.item()) for x in model.bin_dist.edges])}")
 
-    initial_lr = 1e-6
-    optimizer = torch.optim.Adam(model.parameters(), lr=initial_lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=opts["lr"])
 
-    scheduler = ChainedScheduler(
-        [
-            LinearLR(optimizer, start_factor=0.1, total_iters=10),
-            CosineAnnealingLR(optimizer, T_max=200),
-        ],
-        optimizer=optimizer,
+    scheduler = ReduceLROnPlateau(
+        optimizer, factor=0.5, patience=opts["patience_lr"], min_lr=1e-8
     )
+    # scheduler = ChainedScheduler(
+    #     [
+    #         LinearLR(optimizer, start_factor=0.2, total_iters=10),
+    #         CosineAnnealingLR(optimizer, T_max=200),
+    #     ],
+    #     optimizer=optimizer,
+    # )
 
     best_loss = float("inf")
     epochs_without_improvement = 0
