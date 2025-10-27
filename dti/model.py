@@ -278,7 +278,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             n_bins=n_bins, tail_mode="dirac", normalization="minmax"
         )
         self.distribution_encoder = _mlp(
-            input_size=self.n_bins,
+            input_size=1,
             hidden_size=hidden_channels,
             output_size=hidden_channels,
             hidden_layers=1,
@@ -287,7 +287,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             input_size=ligand_input_size,
             hidden_size=hidden_channels,
             output_size=hidden_channels,
-            hidden_layers=1,
+            hidden_layers=2,
             dropout=p_dropout,
         )
         self.num_heads = num_heads
@@ -312,14 +312,6 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             _act(),
             Linear(hidden_channels, n_bins),
         )
-        self.smoother = (
-            SparseBinSmoothing(
-                self.bin_dist.bucket_centers(), sigma=0.1, max_neighbors=20
-            )
-            if smoothing
-            else nn.Identity(n_bins)
-        )
-        logger.debug(f"Smoothing module: {self.smoother}")
 
     def forward(
         self,
@@ -330,17 +322,14 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         padding_mask: Tensor,  # [n_sets, set_size]
     ) -> Tensor:
         x_ligand = self.embed_ligand(ligand)
-        class_labels = self.bin_dist.labels(y)
-        dist_onehot = self.bin_dist.dist(class_labels)  # [N, n_bins]
-        x_dist = self.distribution_encoder(dist_onehot)
+        x_dist = self.distribution_encoder(y.unsqueeze(-1))
         attn_mask = make_attn_mask(sample_mask, self.num_heads)
         sample_mask = sample_mask.float().unsqueeze(-1)
         x_def_dist = self.default_dist_emb.view(1, 1, -1)
         x_dist = (1 - sample_mask) * x_dist + sample_mask * x_def_dist
         x = self.combine_repr(torch.cat((x_ligand, x_dist), -1))
         h = self.set_transformer(x, attn_mask=attn_mask, key_padding_mask=padding_mask)
-        logits = self.output(h)
-        return self.smoother(logits)
+        return self.output(h)
 
 
 def make_attn_mask(sample_mask, num_heads):
@@ -491,7 +480,6 @@ class MAB(Module):
         self.ffn_hidden_layers = ffn_hidden_layers
         self.dropout = dropout
         self.attn = MHA(hidden_channels, num_heads, dropout=dropout, batch_first=True)
-        self.dropout = Dropout(dropout)
         self.ffn = _mlp(
             hidden_channels, hidden_channels, hidden_channels, ffn_hidden_layers
         )
@@ -622,9 +610,6 @@ class SetTransformer(nn.Module):
 
         BlockType = SAB if layer_type == "full" else ISAB
 
-        def maybe_norm(block):
-            return PreNorm(hidden_channels, block) if prenorm else block
-
         self.blocks = nn.ModuleList()
         for _ in range(num_blocks):
             if BlockType == ISAB:
@@ -642,7 +627,7 @@ class SetTransformer(nn.Module):
                     ffn_hidden_layers,
                     dropout=dropout,
                 )
-            self.blocks.append(maybe_norm(block))
+            self.blocks.append(block)
 
     def forward(
         self,
