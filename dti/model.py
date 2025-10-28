@@ -223,8 +223,6 @@ class MoleculeSetRank(Module):
         return self.ouput(h).squeeze()
 
 
-
-
 class ComplexSetRank(MoleculeSetRank):
     def __init__(
         self,
@@ -290,10 +288,10 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             n_bins=n_bins, exp_tails=False, normalization="minmax"
         )
         self.distribution_encoder = _mlp(
-            input_size=self.n_bins,
-            hidden_size=self.n_bins * 1,
+            input_size=1,
+            hidden_size=hidden_channels,
             output_size=hidden_channels,
-            hidden_layers=1,
+            hidden_layers=2,
         )
         self.embed_ligand = _mlp(
             input_size=ligand_input_size,
@@ -302,7 +300,9 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             hidden_layers=2,
         )
         self.num_heads = num_heads
-        self.default_dist_emb = Parameter(torch.randn(hidden_channels, device=device) * 0.02)
+        self.default_dist_emb = Parameter(
+            torch.randn(1, 1, hidden_channels, device=device) * 0.02
+        )
         self.combine_repr = Sequential(
             Linear(hidden_channels * 2, hidden_channels * 2),
             SiLU(),
@@ -329,21 +329,27 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         ligand: Tensor,
         _protein: Tensor,  # ignored
         y: Tensor,  # raw regression targets
-        sample_mask: Tensor,
-        set_ids: Tensor,
+        query_mask: Tensor,
+        padding_mask: Tensor,
+        attn_mask: Tensor,
     ) -> Tensor:
-        attn_mask = make_block_diag_mask(set_ids, num_heads=self.num_heads)
-        attn_mask = torch.logical_or(attn_mask, make_asymmetric_mask(sample_mask))
-        sample_mask = sample_mask.float().unsqueeze(1)
+        B, L, _ = ligand.shape
         x_ligand = self.embed_ligand(ligand)
-        class_labels = self.bin_dist.labels(y)
-        dist_onehot = self.bin_dist.dist(class_labels)  # [N, n_bins]
-        x_dist = self.distribution_encoder(dist_onehot)
-        x_dist = (1 - sample_mask) * x_dist + sample_mask * self.default_dist_emb
-        x = self.combine_repr(torch.cat((x_ligand, x_dist), 1))
-        h = self.set_transformer(x, attn_mask=attn_mask)
+
+        x_context = self.distribution_encoder(y.unsqueeze(-1))
+
+        x_context = torch.where(
+            query_mask.unsqueeze(-1),
+            self.default_dist_emb,
+            x_context,
+        )
+        # x_context = torch.nan_to_num(x_context, nan=0.0, posinf=1e6, neginf=-1e6)
+        x = torch.cat((x_ligand, x_context), -1)
+        x = self.combine_repr(x)
+        h = self.set_transformer(x, attn_mask=attn_mask, padding_mask=padding_mask)
         logits = self.output(h)
         return logits
+
 
 def _mlp(
     input_size: int,
@@ -361,8 +367,8 @@ def _mlp(
     return Sequential(*layers)
 
 
-class ComplexBayesianSetRankModel(MoleculeBayesianSetRankModel):
-    ...
+class ComplexBayesianSetRankModel(MoleculeBayesianSetRankModel): ...
+
 
 class MHABlock(Module):
     def __init__(
@@ -377,7 +383,7 @@ class MHABlock(Module):
         self.num_heads = num_heads
         self.ffn_hidden_layers = ffn_hidden_layers
         self.dropout = dropout
-        self.attn = MHA(hidden_channels, num_heads, dropout=dropout)
+        self.attn = MHA(hidden_channels, num_heads, dropout=dropout, batch_first=True)
         self.dropout = Dropout(dropout)
         self.ffn = _mlp(
             hidden_channels, hidden_channels, hidden_channels, ffn_hidden_layers
@@ -391,11 +397,19 @@ class MHABlock(Module):
         x: Tensor,
         y: Tensor | None = None,
         attn_mask: Tensor | None = None,
+        key_padding_mask: Tensor | None = None,
         need_weights: bool = False,
     ) -> Tensor:
         if y is None:
             y = x
-        x_, attn_weights = self.attn(x, y, y, attn_mask=attn_mask, need_weights=True)
+        x_, attn_weights = self.attn(
+            x,
+            y,
+            y,
+            attn_mask=attn_mask,
+            key_padding_mask=key_padding_mask,
+            need_weights=True,
+        )
         x = self.ln2(x + x_)
         x = self.ln3(x + self.ffn(x))
         if need_weights:
@@ -405,9 +419,15 @@ class MHABlock(Module):
 
 class SetAttentionBlock(MHABlock):
     def forward(
-        self, x: Tensor, attn_mask: Tensor | None = None, need_weights: bool = False
+        self,
+        x: Tensor,
+        attn_mask: Tensor | None = None,
+        padding_mask: Tensor | None = None,
+        need_weights: bool = False,
     ) -> Tensor:
-        return super().forward(x, x, attn_mask, need_weights=need_weights)
+        return super().forward(
+            x, x, attn_mask, key_padding_mask=padding_mask, need_weights=need_weights
+        )
 
 
 class SetTransformer(Module):
@@ -443,11 +463,13 @@ class SetTransformer(Module):
         self,
         x: Tensor,
         attn_mask: Tensor | None = None,
+        padding_mask: Tensor | None = None,
     ) -> Tensor:
         if attn_mask is not None and self.layer_type == "induced":
             raise ValueError("Induced attention does not support attention mask")
+        attn_mask = ~attn_mask.repeat_interleave(self.num_heads, dim=0)
         for block in self.blocks:
-            x = block(x, attn_mask)
+            x = block(x, attn_mask=attn_mask, padding_mask=padding_mask)
         return x
 
 

@@ -110,8 +110,8 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
         case Method.PFN if mol_only:
             mswpds = partial(
                 MultiSetWithPropertiesDataset,
-                max_batch_datapoints=2048,
-                max_set_size=1000,
+                max_batch_datapoints=1024,
+                max_set_size=1024,
                 shuffle_within_target=False,
                 property_columns=[
                     "mw_freebase",
@@ -128,7 +128,16 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
                     "np_likeness_score",
                 ],
             )
-            return MoleculeBayesianSetRankModel, mswpds, msa
+            mswpds_val = partial(
+                MultiSetWithPropertiesDataset,
+                max_batch_datapoints=1024,
+                max_set_size=1024,
+                shuffle_within_target=False,
+                query_column=INTRA_ASSAY_TEST,
+                property_columns=[],
+                property_set_ratio=0.0,
+            )
+            return MoleculeBayesianSetRankModel, mswpds, mswpds_val
         case Method.PFN:
             return ComplexBayesianSetRankModel, msa, msa
         case Method.PAIRS if mol_only:
@@ -244,22 +253,28 @@ def prepare_dataset_splits(
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=train_batch(method, batch_size),
+        batch_size=None,
+        batch_sampler=None,
         shuffle=True,
         num_workers=0,
         drop_last=method.on_pairs,
+        collate_fn=lambda x: x,
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=test_batch(method, batch_size),
+        batch_size=None,
+        batch_sampler=None,
         shuffle=False,
         num_workers=0,
+        collate_fn=lambda x: x,
     )
     test_loader = DataLoader(
         test_dataset,
-        batch_size=test_batch(method, batch_size),
+        batch_size=None,
+        batch_sampler=None,
         shuffle=False,
         num_workers=0,
+        collate_fn=lambda x: x,
     )
 
     return (

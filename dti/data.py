@@ -520,6 +520,8 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         data,
         target: str = ...,
         info_cols: list[str] = ...,
+        query_column: str | None = None,
+        query_ratio: float = 0.2,
         property_set_ratio: float = 0.5,
         property_columns: list[str] = None,
         noise_std: float = 0.1,
@@ -527,8 +529,6 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         **kwargs,
     ):
         super().__init__(data, target=target, info_cols=info_cols, **kwargs)
-        logger.info(f"Initializing MultiSetWithPropertiesDataset...")
-
         self._property_set_ratio = property_set_ratio
         self.property_columns = property_columns or []
         self.noise_std = noise_std
@@ -536,6 +536,12 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self.property_tensor = None
         self.common_valid_indices = np.array([])
         self.n_properties = 0
+        if query_column is not None and query_column not in data.columns:
+            raise ValueError(f"invalid query column: {query_column}")
+        self.query_column = query_column
+        self.query_ratio = query_ratio
+        if self.query_column is not None:
+            self.is_query = torch.from_numpy(data[query_column].values).bool()
 
         logger.info(f"Max total datapoints per batch: {max_batch_datapoints}")
         logger.info(f"Property set ratio: {self._property_set_ratio}")
@@ -583,11 +589,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             normalized_props, dtype=torch.float32
         )
 
-    def _create_property_sets(self, num_sets: int) -> tuple:
-        """
-        Dynamically create a batch of property sets.
-        Vectorized to be fast.
-        """
+    def _create_propsets(self, num_sets: int) -> tuple:
         if not self.property_columns or num_sets <= 0 or self.property_tensor is None:
             return [], [], []
 
@@ -598,7 +600,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             max_size = max_available
 
         if max_size < self.min_batch_size:
-            logger.warning(
+            logger.error(
                 "Max available property samples < min_batch_size. No property sets."
             )
             return [], [], []
@@ -613,7 +615,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             self.min_batch_size, max_size + 1, size=num_sets
         )
 
-        property_sets, property_ids, property_coeffs = [], [], []
+        property_sets, property_ids, property_coeffs, property_query = [], [], [], []
         for i in range(num_sets):
             size = set_sizes[i]
             sample_idx = self.random.choice(
@@ -624,8 +626,9 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             property_sets.append(selected_indices)
             property_ids.append(f"prop_{i}")  # Simpler ID
             property_coeffs.append(all_coeffs[i])
+            property_query.append(self.random.choice(selected_indices))
 
-        return property_sets, property_ids, property_coeffs
+        return property_sets, property_ids, property_coeffs, property_query
 
     def _make_batches(self):
         """
@@ -635,28 +638,26 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         if self.inter_assay:
             self._shuffle_data()
 
-        num_assay_sets = len(self.valid_sets)
-        assay_indices = self.random.permutation(num_assay_sets)
+        num_a_sets = len(self.valid_sets)
+        a_indices = self.random.permutation(num_a_sets)
 
         # (indices, set_id, type, coefficients)
-        assay_pool = [
-            (self.valid_sets[i], self.set_ids[i], "assay", None) for i in assay_indices
+        a_pool = [
+            (self.valid_sets[i], self.set_ids[i], "assay", None) for i in a_indices
         ]
 
-        num_property_sets = int(num_assay_sets * self._property_set_ratio)
-        prop_indices, prop_ids, prop_coeffs = self._create_property_sets(
-            num_property_sets
-        )
-        prop_pool = [
-            (prop_indices[i], prop_ids[i], "property", prop_coeffs[i])
-            for i in range(len(prop_indices))
+        num_property_sets = int(num_a_sets * self._property_set_ratio)
+        p_indices, p_ids, p_coeffs = self._create_propsets(num_property_sets)
+        p_pool = [
+            (p_indices[i], p_ids[i], "property", p_coeffs[i])
+            for i in range(len(p_indices))
         ]
 
-        all_sets = assay_pool + prop_pool
+        all_sets = a_pool + p_pool
         self.random.shuffle(all_sets)
         logger.debug(
-            f"Creating batches from {len(assay_pool)} assay sets and "
-            f"{len(prop_pool)} property sets."
+            f"Creating batches from {len(a_pool)} assay sets and "
+            f"{len(p_pool)} property sets."
         )
 
         self.batches = []
@@ -673,10 +674,8 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
                     f"max_batch_datapoints ({self.max_batch_datapoints}). "
                     "Creating a single oversized batch."
                 )
-                # Finalize the current batch if it has anything
                 if current_batch:
                     self.batches.append(current_batch)
-                # Add the oversized set as its own batch
                 self.batches.append([(indices, set_id, set_type, set_coeffs)])
                 current_batch = []
                 current_size = 0
@@ -708,13 +707,15 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         self.used = np.zeros(num_batches, dtype=bool)
 
     @property
+    def determistic_queries(self):
+        return self.query_column is not None
+
+    @property
     def property_set_ratio(self):
-        """The property_set_ratio property."""
         return self._property_set_ratio
 
     @property_set_ratio.setter
     def property_set_ratio(self, value: float):
-        """Re-create batches when the ratio is changed."""
         logger.info(f"Setting property_set_ratio to {value}. Re-creating batches.")
         self._property_set_ratio = value
         self._make_batches()
@@ -760,6 +761,9 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         batch_types = batch_data["types"]
         batch_coeffs = batch_data["coeffs"]
 
+        num_sets = len(batch_sets)
+        max_len = max(len(s) for s in batch_sets)
+
         set_sizes = [len(s) for s in batch_sets]
         cumulative_sizes = np.cumsum([0] + set_sizes)
         total_size = cumulative_sizes[-1]
@@ -779,33 +783,91 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
                 )
             offset += size
 
-        if self.protein_features is None:
-            prot_feats = torch.ones(1, device=device)
-        else:
-            prot_feats = self.protein_features[all_indices].to(device)
+        padding_mask = torch.ones(num_sets, max_len, dtype=torch.bool, device=device)
+        query_mask = torch.zeros(num_sets, max_len, dtype=torch.bool, device=device)
 
-        ligand_feats = self.ligand_features[all_indices].to(device)
-        info = self.info[all_indices]  # Info is usually kept on CPU
+        prot_dim = (
+            1 if self.protein_features is None else self.protein_features.shape[1]
+        )
+        lig_dim = self.ligand_features.shape[1]
 
-        set_ids_tensor = torch.repeat_interleave(
-            torch.arange(len(set_sizes), dtype=torch.long),
-            torch.tensor(set_sizes, dtype=torch.long),
-        ).to(device)
+        prot_feats = torch.zeros(num_sets, max_len, prot_dim, device=device)
+        lig_feats = torch.zeros(num_sets, max_len, lig_dim, device=device)
+        labels = torch.zeros(num_sets, max_len, device=device)
+        info_list = []
 
-        # Return metadata as requested (no types or targets)
-        metadata = {
-            "set_boundaries": cumulative_sizes,
-            "set_ids": batch_ids,
-            "set_ids_tensor": set_ids_tensor,
-            "num_sets": len(batch_sets),
-        }
+        for i, (set_idcs, set_type, coeffs) in enumerate(
+            zip(batch_sets, batch_types, batch_coeffs)
+        ):
+            size = len(set_idcs)
+            padding_mask[i, :size] = False
+
+            if self.protein_features is None:
+                prot_feats[i, :size] = 1.0
+            else:
+                prot_feats[i, :size] = self.protein_features[set_idcs]
+
+            lig_feats[i, :size] = self.ligand_features[set_idcs]
+
+            def random_mask(size):
+                ratio = int(size * self.query_ratio)
+                mask = self.random.choice(np.arange(size), ratio, replace=False)
+                assert len(mask) < size
+                return mask
+
+            if set_type == "assay":
+                labels[i, :size] = self.labels[set_idcs]
+                if self.determistic_queries:
+                    assert not self.is_query[set_idcs].all()
+                    query_mask[i, :size] = self.is_query[set_idcs]
+                else:
+                    query_mask[i, random_mask(size)] = True
+            else:
+                labels[i, :size] = self._compute_linear_combination(set_idcs, coeffs)
+                query_mask[i, random_mask(size)] = True
+
+            info_list.append(self.info[set_idcs])
+
+        assert not (padding_mask & query_mask).any()
+        assert (torch.logical_not(padding_mask | query_mask).sum(1) > 0).all().item(), (
+            torch.logical_not(padding_mask | query_mask).sum(1)
+        )
+
+        B, L = padding_mask.shape
+
+        # Base: only padded positions
+        base = (~padding_mask).unsqueeze(1) & (~padding_mask).unsqueeze(2)  # (B,L,L)
+
+        # Disallow non-query -> query
+        disallow_nonq_to_q = (~query_mask).unsqueeze(2) & query_mask.unsqueeze(1)
+
+        # Disallow query -> query (except self)
+        q_to_q = query_mask.unsqueeze(1) & query_mask.unsqueeze(2)
+        self_mask = torch.eye(L, dtype=torch.bool, device=device).unsqueeze(0)
+        disallow_q_to_q = q_to_q & ~self_mask
+
+        # Combine disallowed positions
+        disallow = disallow_nonq_to_q | disallow_q_to_q
+
+        # Start with base mask (True = mask)
+        attn_mask = ~base | disallow  # (B,L,L)
+
+        # --- Fully vectorized self-attention guarantees ---
+        # Queries always attend to themselves
+        attn_mask = attn_mask & ~(query_mask.unsqueeze(1) & self_mask)
+
+        # Any row fully masked? allow self
+        fully_masked_rows = attn_mask.all(dim=-1)  # (B,L)
+        attn_mask = attn_mask | self_mask
 
         return (
             prot_feats,
-            ligand_feats,
-            all_labels,
-            info,
-            metadata,
+            lig_feats,
+            labels,
+            info_list,
+            query_mask,
+            padding_mask,
+            attn_mask,
         )
 
 
