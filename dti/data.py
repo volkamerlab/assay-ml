@@ -615,7 +615,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             self.min_batch_size, max_size + 1, size=num_sets
         )
 
-        property_sets, property_ids, property_coeffs, property_query = [], [], [], []
+        property_sets, property_ids, property_coeffs = [], [], []
         for i in range(num_sets):
             size = set_sizes[i]
             sample_idx = self.random.choice(
@@ -626,9 +626,8 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             property_sets.append(selected_indices)
             property_ids.append(f"prop_{i}")  # Simpler ID
             property_coeffs.append(all_coeffs[i])
-            property_query.append(self.random.choice(selected_indices))
 
-        return property_sets, property_ids, property_coeffs, property_query
+        return property_sets, property_ids, property_coeffs
 
     def _make_batches(self):
         """
