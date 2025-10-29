@@ -8,7 +8,7 @@ import numpy as np
 
 
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 from sklearn.preprocessing import StandardScaler
 
 from .constants import (
@@ -493,29 +493,13 @@ class MultiSetActivityDataset(ActivityDataset):
         )
 
 
-class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
+class MultiSetMapDataset(MultiSetActivityDataset):
     """
-    Extended dataset that dynamically creates property sets alongside assay sets.
+    Refactored Map-Style Dataset for parallel loading.
 
-    Property sets are created on-the-fly each epoch and packed with assay
-    sets into batches that respect a total attention cost limit (B * L_max^2).
-
-    Args:
-        data (pd.DataFrame): DataFrame containing activity and property data.
-        target (str): Column name for target (assay) values.
-        info_cols (List[str]): Column names to include as information.
-        query_column (str | None): Column name to use for deterministic queries.
-        query_ratio (float): Ratio of items to mask as queries if not deterministic.
-        property_set_ratio (float): Ratio of property sets to assay sets
-            (e.g., 0.5 = one property set for every two assay sets).
-        property_columns (List[str]): List of property column names from data
-            to use for dynamic set creation.
-        noise_std (float): Standard deviation of Gaussian noise to add to
-            property set linear combinations.
-        max_batch_cost (int): The maximum attention cost (B * L_max^2) 
-            allowed in a single batch. A value of ~1-2 million 
-            (e.g., 16 * 256^2) is a reasonable starting point.
-        **kwargs: Additional arguments for MultiSetActivityDataset.
+    This dataset creates a static pool of all assay and property sets
+    at initialization. A custom BatchSampler and collate_fn are
+    required to use this class with a DataLoader.
     """
 
     def __init__(
@@ -528,15 +512,22 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         property_set_ratio: float = 0.5,
         property_columns: list[str] = None,
         noise_std: float = 0.1,
-        max_batch_cost: int = 1_048_576,  # 1M (e.g., 16 * 256^2 or 4 * 512^2)
+        # These max_batch... params are no longer used here
+        max_batch_cost: int = None,
+        max_batch_datapoints: int = None,
         **kwargs,
     ):
         super().__init__(data, target=target, info_cols=info_cols, **kwargs)
         self._property_set_ratio = property_set_ratio
         self.property_columns = property_columns or []
         self.noise_std = noise_std
-        
-        self.max_batch_cost = max_batch_cost
+
+        if max_batch_cost is not None or max_batch_datapoints is not None:
+            logger.warning(
+                "'max_batch_cost' and 'max_batch_datapoints' are no longer "
+                "arguments for the Dataset. Pass 'max_batch_cost' to "
+                "the 'CostBasedBatchSampler' instead."
+            )
 
         self.property_tensor = None
         self.common_valid_indices = np.array([])
@@ -545,10 +536,11 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             raise ValueError(f"invalid query column: {query_column}")
         self.query_column = query_column
         self.query_ratio = query_ratio
-        if self.query_column is not None:
-            self.is_query = torch.from_numpy(data[query_column].values).bool()
 
-        logger.info(f"Max batch attention cost (B * L_max^2): {self.max_batch_cost}")
+        self.is_query_tensor = None
+        if self.query_column is not None:
+            self.is_query_tensor = torch.from_numpy(data[query_column].values).bool()
+
         logger.info(f"Property set ratio: {self._property_set_ratio}")
 
         if self.property_columns:
@@ -558,36 +550,29 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
                 "No property_columns provided. No property sets will be generated."
             )
 
-    def _prepare_property_data(self):
-        # (This method is unchanged)
-        logger.debug(f"Preparing property data for columns: {self.property_columns}")
+        # --- NEW: Create the static pool of all sets ---
+        self._create_set_pool()
 
+    def _prepare_property_data(self):
+        # (Unchanged from your code, but logger.info is used)
+        logger.debug(f"Preparing property data for columns: {self.property_columns}")
         valid_mask = self.data[self.property_columns].notna().all(axis=1)
         self.common_valid_indices = self.data.index[valid_mask].values
-
         if len(self.common_valid_indices) < self.min_batch_size:
-            logger.warning(
-                f"Too few samples ({len(self.common_valid_indices)}) with valid data "
-                f"for all properties: {self.property_columns}. Disabling property sets."
-            )
+            logger.warning(f"Too few samples... Disabling property sets.")
             self.property_columns = []
             return
-
         logger.info(
             f"Found {len(self.common_valid_indices)} samples with valid data "
             "for all property columns."
         )
-
         valid_prop_data = self.data.loc[valid_mask, self.property_columns].values
         self.n_properties = valid_prop_data.shape[1]
-
         mean = valid_prop_data.mean(axis=0)
         std = valid_prop_data.std(axis=0)
         std[std < 1e-8] = 1.0
         self.property_stats = {"mean": mean, "std": std}
-
         normalized_props = (valid_prop_data - mean) / std
-
         self.property_tensor = torch.zeros(
             (len(self.data), self.n_properties), dtype=torch.float32
         )
@@ -596,31 +581,25 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         )
 
     def _create_propsets(self, num_sets: int) -> tuple:
+        # (Unchanged from your code)
         if not self.property_columns or num_sets <= 0 or self.property_tensor is None:
             return [], [], []
-
         max_available = len(self.common_valid_indices)
         if self.max_set_size > 0:
             max_size = min(self.max_set_size, max_available)
         else:
             max_size = max_available
-
         if max_size < self.min_batch_size:
-            logger.error(
-                "Max available property samples < min_batch_size. No property sets."
-            )
+            logger.error("Max available property samples < min_batch_size...")
             return [], [], []
-
         all_coeffs = self.random.standard_normal((num_sets, self.n_properties))
         norms = np.linalg.norm(all_coeffs, axis=1, keepdims=True)
         norms[norms < 1e-8] = 1.0
         all_coeffs /= norms
         all_coeffs = all_coeffs.astype(np.float32)
-
         set_sizes = self.random.integers(
             self.min_batch_size, max_size + 1, size=num_sets
         )
-
         property_sets, property_ids, property_coeffs = [], [], []
         for i in range(num_sets):
             size = set_sizes[i]
@@ -628,27 +607,22 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
                 len(self.common_valid_indices), size=size, replace=False
             )
             selected_indices = self.common_valid_indices[sample_idx]
-
             property_sets.append(selected_indices)
-            property_ids.append(f"prop_{i}")  # Simpler ID
+            property_ids.append(f"prop_{i}")
             property_coeffs.append(all_coeffs[i])
-
         return property_sets, property_ids, property_coeffs
 
-    def _make_batches(self):
-        """
-        Create batches by combining shuffled assay sets and dynamically
-        generated property sets, packing them to respect max_batch_cost (B * L_max^2).
-        """
+    def _create_set_pool(self):
+        """Creates the master list of all sets (assay and property)."""
         if self.inter_assay:
-            self._shuffle_data()
+            self._shuffle_data()  # From MultiSetActivityDataset
 
         num_a_sets = len(self.valid_sets)
-        a_indices = self.random.permutation(num_a_sets)
 
         # (indices, set_id, type, coefficients)
         a_pool = [
-            (self.valid_sets[i], self.set_ids[i], "assay", None) for i in a_indices
+            (self.valid_sets[i], self.set_ids[i], "assay", None)
+            for i in range(num_a_sets)
         ]
 
         num_property_sets = int(num_a_sets * self._property_set_ratio)
@@ -658,32 +632,133 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             for i in range(len(p_indices))
         ]
 
-        all_sets = a_pool + p_pool
-        self.random.shuffle(all_sets)
-        logger.debug(
-            f"Creating batches from {len(a_pool)} assay sets and "
-            f"{len(p_pool)} property sets."
+        self.all_sets_data = a_pool + p_pool
+        # Store set sizes separately for the sampler
+        self.set_sizes = [len(s[0]) for s in self.all_sets_data]
+
+        logger.info(
+            f"Created pool of {len(a_pool)} assay sets and "
+            f"{len(p_pool)} property sets. Total: {len(self.all_sets_data)}"
         )
 
-        self.batches = []
+    def _compute_linear_combination(
+        self, indices: np.ndarray, coefficients: np.ndarray
+    ) -> torch.Tensor:
+        """
+        Compute linear combination of normalized properties with noise.
+        MODIFIED: Returns a CPU tensor.
+        """
+        # self.property_tensor is already a CPU tensor
+        prop_values = self.property_tensor[indices]
+
+        # Create coefficients on CPU
+        coeffs_tensor = torch.tensor(coefficients, dtype=torch.float32).unsqueeze(1)
+
+        result = torch.matmul(prop_values, coeffs_tensor).squeeze(1)
+        noise = torch.randn_like(result) * self.noise_std
+        return result + noise
+
+    @property
+    def determistic_queries(self):
+        return self.query_column is not None
+
+    def __len__(self) -> int:
+        """Returns the total number of sets."""
+        return len(self.all_sets_data)
+
+    def __getitem__(self, idx: int) -> dict:
+        """
+        Fetches data for a SINGLE set (unbatched, unpadded).
+        This method is run by the parallel workers.
+        """
+        indices, set_id, set_type, coeffs = self.all_sets_data[idx]
+        size = len(indices)
+
+        # 1. Get features (always on CPU)
+        if self.protein_features is None:
+            # Use a placeholder float. Collate_fn will handle dims.
+            prot_feat = torch.tensor([1.0], dtype=torch.float32)
+            prot_dim = 1
+        else:
+            prot_feat = self.protein_features[indices]
+            prot_dim = prot_feat.shape[1]
+
+        lig_feat = self.ligand_features[indices]
+        lig_dim = lig_feat.shape[1]
+
+        # 2. Get labels and query info
+        is_query = None
+        if set_type == "assay":
+            label = self.labels[indices]
+            if self.determistic_queries:
+                is_query = self.is_query_tensor[indices]
+        else:  # property
+            label = self._compute_linear_combination(indices, coeffs)
+
+        return {
+            "indices": indices,  # For info_list
+            "prot_feat": prot_feat,
+            "lig_feat": lig_feat,
+            "label": label,
+            "set_type": set_type,
+            "is_query": is_query,  # (B, L) or None
+            "size": size,
+            "prot_dim": prot_dim,  # Pass dims for collator
+            "lig_dim": lig_dim,
+        }
+
+
+class CostBasedBatchSampler(Sampler):
+    """
+    Groups sets into batches based on a quadratic cost limit (B * L_max^2).
+
+    Sorts sets by size to pack efficiently, then shuffles the
+    resulting batches to ensure stochasticity during training.
+    """
+
+    def __init__(
+        self,
+        set_sizes: list[int],
+        max_batch_cost: int,
+        shuffle: bool = True,
+        seed: int = 42,
+    ):
+        self.set_sizes = set_sizes
+        self.max_batch_cost = max_batch_cost
+        self.shuffle = shuffle
+        self.generator = torch.Generator().manual_seed(seed)
+
+        # Pre-compute batches
+        self.batches = self._create_batches()
+
+    def _create_batches(self) -> list[list[int]]:
+        if self.shuffle:
+            indices = torch.randperm(
+                len(self.set_sizes), generator=self.generator
+            ).tolist()
+        else:
+            indices = list(range(len(self.set_sizes)))
+
+        # Sort indices by set size in descending order for efficient packing
+        sorted_indices = sorted(indices, key=lambda i: self.set_sizes[i], reverse=True)
+
+        batches = []
         current_batch = []
         current_max_len = 0
 
-        for set_data in all_sets:
-            indices, set_id, set_type, set_coeffs = set_data
-            set_size = len(indices)
+        for idx in sorted_indices:
+            set_size = self.set_sizes[idx]
 
             set_cost = set_size**2
-
             if set_cost > self.max_batch_cost:
                 logger.warning(
-                    f"Set {set_id} (size {set_size}) has cost ({set_cost}) "
+                    f"Set at index {idx} (size {set_size}) has cost ({set_cost}) "
                     f"larger than max_batch_cost ({self.max_batch_cost}). "
                     "Creating a single oversized batch. THIS MAY CAUSE OOM."
                 )
                 if current_batch:
-                    self.batches.append(current_batch)
-                self.batches.append([set_data])
+                    batches.append(current_batch)
+                batches.append([idx])
                 current_batch = []
                 current_max_len = 0
                 continue
@@ -693,183 +768,154 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             new_cost = new_batch_size * (new_max_len**2)
 
             if new_cost > self.max_batch_cost and current_batch:
-                self.batches.append(current_batch)
-                
-                current_batch = [set_data]
+                batches.append(current_batch)
+                current_batch = [idx]
                 current_max_len = set_size
             else:
-                current_batch.append(set_data)
-                current_max_len = new_max_len # Update max_len
+                current_batch.append(idx)
+                current_max_len = new_max_len
 
         if current_batch:
-            self.batches.append(current_batch)
+            batches.append(current_batch)
 
-        num_batches = len(self.batches)
-        self.batch_data = [None] * num_batches
-        for i, batch in enumerate(self.batches):
-            sets, ids, types, coeffs = zip(*batch)
-            self.batch_data[i] = {
-                "sets": sets,
-                "ids": ids,
-                "types": types,
-                "coeffs": coeffs,
-            }
+        return batches
 
-        self.used = np.zeros(num_batches, dtype=bool)
+    def __iter__(self):
+        if self.shuffle:
+            # Shuffle the order of the batches themselves
+            indices = torch.randperm(
+                len(self.batches), generator=self.generator
+            ).tolist()
+            for i in indices:
+                yield self.batches[i]
+        else:
+            for batch in self.batches:
+                yield batch
 
-    @property
-    def determistic_queries(self):
-        return self.query_column is not None
+    def __len__(self) -> int:
+        return len(self.batches)
 
-    @property
-    def property_set_ratio(self):
-        return self._property_set_ratio
 
-    @property_set_ratio.setter
-    def property_set_ratio(self, value: float):
-        logger.info(f"Setting property_set_ratio to {value}. Re-creating batches.")
-        self._property_set_ratio = value
-        self._make_batches()
+class SetCollator:
+    """
+    Collates a list of single-set dictionaries into a padded batch.
 
-    def _get_next_batch(self, idx: int) -> dict[str, object]:
-        """Get the next available batch and mark it as used."""
-        if not hasattr(self, "batches") or np.all(self.used):
-            self._make_batches()
+    This is where all padding, query mask generation, and attention
+    mask generation logic is performed.
+    """
 
-        if idx >= len(self.used):
-            self._make_batches()
-            if idx >= len(self.used):
-                raise IndexError(
-                    f"Batch index {idx} out of range after remaking batches (Total: {len(self.used)})."
-                )
+    def __init__(
+        self,
+        query_ratio: float,
+        determistic_queries: bool,
+        info_accessor=None,  # Pass dataset.info if needed
+        device: torch.device = torch.device("cpu"),
+    ):
+        self.query_ratio = query_ratio
+        self.determistic_queries = determistic_queries
+        self.info_accessor = info_accessor  # e.g., dataset.info
+        self.device = device
 
-        self.used[idx] = True
-        return self.batch_data[idx]
+        # We will create a random generator inside __call__
+        # to ensure workers have different seeds
+        self.random = None
 
-    def _compute_linear_combination(
-        self, indices: np.ndarray, coefficients: np.ndarray
-    ) -> torch.Tensor:
+    def _get_random_generator(self):
+        """Creates a worker-specific random generator."""
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info:
+            seed = worker_info.seed
+        else:
+            seed = torch.initial_seed()
+
+        return np.random.RandomState(seed=seed % (2**32 - 1))
+
+    def _random_mask(self, size: int) -> np.ndarray:
+        ratio = int(size * self.query_ratio)
+        if ratio <= 0 and size > 1:
+            ratio = 1  # Ensure at least one query if possible
+        if ratio >= size:
+            ratio = size - 1  # Ensure at least one support
+
+        mask = self.random.choice(np.arange(size), ratio, replace=False)
+        return mask
+
+    def __call__(self, batch_items: list[dict]) -> tuple:
         """
-        Compute linear combination of normalized properties with noise.
-        Fully vectorized.
+        Processes the list of dictionaries from the Dataset workers.
         """
-        prop_values = self.property_tensor[indices].to(device)
-        coeffs_tensor = torch.tensor(
-            coefficients, dtype=torch.float32, device=device
-        ).unsqueeze(1)
-        result = torch.matmul(prop_values, coeffs_tensor).squeeze(1)
-        noise = torch.randn_like(result) * self.noise_std
-        return result + noise
+        # Ensure each worker/epoch has a different random state
+        self.random = self._get_random_generator()
 
-    def __getitem__(self, idx: int):
-        """
-        Get a batch of multiple sets from the dataset.
-        Labels are dynamically constructed based on set type (assay vs. property).
-        """
-        batch_data = self._get_next_batch(idx)
-        batch_sets = batch_data["sets"]
-        batch_ids = batch_data["ids"]
-        batch_types = batch_data["types"]
-        batch_coeffs = batch_data["coeffs"]
+        num_sets = len(batch_items)
+        max_len = max(item["size"] for item in batch_items)
 
-        num_sets = len(batch_sets)
-        max_len = max(len(s) for s in batch_sets)
+        # Get feature dimensions from the first item
+        prot_dim = batch_items[0]["prot_dim"]
+        lig_dim = batch_items[0]["lig_dim"]
 
-        set_sizes = [len(s) for s in batch_sets]
-        cumulative_sizes = np.cumsum([0] + set_sizes)
-        total_size = cumulative_sizes[-1]
-
-        all_indices = np.concatenate(batch_sets)
-
-        all_labels = torch.empty(total_size, dtype=torch.float32, device=device)
-
-        offset = 0
-        for set_idcs, set_type, coeffs in zip(batch_sets, batch_types, batch_coeffs):
-            size = len(set_idcs)
-            if set_type == "assay":
-                all_labels[offset : offset + size] = self.labels[set_idcs].to(device)
-            else:
-                all_labels[offset : offset + size] = self._compute_linear_combination(
-                    set_idcs, coeffs
-                )
-            offset += size
-
-        padding_mask = torch.ones(num_sets, max_len, dtype=torch.bool, device=device)
-        query_mask = torch.zeros(num_sets, max_len, dtype=torch.bool, device=device)
-
-        prot_dim = (
-            1 if self.protein_features is None else self.protein_features.shape[1]
-        )
-        lig_dim = self.ligand_features.shape[1]
-
-        prot_feats = torch.zeros(num_sets, max_len, prot_dim, device=device)
-        lig_feats = torch.zeros(num_sets, max_len, lig_dim, device=device)
-        labels = torch.zeros(num_sets, max_len, device=device)
+        # Initialize tensors (on CPU first)
+        prot_feats = torch.zeros(num_sets, max_len, prot_dim)
+        lig_feats = torch.zeros(num_sets, max_len, lig_dim)
+        labels = torch.zeros(num_sets, max_len)
+        padding_mask = torch.ones(num_sets, max_len, dtype=torch.bool)
+        query_mask = torch.zeros(num_sets, max_len, dtype=torch.bool)
         info_list = []
 
-        for i, (set_idcs, set_type, coeffs) in enumerate(
-            zip(batch_sets, batch_types, batch_coeffs)
-        ):
-            size = len(set_idcs)
+        for i, item in enumerate(batch_items):
+            size = item["size"]
             padding_mask[i, :size] = False
 
-            if self.protein_features is None:
-                prot_feats[i, :size] = 1.0
+            if item["prot_dim"] == 1:
+                # Handle the prot_feat=1.0 placeholder
+                prot_feats[i, :size, :] = 1.0
             else:
-                prot_feats[i, :size] = self.protein_features[set_idcs]
+                prot_feats[i, :size] = item["prot_feat"]
 
-            lig_feats[i, :size] = self.ligand_features[set_idcs]
+            lig_feats[i, :size] = item["lig_feat"]
+            labels[i, :size] = item["label"]
 
-            def random_mask(size):
-                ratio = int(size * self.query_ratio)
-                mask = self.random.choice(np.arange(size), ratio, replace=False)
-                assert len(mask) < size
-                return mask
+            # Query mask logic
+            set_type = item["set_type"]
+            is_query = item["is_query"]
 
             if set_type == "assay":
-                labels[i, :size] = self.labels[set_idcs]
                 if self.determistic_queries:
-                    assert not self.is_query[set_idcs].all()
-                    query_mask[i, :size] = self.is_query[set_idcs]
+                    assert is_query is not None, "Deterministic queries missing"
+                    assert not is_query.all(), "Set cannot be 100% queries"
+                    query_mask[i, :size] = is_query
                 else:
-                    query_mask[i, random_mask(size)] = True
-            else:
-                labels[i, :size] = self._compute_linear_combination(set_idcs, coeffs)
-                query_mask[i, random_mask(size)] = True
+                    query_mask[i, self._random_mask(size)] = True
+            else:  # property set
+                query_mask[i, self._random_mask(size)] = True
 
-            info_list.append(self.info[set_idcs])
+            if self.info_accessor is not None:
+                info_list.append(self.info_accessor[item["indices"]])
 
-        assert not (padding_mask & query_mask).any()
-        assert (torch.logical_not(padding_mask | query_mask).sum(1) > 0).all().item(), (
-            torch.logical_not(padding_mask | query_mask).sum(1)
-        )
-
+        # --- Attention Mask Logic (copied from your old __getitem__) ---
         B, L = padding_mask.shape
 
-        # Base: only padded positions
-        base = (~padding_mask).unsqueeze(1) & (~padding_mask).unsqueeze(2)  # (B,L,L)
+        # Move masks to device *before* mask logic
+        padding_mask = padding_mask.to(self.device)
+        query_mask = query_mask.to(self.device)
 
-        # Disallow non-query -> query
+        base = (~padding_mask).unsqueeze(1) & (~padding_mask).unsqueeze(2)
         disallow_nonq_to_q = (~query_mask).unsqueeze(2) & query_mask.unsqueeze(1)
 
-        # Disallow query -> query (except self)
         q_to_q = query_mask.unsqueeze(1) & query_mask.unsqueeze(2)
-        self_mask = torch.eye(L, dtype=torch.bool, device=device).unsqueeze(0)
+        self_mask = torch.eye(L, dtype=torch.bool, device=self.device).unsqueeze(0)
         disallow_q_to_q = q_to_q & ~self_mask
 
-        # Combine disallowed positions
         disallow = disallow_nonq_to_q | disallow_q_to_q
-
-        # Start with base mask (True = mask)
-        attn_mask = ~base | disallow  # (B,L,L)
-
-        # --- Fully vectorized self-attention guarantees ---
-        # Queries always attend to themselves
+        attn_mask = ~base | disallow
         attn_mask = attn_mask & ~(query_mask.unsqueeze(1) & self_mask)
-
-        # Any row fully masked? allow self
-        fully_masked_rows = attn_mask.all(dim=-1)  # (B,L)
+        # fully_masked_rows = attn_mask.all(dim=-1) # (B,L)
         attn_mask = attn_mask | self_mask
+
+        # --- Final move to device ---
+        prot_feats = prot_feats.to(self.device)
+        lig_feats = lig_feats.to(self.device)
+        labels = labels.to(self.device)
 
         return (
             prot_feats,
@@ -880,6 +926,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             padding_mask,
             attn_mask,
         )
+
 
 def aggregate_multi_measurements(
     data: pd.DataFrame, keys: Iterable[str] = [COMPOUND, ASSAY]

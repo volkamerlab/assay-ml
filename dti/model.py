@@ -16,6 +16,7 @@ from torch.nn import MultiheadAttention as MHA
 from torch import nn
 from torch.nn import SiLU, BatchNorm1d
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 import pytest
 
@@ -465,11 +466,21 @@ class SetTransformer(Module):
         attn_mask: Tensor | None = None,
         padding_mask: Tensor | None = None,
     ) -> Tensor:
-        if attn_mask is not None and self.layer_type == "induced":
-            raise ValueError("Induced attention does not support attention mask")
-        attn_mask = ~attn_mask.repeat_interleave(self.num_heads, dim=0)
+        processed_attn_mask = None
+        if attn_mask is not None:
+            if self.layer_type == "induced":
+                raise ValueError("Induced attention does not support attention mask")
+            processed_attn_mask = ~attn_mask.repeat_interleave(self.num_heads, dim=0)
+
         for block in self.blocks:
-            x = block(x, attn_mask=attn_mask, padding_mask=padding_mask)
+            x = checkpoint(
+                block,
+                x,
+                processed_attn_mask,
+                padding_mask,
+                use_reentrant=False,
+            )
+
         return x
 
 
