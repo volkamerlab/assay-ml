@@ -498,20 +498,23 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
     Extended dataset that dynamically creates property sets alongside assay sets.
 
     Property sets are created on-the-fly each epoch and packed with assay
-    sets into batches that respect a total datapoint limit.
+    sets into batches that respect a total attention cost limit (B * L_max^2).
 
     Args:
         data (pd.DataFrame): DataFrame containing activity and property data.
         target (str): Column name for target (assay) values.
         info_cols (List[str]): Column names to include as information.
+        query_column (str | None): Column name to use for deterministic queries.
+        query_ratio (float): Ratio of items to mask as queries if not deterministic.
         property_set_ratio (float): Ratio of property sets to assay sets
             (e.g., 0.5 = one property set for every two assay sets).
         property_columns (List[str]): List of property column names from data
             to use for dynamic set creation.
         noise_std (float): Standard deviation of Gaussian noise to add to
             property set linear combinations.
-        max_batch_datapoints (int): The maximum number of total samples
-            (sum of set sizes) allowed in a single batch.
+        max_batch_cost (int): The maximum attention cost (B * L_max^2) 
+            allowed in a single batch. A value of ~1-2 million 
+            (e.g., 16 * 256^2) is a reasonable starting point.
         **kwargs: Additional arguments for MultiSetActivityDataset.
     """
 
@@ -525,14 +528,16 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         property_set_ratio: float = 0.5,
         property_columns: list[str] = None,
         noise_std: float = 0.1,
-        max_batch_datapoints: int = 4096,
+        max_batch_cost: int = 1_048_576,  # 1M (e.g., 16 * 256^2 or 4 * 512^2)
         **kwargs,
     ):
         super().__init__(data, target=target, info_cols=info_cols, **kwargs)
         self._property_set_ratio = property_set_ratio
         self.property_columns = property_columns or []
         self.noise_std = noise_std
-        self.max_batch_datapoints = max_batch_datapoints
+        
+        self.max_batch_cost = max_batch_cost
+
         self.property_tensor = None
         self.common_valid_indices = np.array([])
         self.n_properties = 0
@@ -543,7 +548,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
         if self.query_column is not None:
             self.is_query = torch.from_numpy(data[query_column].values).bool()
 
-        logger.info(f"Max total datapoints per batch: {max_batch_datapoints}")
+        logger.info(f"Max batch attention cost (B * L_max^2): {self.max_batch_cost}")
         logger.info(f"Property set ratio: {self._property_set_ratio}")
 
         if self.property_columns:
@@ -554,6 +559,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             )
 
     def _prepare_property_data(self):
+        # (This method is unchanged)
         logger.debug(f"Preparing property data for columns: {self.property_columns}")
 
         valid_mask = self.data[self.property_columns].notna().all(axis=1)
@@ -632,7 +638,7 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
     def _make_batches(self):
         """
         Create batches by combining shuffled assay sets and dynamically
-        generated property sets, packing them to respect max_batch_datapoints.
+        generated property sets, packing them to respect max_batch_cost (B * L_max^2).
         """
         if self.inter_assay:
             self._shuffle_data()
@@ -661,33 +667,39 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
 
         self.batches = []
         current_batch = []
-        current_size = 0
+        current_max_len = 0
 
-        # batching
-        for indices, set_id, set_type, set_coeffs in all_sets:
+        for set_data in all_sets:
+            indices, set_id, set_type, set_coeffs = set_data
             set_size = len(indices)
 
-            if set_size > self.max_batch_datapoints:
+            set_cost = set_size**2
+
+            if set_cost > self.max_batch_cost:
                 logger.warning(
-                    f"Set {set_id} (size {set_size}) is larger than "
-                    f"max_batch_datapoints ({self.max_batch_datapoints}). "
-                    "Creating a single oversized batch."
+                    f"Set {set_id} (size {set_size}) has cost ({set_cost}) "
+                    f"larger than max_batch_cost ({self.max_batch_cost}). "
+                    "Creating a single oversized batch. THIS MAY CAUSE OOM."
                 )
                 if current_batch:
                     self.batches.append(current_batch)
-                self.batches.append([(indices, set_id, set_type, set_coeffs)])
+                self.batches.append([set_data])
                 current_batch = []
-                current_size = 0
+                current_max_len = 0
                 continue
 
-            if current_size + set_size > self.max_batch_datapoints and current_batch:
-                # new batch
+            new_batch_size = len(current_batch) + 1
+            new_max_len = max(current_max_len, set_size)
+            new_cost = new_batch_size * (new_max_len**2)
+
+            if new_cost > self.max_batch_cost and current_batch:
                 self.batches.append(current_batch)
-                current_batch = [(indices, set_id, set_type, set_coeffs)]
-                current_size = set_size
+                
+                current_batch = [set_data]
+                current_max_len = set_size
             else:
-                current_batch.append((indices, set_id, set_type, set_coeffs))
-                current_size += set_size
+                current_batch.append(set_data)
+                current_max_len = new_max_len # Update max_len
 
         if current_batch:
             self.batches.append(current_batch)
@@ -868,7 +880,6 @@ class MultiSetWithPropertiesDataset(MultiSetActivityDataset):
             padding_mask,
             attn_mask,
         )
-
 
 def aggregate_multi_measurements(
     data: pd.DataFrame, keys: Iterable[str] = [COMPOUND, ASSAY]

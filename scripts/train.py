@@ -110,8 +110,8 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
         case Method.PFN if mol_only:
             mswpds = partial(
                 MultiSetWithPropertiesDataset,
-                max_batch_datapoints=1024,
-                max_set_size=1024,
+                max_batch_cost=16 * 256**2,
+                max_set_size=2048,
                 shuffle_within_target=False,
                 property_columns=[
                     "mw_freebase",
@@ -130,8 +130,8 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
             )
             mswpds_val = partial(
                 MultiSetWithPropertiesDataset,
-                max_batch_datapoints=1024,
-                max_set_size=1024,
+                max_batch_cost=16 * 256**2,
+                max_set_size=2048,
                 shuffle_within_target=False,
                 query_column=INTRA_ASSAY_TEST,
                 property_columns=[],
