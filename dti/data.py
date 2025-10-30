@@ -845,17 +845,14 @@ class SetCollator:
         """
         Processes the list of dictionaries from the Dataset workers.
         """
-        # Ensure each worker/epoch has a different random state
         self.random = self._get_random_generator()
 
         num_sets = len(batch_items)
         max_len = max(item["size"] for item in batch_items)
 
-        # Get feature dimensions from the first item
         prot_dim = batch_items[0]["prot_dim"]
         lig_dim = batch_items[0]["lig_dim"]
 
-        # Initialize tensors (on CPU first)
         prot_feats = torch.zeros(num_sets, max_len, prot_dim)
         lig_feats = torch.zeros(num_sets, max_len, lig_dim)
         labels = torch.zeros(num_sets, max_len)
@@ -868,7 +865,6 @@ class SetCollator:
             padding_mask[i, :size] = False
 
             if item["prot_dim"] == 1:
-                # Handle the prot_feat=1.0 placeholder
                 prot_feats[i, :size, :] = 1.0
             else:
                 prot_feats[i, :size] = item["prot_feat"]
@@ -876,7 +872,6 @@ class SetCollator:
             lig_feats[i, :size] = item["lig_feat"]
             labels[i, :size] = item["label"]
 
-            # Query mask logic
             set_type = item["set_type"]
             is_query = item["is_query"]
 
@@ -893,18 +888,15 @@ class SetCollator:
             if self.info_accessor is not None:
                 info_list.append(self.info_accessor[item["indices"]])
 
-        # --- Attention Mask Logic (copied from your old __getitem__) ---
         B, L = padding_mask.shape
-
-        # Move masks to device *before* mask logic
-        padding_mask = padding_mask.to(self.device)
-        query_mask = query_mask.to(self.device)
 
         base = (~padding_mask).unsqueeze(1) & (~padding_mask).unsqueeze(2)
         disallow_nonq_to_q = (~query_mask).unsqueeze(2) & query_mask.unsqueeze(1)
 
         q_to_q = query_mask.unsqueeze(1) & query_mask.unsqueeze(2)
-        self_mask = torch.eye(L, dtype=torch.bool, device=self.device).unsqueeze(0)
+        self_mask = torch.eye(
+            L, dtype=torch.bool, device=padding_mask.device
+        ).unsqueeze(0)
         disallow_q_to_q = q_to_q & ~self_mask
 
         disallow = disallow_nonq_to_q | disallow_q_to_q
@@ -912,11 +904,6 @@ class SetCollator:
         attn_mask = attn_mask & ~(query_mask.unsqueeze(1) & self_mask)
         # fully_masked_rows = attn_mask.all(dim=-1) # (B,L)
         attn_mask = attn_mask | self_mask
-
-        # --- Final move to device ---
-        prot_feats = prot_feats.to(self.device)
-        lig_feats = lig_feats.to(self.device)
-        labels = labels.to(self.device)
 
         return (
             prot_feats,
