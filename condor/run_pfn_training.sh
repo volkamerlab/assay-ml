@@ -10,5 +10,4 @@ cd $HOME/hodge-dti
 
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 #export JOBLIB_TEMP_FOLDER=/home/michael.backenkoehler/hodge-dti/data/tmp
-echo "uv run $1 --seed $2 --dataset $3 --method $4 --fold $5 --mol-feat $6 --unmasked-weight $7"
-uv run $1 --seed $2 --dataset $3 --method $4 --fold $5 --mol-feat $6 --unmasked-weight $7 --property-set-ratio $8
+uv run $1 --fold $2 --mol-feat $3 --unmasked-weight $4 --property-set-ratio $5 --n-bins $6
