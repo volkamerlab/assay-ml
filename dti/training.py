@@ -1,3 +1,4 @@
+import copy
 from typing import Type, Any, Dict, Callable
 from joblib import Parallel, delayed
 from pathlib import Path
@@ -267,6 +268,8 @@ def train_with_batched_masked_sets(
         padding_mask,
         attn_mask,
     ) in enumerate(pbar := tqdm.tqdm(loader, desc="training")):
+        if batch_idx > 50:
+            break
         prot_feats = prot_feats.to(device, non_blocking=True)
         lig_feats = lig_feats.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
@@ -293,6 +296,9 @@ def train_with_batched_masked_sets(
 
         if unmasked_weight == 1.0:
             batch_loss = nll_losses.mean()
+        elif unmasked_weight == 0.0:
+            masked_nll = nll_losses[query_mask]
+            batch_loss = masked_nll.mean()
         else:
             weights = torch.full_like(nll_losses, unmasked_weight)
             weights[query_mask] = masked_weight

@@ -125,31 +125,38 @@ def prepare_dataset_splits(
         set_sizes=test_dataset.set_sizes, max_batch_cost=MAX_COST, shuffle=False
     )
 
-    collator = SetCollator(
+    train_collator = SetCollator(
         query_ratio=train_dataset.query_ratio,
         determistic_queries=train_dataset.determistic_queries,
         info_accessor=train_dataset.info,
         device=device,
     )
+    val_collator = SetCollator(
+        determistic_queries=True,
+        query_ratio=0.0,
+        info_accessor=test_dataset.info,
+        device=device,
+    )
+
 
     train_loader = DataLoader(
         train_dataset,
         batch_sampler=train_sampler,
-        collate_fn=collator,
+        collate_fn=train_collator,
         num_workers=4,
         pin_memory=True,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_sampler=val_sampler,
-        collate_fn=collator,
+        collate_fn=val_collator,
         num_workers=4,
         pin_memory=True,
     )
     test_loader = DataLoader(
         test_dataset,
         batch_sampler=test_sampler,
-        collate_fn=collator,
+        collate_fn=val_collator,
         num_workers=0,  # No need for workers on test set
         pin_memory=True,
     )

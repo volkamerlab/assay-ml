@@ -806,8 +806,8 @@ class SetCollator:
 
     def __init__(
         self,
-        query_ratio: float,
         determistic_queries: bool,
+        query_ratio: float = 0.2,
         info_accessor=None,  # Pass dataset.info if needed
         device: torch.device = torch.device("cpu"),
     ):
@@ -831,6 +831,7 @@ class SetCollator:
         return np.random.RandomState(seed=seed % (2**32 - 1))
 
     def _random_mask(self, size: int) -> np.ndarray:
+        assert not self.determistic_queries
         ratio = int(size * self.query_ratio)
         if ratio <= 0 and size > 1:
             ratio = 1  # Ensure at least one query if possible
