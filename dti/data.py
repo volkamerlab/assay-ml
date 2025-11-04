@@ -363,12 +363,13 @@ class PropertySetDataset(Dataset):
         max_set_size: int = 0,
         max_batch_datapoints: int = 2048,
         random_seed: int = 0,
-        **kwargs,  # Accepts unused kwargs for compatibility
+        **kwargs,
     ):
         super().__init__()
-        logger.info(f"Creating PropertySetDataset of size {len(data)}")
+        logger.info(
+            f"Creating PropertySetDataset of size {len(data)} with prop set ratio {property_set_ratio}"
+        )
 
-        # 1. --- Feature and Label Preparation (from ActivityDataset) ---
         logger.info("Computing molecular fingerprints...")
         fps = mol_featurizer.compute_parallel(data[SMILES].values)
         mask = [fp is not None for fp in fps]
@@ -394,13 +395,11 @@ class PropertySetDataset(Dataset):
 
         self.info = torch.tensor(self.data[info_cols].values.astype(np.int64))
 
-        # 2. --- General Batching Setup (from MultiSetActivityDataset) ---
         self.min_batch_size = min_batch_size
         self.max_set_size = max_set_size
         self.random = np.random.default_rng(random_seed)
 
-        # 3. --- Assay Set Preparation (from MultiSetActivityDataset) ---
-        self.assay_sets = []  # List of (np.ndarray of indices)
+        self.assay_sets = []
         grouped = self.data.groupby(ASSAY, sort=False)
         num_unused = 0
 
@@ -430,7 +429,6 @@ class PropertySetDataset(Dataset):
             f"({num_unused}/{len(self.data)} datapoints unused)"
         )
 
-        # 4. --- Property Set Preparation (from MultiSetWithProperties) ---
         self.property_set_ratio = property_set_ratio
         self.noise_std = noise_std
         self.max_batch_datapoints = max_batch_datapoints
@@ -438,7 +436,6 @@ class PropertySetDataset(Dataset):
 
         self._prepare_property_data()
 
-        # self.batches_plan will be populated by _make_batches()
         self.batches_plan = None
         self.used_batches = None
 
@@ -473,13 +470,11 @@ class PropertySetDataset(Dataset):
                 )
                 continue
 
-            # Standardize (z-score)
             scaler = StandardScaler()
             valid_values = values[valid_mask].reshape(-1, 1)
             scaler.fit(valid_values)
             normalized_values = scaler.transform(valid_values).flatten()
 
-            # Create full tensor with NaNs
             prop_tensor = torch.full(
                 (len(self.data),), float("nan"), dtype=torch.float32
             )
@@ -494,15 +489,12 @@ class PropertySetDataset(Dataset):
             self.common_valid_indices = np.array([], dtype=np.int64)
             return
 
-        # Stack all property tensors
         self.property_matrix = torch.stack(prop_tensors, dim=1)
         self.n_properties = self.property_matrix.shape[1]
 
-        # Find indices valid across ALL properties
         valid_mask_all = ~torch.isnan(self.property_matrix).any(dim=1)
         self.common_valid_indices = torch.where(valid_mask_all)[0].numpy()
 
-        # Replace NaNs with 0 (safe now, as we only sample from valid indices)
         self.property_matrix.nan_to_num_(0.0)
 
         logger.info(
@@ -520,31 +512,28 @@ class PropertySetDataset(Dataset):
         logger.debug("Remaking batches for new epoch...")
         self.batches_plan = []
 
-        # Shuffle assay sets for the new epoch
         assay_set_indices = self.random.permutation(len(self.assay_sets))
         shuffled_assay_sets = [self.assay_sets[i] for i in assay_set_indices]
 
-        # --- Bin-packing loop to create batches ---
         while shuffled_assay_sets:
-            current_batch_sets = []  # Stores tuples: (type, indices, [coeffs])
+            current_batch_sets = []  # (type, indices, [coeffs])
             current_total_datapoints = 0
             num_assay_sets_in_batch = 0
 
-            # 1. Add assay sets until batch is full
             while shuffled_assay_sets:
-                assay_set = shuffled_assay_sets[-1]  # Peek at the next set
+                assay_set = shuffled_assay_sets[-1]
                 set_size = len(assay_set)
 
-                if current_total_datapoints + set_size <= self.max_batch_datapoints:
-                    # Add set to batch
+                max_datapoints = self.max_batch_datapoints * (
+                    1 - self.property_set_ratio
+                )
+                if current_total_datapoints + set_size <= max_datapoints:
                     current_total_datapoints += set_size
                     num_assay_sets_in_batch += 1
                     current_batch_sets.append(("assay", shuffled_assay_sets.pop()))
                 else:
-                    # This set doesn't fit, break to add property sets
                     break
 
-            # Handle edge case: first assay set is too large
             if not current_batch_sets and shuffled_assay_sets:
                 logger.warning(
                     f"Assay set with size {len(shuffled_assay_sets[-1])} "
@@ -556,19 +545,16 @@ class PropertySetDataset(Dataset):
                 current_total_datapoints += len(assay_set)
                 num_assay_sets_in_batch = 1
 
-            # 2. Add property sets based on ratio
-            logger.debug(f"{self.property_set_ratio} {self.property_set_ratio > 0}")
+            target_property_sets = int(
+                num_assay_sets_in_batch * self.property_set_ratio
+            )
+            logger.debug(f"{target_property_sets}")
             if (
                 self.property_set_ratio > 0
                 and self.n_properties > 0
                 and len(self.common_valid_indices) > 0
             ):
-                target_property_sets = int(
-                    num_assay_sets_in_batch * self.property_set_ratio
-                )
-
                 for _ in range(target_property_sets):
-                    # Determine property set size
                     max_available = len(self.common_valid_indices)
                     max_size = (
                         min(self.max_set_size, max_available)
@@ -577,21 +563,18 @@ class PropertySetDataset(Dataset):
                     )
 
                     if max_size < self.min_batch_size:
-                        continue  # Not enough valid molecules to sample from
+                        continue
 
                     set_size = self.random.integers(self.min_batch_size, max_size + 1)
 
                     if current_total_datapoints + set_size > self.max_batch_datapoints:
-                        break  # Batch is full, stop adding property sets
+                        break
 
-                    # Create the set
                     current_total_datapoints += set_size
 
-                    # Generate random coefficients (normalized)
                     coeffs = self.random.standard_normal(self.n_properties)
                     coeffs /= np.linalg.norm(coeffs)
 
-                    # Sample indices
                     sample_idx = self.random.choice(
                         len(self.common_valid_indices), size=set_size, replace=False
                     )
@@ -601,13 +584,25 @@ class PropertySetDataset(Dataset):
                         ("property", selected_indices, torch.from_numpy(coeffs).float())
                     )
 
-            # Shuffle the sets *within* the batch and add to epoch plan
             if current_batch_sets:
                 self.random.shuffle(current_batch_sets)
                 self.batches_plan.append(current_batch_sets)
 
         self.used_batches = np.zeros(len(self.batches_plan), dtype=bool)
-        logger.info(f"Created {len(self.batches_plan)} batches for the epoch.")
+
+        total_assay_sets = 0
+        total_property_sets = 0
+        for batch in self.batches_plan:
+            for set_info in batch:
+                if set_info[0] == "assay":
+                    total_assay_sets += 1
+                elif set_info[0] == "property":
+                    total_property_sets += 1
+
+        logger.info(
+            f"Created {len(self.batches_plan)} batches for the epoch. "
+            f"({total_assay_sets} total assay sets; {total_property_sets} total property sets)"
+        )
 
     def _get_next_batch(self, idx: int):
         """Handles epoch logic, remaking batches if all have been used."""
@@ -615,7 +610,6 @@ class PropertySetDataset(Dataset):
             self._make_batches()
 
         if idx >= len(self.batches_plan):
-            # This can happen if a new epoch has fewer batches
             logger.warning(f"Index {idx} out of bounds, remaking batches.")
             self._make_batches()
             idx = idx % len(self.batches_plan)  # Wrap index
@@ -625,18 +619,35 @@ class PropertySetDataset(Dataset):
 
     def _compute_property_labels(self, indices, coeffs_tensor):
         """
-        Vectorized computation of property labels.
         (N_samples, N_properties) @ (N_properties,) -> (N_samples,)
         """
-        # 1. Index into the main property matrix
         props = self.property_matrix[indices]
-
-        # 2. Compute linear combination
         labels = props @ coeffs_tensor
-
-        # 3. Add noise
-        labels += torch.randn_like(labels) * self.noise_std
+        labels = self._corruption(labels)
+        labels = torch.nan_to_num(labels)
         return labels
+
+    def _corruption(self, labels):
+        choice = self.random.random()
+        if choice < 0.1:
+            return labels ** self.random.standard_normal()
+        elif choice < 0.2:
+            return torch.exp(labels)
+        elif choice < 0.3:
+            return torch.maximum(
+                torch.ones_like(labels) * self.random.standard_normal(), labels
+            )
+        elif choice < 0.9:
+            self._add_noise(labels)
+            return labels
+        else:
+            return labels
+
+    def _add_noise(self, labels):
+        if self.random.random() < 0.9:
+            labels += torch.randn_like(labels) * self.noise_std
+        else:
+            labels *= torch.randn_like(labels) * self.noise_std
 
     def __len__(self):
         """Returns the number of batches in an epoch."""
@@ -652,7 +663,6 @@ class PropertySetDataset(Dataset):
         either grabbing pre-computed assay labels or calculating property labels
         on the fly using a fast vectorized operation.
         """
-        # 1. Get the plan for this batch
         batch_plan = self._get_next_batch(idx)
 
         num_sets = len(batch_plan)
@@ -660,7 +670,6 @@ class PropertySetDataset(Dataset):
         all_labels_list = []
         set_sizes = []
 
-        # 2. Iterate through the sets in the batch plan
         for item in batch_plan:
             set_type = item[0]
             indices = item[1]
@@ -669,28 +678,23 @@ class PropertySetDataset(Dataset):
             all_indices_list.append(indices)
 
             if set_type == "assay":
-                # Get pre-computed assay labels
                 all_labels_list.append(self.assay_labels[indices])
             else:
-                # Dynamically compute property labels
                 coeffs_tensor = item[2]
                 labels = self._compute_property_labels(indices, coeffs_tensor)
                 all_labels_list.append(labels)
 
-        # 3. Concatenate all data for the batch
         all_indices = np.concatenate(all_indices_list)
         all_labels = torch.cat(all_labels_list)
 
-        # 4. Fetch features using the concatenated indices
         prot_feats = (
-            torch.ones(1)  # Placeholder if no protein features
+            torch.ones(1)
             if self.protein_features is None
             else self.protein_features[all_indices]
         )
         lig_feats = self.ligand_features[all_indices]
         info = self.info[all_indices]
 
-        # 5. Create the metadata (vectorized)
         set_sizes_tensor = torch.tensor(set_sizes, dtype=torch.long)
         set_boundaries = torch.cat(
             [torch.tensor([0]), torch.cumsum(set_sizes_tensor, 0)]

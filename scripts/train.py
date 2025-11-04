@@ -132,7 +132,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
             mswpds_val = partial(
                 PropertySetDataset,
                 max_batch_datapoints=2048,
-                max_set_size=1024,
+                max_set_size=2048,
                 shuffle_within_target=False,
                 property_columns=[],
                 property_set_ratio=0.0,
@@ -248,7 +248,7 @@ def prepare_dataset_splits(
     test_dataset = val_dataset_cls(test_data, target=test_target, **data_kwargs)
     train_data_kwargs = dict(data_kwargs)
     train_data_kwargs["property_set_ratio"] = property_set_ratio
-    train_dataset = dataset_cls(train_data, target=train_target, **data_kwargs)
+    train_dataset = dataset_cls(train_data, target=train_target, **train_data_kwargs)
 
     assert len(train_dataset) > 0
 
