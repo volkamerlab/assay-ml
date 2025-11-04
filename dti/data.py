@@ -548,7 +548,6 @@ class PropertySetDataset(Dataset):
             target_property_sets = int(
                 num_assay_sets_in_batch * self.property_set_ratio
             )
-            logger.debug(f"{target_property_sets}")
             if (
                 self.property_set_ratio > 0
                 and self.n_properties > 0
