@@ -36,7 +36,7 @@ _defaults = dict(
     training_loss=nn.MSELoss(),
     cosine_agg=True,
     normalize_training_batches=False,
-    lr=3e-5,
+    lr=5e-5,
     fisher_transform=True,
 )
 
@@ -427,8 +427,8 @@ def evaluate_with_batched_masked_sets(
         info = info.squeeze().to(device, non_blocking=True)
 
         # info[:,0] is boolean mask indicator
-        sample_mask = info[:, 0].bool()
         assert len(torch.unique(info[:, 0])) == 2
+        sample_mask = info[:, 0].bool()
 
         normed_labels = _normalize_sets_minmax(
             labels, set_boundaries, num_sets, mask=sample_mask, clip_range=clip_range
@@ -500,7 +500,6 @@ def evaluate_with_batched_masked_sets(
         }
 
         np.savez_compressed(predictions_file, **data_to_save)
-
 
     return {"nll": avg_loss, "wasserstein": avg_wass, "mae": avg_mae}
 

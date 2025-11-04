@@ -28,6 +28,7 @@ from dti.data import (
     MultiSetActivityDataset,
     MultiSetWithPropertiesDataset,
     PairDataset,
+    PropertySetDataset,
     prepare_datasets,
     load_landrum,
     load_chembl_endpoints,
@@ -109,9 +110,9 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
     match method:
         case Method.PFN if mol_only:
             mswpds = partial(
-                MultiSetWithPropertiesDataset,
+                PropertySetDataset,
                 max_batch_datapoints=2048,
-                max_set_size=1000,
+                max_set_size=1024,
                 shuffle_within_target=False,
                 property_columns=[
                     "mw_freebase",
@@ -128,7 +129,15 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
                     "np_likeness_score",
                 ],
             )
-            return MoleculeBayesianSetRankModel, mswpds, msa
+            mswpds_val = partial(
+                PropertySetDataset,
+                max_batch_datapoints=2048,
+                max_set_size=1024,
+                shuffle_within_target=False,
+                property_columns=[],
+                property_set_ratio=0.0,
+            )
+            return MoleculeBayesianSetRankModel, mswpds, mswpds_val
         case Method.PFN:
             return ComplexBayesianSetRankModel, msa, msa
         case Method.PAIRS if mol_only:
@@ -233,11 +242,12 @@ def prepare_dataset_splits(
     data_kwargs = dict(
         mol_featurizer=mol_feat,
         info_cols=info_cols,
-        property_set_ratio=property_set_ratio,
     )
 
     val_dataset = val_dataset_cls(val_data, target=test_target, **data_kwargs)
     test_dataset = val_dataset_cls(test_data, target=test_target, **data_kwargs)
+    train_data_kwargs = dict(data_kwargs)
+    train_data_kwargs["property_set_ratio"] = property_set_ratio
     train_dataset = dataset_cls(train_data, target=train_target, **data_kwargs)
 
     assert len(train_dataset) > 0
