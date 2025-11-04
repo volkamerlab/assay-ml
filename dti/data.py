@@ -503,6 +503,10 @@ class PropertySetDataset(Dataset):
             f"{len(self.common_valid_indices)} molecules have all properties."
         )
 
+    def prepare_epoch(self):
+        self._make_batches()
+        self.used_batches = np.zeros(len(self.batches_plan), dtype=bool)
+
     def _make_batches(self):
         """
         Creates the 'plan' for an epoch.
@@ -612,6 +616,7 @@ class PropertySetDataset(Dataset):
             logger.warning(f"Index {idx} out of bounds, remaking batches.")
             self._make_batches()
             idx = idx % len(self.batches_plan)  # Wrap index
+            raise StopIteration
 
         self.used_batches[idx] = True
         return self.batches_plan[idx]
