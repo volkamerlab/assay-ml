@@ -36,7 +36,7 @@ _defaults = dict(
     training_loss=nn.MSELoss(),
     cosine_agg=True,
     normalize_training_batches=False,
-    lr=1e-4,
+    lr=3e-5,
     fisher_transform=True,
 )
 
@@ -306,6 +306,9 @@ def train_with_batched_masked_sets(
     steps = 0
     masked_weight = 1.0
 
+    n_masked = 0
+    total_mae = 0
+
     for batch_idx, (
         protein_features,
         ligand_features,
@@ -335,10 +338,12 @@ def train_with_batched_masked_sets(
                 clip_range=clip_range,
             )
 
+        context_labels = normed_labels.clone()
+        context_labels[sample_mask] = 0.0
         preds = model(
             ligand_features,
             protein_features,
-            normed_labels,
+            context_labels,
             sample_mask,
             set_ids_tensor,
         )
@@ -347,11 +352,20 @@ def train_with_batched_masked_sets(
 
         if unmasked_weight == 1.0:
             batch_loss = nll_losses.mean()
+        elif unmasked_weight == 0.0:
+            batch_loss = nll_losses[sample_mask].mean()
         else:
             weights = torch.full_like(nll_losses, unmasked_weight)
             weights[sample_mask] = masked_weight
             batch_loss = (nll_losses * weights).mean()
 
+        masked_normed = normed_labels[sample_mask]
+        masked_preds = preds[sample_mask]
+        n_masked += sample_mask.float().sum()
+        true_bins = bd.labels(masked_normed)
+        pred_mean = bd.mean(masked_preds)
+        true_centers = bd.bucket_centers()[true_bins]
+        total_mae += (pred_mean - true_centers).abs().sum().item()
         optimizer.zero_grad(set_to_none=True)
         batch_loss.backward()
         optimizer.step()
@@ -361,13 +375,8 @@ def train_with_batched_masked_sets(
         steps += 1
         pbar.set_description(f"train batch loss={loss_value:.4e}")
 
-        del nll_losses, batch_loss, preds
-        if unmasked_weight != 1.0:
-            del weights
-
-        if (batch_idx + 1) % 10 == 0:
-            torch.cuda.empty_cache()
-
+    avg_mae = total_mae / max(1, n_masked)
+    logger.info(f"train MAE: {avg_mae:.4e}")
     return total_loss / max(1, steps)
 
 
@@ -425,10 +434,12 @@ def evaluate_with_batched_masked_sets(
             labels, set_boundaries, num_sets, mask=sample_mask, clip_range=clip_range
         )
 
+        context_labels = normed_labels.clone()
+        context_labels[sample_mask] = 0.0
         preds = model(
             ligand_features,
             protein_features,
-            normed_labels,
+            context_labels,
             sample_mask,
             set_ids_tensor,
         )
@@ -488,10 +499,8 @@ def evaluate_with_batched_masked_sets(
             "probs": torch.cat(all_probs).numpy(),
         }
 
-        def save_async():
-            np.savez_compressed(predictions_file, **data_to_save)
+        np.savez_compressed(predictions_file, **data_to_save)
 
-        Thread(target=save_async, daemon=False).start()
 
     return {"nll": avg_loss, "wasserstein": avg_wass, "mae": avg_mae}
 
@@ -847,24 +856,6 @@ def train_and_evaluate_pfn_model(
     index: int,
     **kwargs: Dict[str, Any],
 ) -> None:
-    """
-    Train and evaluate the model with learning rate adjustment and early stopping.
-
-    This function handles the complete training pipeline including model instantiation,
-    optimization, learning rate scheduling, early stopping, and model persistence.
-
-    Args:
-        model_cls (Type[nn.Module]): Model class to instantiate.
-        run_name (str): Name of the training run for logging and file naming.
-        train_loader (DataLoader): DataLoader for training data.
-        val_loader (DataLoader): DataLoader for validation data.
-        test_loader (DataLoader): DataLoader for test data.
-        target_name (str): Name of the target being predicted.
-        index (int): Index/fold number for cross-validation.
-
-    Returns:
-        None: The function saves the model and training statistics but doesn't return a value.
-    """
     logger.info(f"training model for target: {target_name}")
     Epoch = namedtuple(
         "Epoch",
@@ -872,7 +863,7 @@ def train_and_evaluate_pfn_model(
             "epoch",
             "lr",
             "train_loss",
-            "test_loss",
+            "val_loss",
         ],
     )
 
@@ -897,7 +888,7 @@ def train_and_evaluate_pfn_model(
         optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
     )
 
-    best_loss = 1000
+    best_loss = float("inf")
     epochs_without_improvement = 0
     optimization = []
 
@@ -913,7 +904,6 @@ def train_and_evaluate_pfn_model(
 
         scheduler.step(val_loss)
         lr = scheduler.get_last_lr()
-        logger.debug(f"learning rate: {lr}")
 
         logger.info(f"epoch: {epoch + 1}")
         logger.info(f" train loss: {train_loss:.4e}")
@@ -927,21 +917,25 @@ def train_and_evaluate_pfn_model(
         )
 
         if val_loss < best_loss:
-            logger.info("updating test set predictions")
+            logger.info("validation improved, saving model.")
             best_loss = val_loss
             epochs_without_improvement = 0
             torch.save(model.state_dict(), OUTPUT / run_name / "model.pt")
-            test_results = evaluate_with_batched_masked_sets(
-                model,
-                test_loader,
-                predictions_file=OUTPUT / run_name / "predictions.npz",
-            )
-            logger.info(f"test epoch: {epoch + 1} ")
-            logger.info(f" test masked NLL: {test_results['nll']:.4e}")
-            logger.info(f" test masked EMD: {test_results['wasserstein']:.4e}")
-            logger.info(f" test masked MAE: {test_results['mae']:.4e}")
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= opts["patience_termination"]:
                 logger.info(f"early stopping triggered after {epoch + 1} epochs.")
                 break
+
+    logger.info("loading best model for final test evaluation...")
+    model.load_state_dict(torch.load(OUTPUT / run_name / "model.pt"))
+
+    test_results = evaluate_with_batched_masked_sets(
+        model,
+        test_loader,
+        predictions_file=OUTPUT / run_name / "predictions.npz",
+    )
+    logger.info("final test set performance:")
+    logger.info(f" test masked NLL: {test_results['nll']:.4e}")
+    logger.info(f" test masked EMD: {test_results['wasserstein']:.4e}")
+    logger.info(f" test masked MAE: {test_results['mae']:.4e}")

@@ -280,23 +280,23 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             n_bins=n_bins, exp_tails=False, normalization="minmax"
         )
         self.distribution_encoder = _mlp(
-            input_size=self.n_bins,
-            hidden_size=self.n_bins * 2,
+            input_size=1,
+            hidden_size=hidden_channels,
             output_size=hidden_channels,
-            hidden_layers=1,
+            hidden_layers=2,
         )
         self.embed_ligand = _mlp(
             input_size=ligand_input_size,
             hidden_size=hidden_channels,
             output_size=hidden_channels,
-            hidden_layers=4,
+            hidden_layers=2,
         )
         self.num_heads = num_heads
-        self.default_dist_emb = Parameter(torch.zeros(hidden_channels, device=device))
+        self.default_dist_emb = Parameter(randn(hidden_channels, device=device) * 0.02)
         self.combine_repr = Sequential(
-            Linear(hidden_channels * 2, hidden_channels * 2),
+            Linear(hidden_channels * 2, hidden_channels * 3),
             SiLU(),
-            Linear(hidden_channels * 2, hidden_channels),
+            Linear(hidden_channels * 3, hidden_channels),
         )
         self.set_transformer = SetTransformer(
             hidden_channels=hidden_channels,
@@ -308,11 +308,13 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         self.output = Sequential(
             Linear(hidden_channels, hidden_channels),
             SiLU(),
-            BatchNorm1d(hidden_channels),
-            Linear(hidden_channels, hidden_channels),
+            LayerNorm(hidden_channels),
+            Linear(hidden_channels, hidden_channels * 2),
             SiLU(),
-            Linear(hidden_channels, n_bins),
+            Linear(hidden_channels * 2, hidden_channels),
+            SiLU(),
         )
+        self.readout = Linear(hidden_channels, n_bins)
         self.smoother = (
             SparseBinSmoothing(
                 self.bin_dist.bucket_centers(), sigma=0.1, max_neighbors=20
@@ -334,14 +336,13 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         attn_mask = torch.logical_or(attn_mask, make_asymmetric_mask(sample_mask))
         sample_mask = sample_mask.float().unsqueeze(1)
         x_ligand = self.embed_ligand(ligand)
-        class_labels = self.bin_dist.labels(y)
-        dist_onehot = self.bin_dist.dist(class_labels)  # [N, n_bins]
-        x_dist = self.distribution_encoder(dist_onehot)
+        y = y.unsqueeze(1)
+        x_dist = self.distribution_encoder(y)
         x_dist = (1 - sample_mask) * x_dist + sample_mask * self.default_dist_emb
-        x = self.combine_repr(torch.cat((x_ligand, x_dist), 1))
-        h = self.set_transformer(x, attn_mask=attn_mask)
-        logits = self.output(h)
-        return self.smoother(logits)
+        h = self.combine_repr(torch.cat((x_ligand, x_dist), 1)) + x_ligand
+        h = self.set_transformer(h, attn_mask=attn_mask)
+        h = self.output(h) + h
+        return self.readout(h)
 
 
 class ComplexSetRank(MoleculeSetRank):
@@ -474,6 +475,7 @@ class MHABlock(Module):
         )
         self.ln1 = LayerNorm(hidden_channels)
         self.ln2 = LayerNorm(hidden_channels)
+        self.ln3 = LayerNorm(hidden_channels)
 
     def forward(
         self,
@@ -482,11 +484,12 @@ class MHABlock(Module):
         attn_mask: Tensor | None = None,
         need_weights: bool = False,
     ) -> Tensor:
+        x = self.ln1(x)
         if y is None:
             y = x
         x_, attn_weights = self.attn(x, y, y, attn_mask=attn_mask, need_weights=True)
-        x = self.ln1(x + x_)
-        x = self.ln2(x + self.ffn(x))
+        x = self.ln2(x + x_)
+        x = self.ln3(x + self.ffn(x))
         if need_weights:
             return x, attn_weights
         return x
@@ -496,7 +499,7 @@ class SetAttentionBlock(MHABlock):
     def forward(
         self, x: Tensor, attn_mask: Tensor | None = None, need_weights: bool = False
     ) -> Tensor:
-        return super().forward(x, x, attn_mask, need_weights=need_weights)
+        return super().forward(x, attn_mask=attn_mask, need_weights=need_weights)
 
 
 class SetTransformer(Module):
