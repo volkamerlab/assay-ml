@@ -8,7 +8,8 @@ import numpy as np
 
 
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
+import torch.distributed as dist
 from sklearn.preprocessing import StandardScaler
 
 from .constants import (
@@ -608,15 +609,13 @@ class PropertySetDataset(Dataset):
         )
 
     def _get_next_batch(self, idx: int):
-        """Handles epoch logic, remaking batches if all have been used."""
-        if self.batches_plan is None or self.used_batches.all():
+        if self.batches_plan is None:
             self._make_batches()
-
         if idx >= len(self.batches_plan):
-            logger.warning(f"Index {idx} out of bounds, remaking batches.")
-            self._make_batches()
-            idx = idx % len(self.batches_plan)  # Wrap index
-            raise StopIteration
+            raise IndexError(
+                f"Index {idx} out of bounds for batch plan length {len(self.batches_plan)}. "
+                "The DataLoader is requesting too many batches."
+            )
 
         self.used_batches[idx] = True
         return self.batches_plan[idx]
@@ -714,6 +713,21 @@ class PropertySetDataset(Dataset):
         }
 
         return prot_feats, lig_feats, all_labels, info, metadata
+
+
+class ResettingBatchSampler(Sampler):
+    def __init__(self, dataset, batch_size):
+        self.dataset = dataset
+
+    def __iter__(self):
+        self.dataset.prepare_epoch()
+        for idx in range(len(self.dataset.batches_plan)):
+            yield [idx]
+
+    def __len__(self):
+        if self.dataset.batches_plan is None:
+            self.dataset._make_batches()
+        return len(self.dataset.batches_plan)
 
 
 class MultiSetActivityDataset(ActivityDataset):

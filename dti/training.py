@@ -892,14 +892,12 @@ def train_and_evaluate_pfn_model(
     optimization = []
 
     for epoch in range(opts["num_epochs"]):
-        train_loader.dataset.prepare_epoch()
         train_loss = train_with_batched_masked_sets(
             model,
             train_loader,
             optimizer,
             unmasked_weight=opts.get("unmasked_weight", 1.0),
         )
-        val_loader.dataset.prepare_epoch()
         val_results = evaluate_with_batched_masked_sets(model, val_loader)
         val_loss = val_results["nll"]
 

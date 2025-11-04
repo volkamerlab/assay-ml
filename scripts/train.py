@@ -29,6 +29,7 @@ from dti.data import (
     MultiSetWithPropertiesDataset,
     PairDataset,
     PropertySetDataset,
+    ResettingBatchSampler,
     prepare_datasets,
     load_landrum,
     load_chembl_endpoints,
@@ -254,20 +255,20 @@ def prepare_dataset_splits(
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=train_batch(method, batch_size),
-        shuffle=True,
+        batch_sampler=ResettingBatchSampler(train_dataset, batch_size=1),
+        shuffle=False,
         num_workers=0,
         drop_last=method.on_pairs,
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=test_batch(method, batch_size),
+        batch_sampler=ResettingBatchSampler(val_dataset, batch_size=1),
         shuffle=False,
         num_workers=0,
     )
     test_loader = DataLoader(
         test_dataset,
-        batch_size=test_batch(method, batch_size),
+        batch_sampler=ResettingBatchSampler(test_dataset, batch_size=1),
         shuffle=False,
         num_workers=0,
     )
