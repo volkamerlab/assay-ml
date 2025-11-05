@@ -14,7 +14,7 @@ from torch.nn import (
 )
 from torch.nn import MultiheadAttention as MHA
 from torch import nn
-from torch.nn import SiLU, BatchNorm1d
+from torch.nn import GELU, SiLU, BatchNorm1d
 import torch.nn.functional as F
 
 import pytest
@@ -266,6 +266,7 @@ class MoleculeBayesianSetRankModel(nn.Module):
         p_dropout: float = 0.05,
         num_heads: int = 8,
         smoothing: bool = True,
+        act= GELU,
         **kwargs,
     ):
         super().__init__(
@@ -290,7 +291,7 @@ class MoleculeBayesianSetRankModel(nn.Module):
         self.default_dist_emb = Parameter(randn(hidden_channels, device=device) * 0.02)
         self.combine_repr = Sequential(
             Linear(hidden_channels * 2, hidden_channels * 3),
-            SiLU(),
+            act(),
             Linear(hidden_channels * 3, hidden_channels),
         )
         self.set_transformer = SetTransformer(
@@ -298,15 +299,16 @@ class MoleculeBayesianSetRankModel(nn.Module):
             num_heads=self.num_heads,
             num_blocks=8,
             dropout=p_dropout,
+            act=act,
         )
         self.output = Sequential(
             Linear(hidden_channels, hidden_channels),
-            SiLU(),
+            act(),
             LayerNorm(hidden_channels),
             Linear(hidden_channels, hidden_channels * 2),
-            SiLU(),
+            act(),
             Linear(hidden_channels * 2, hidden_channels),
-            SiLU(),
+            act(),
         )
         self.readout = Linear(hidden_channels, n_bins)
         self.smoother = (
@@ -388,7 +390,7 @@ def _mlp(
     hidden_size: int,
     output_size: int,
     hidden_layers: int,
-    act=ReLU,
+    act=GELU,
 ) -> Module:
     if hidden_layers == 0:
         return Linear(input_size, output_size)
@@ -455,6 +457,7 @@ class MHABlock(Module):
         hidden_channels: int,
         num_heads: int,
         dropout: float,
+        act = GELU,
         widening_factor: int = 2,
     ):
         super().__init__()
@@ -465,7 +468,7 @@ class MHABlock(Module):
         self.dropout = Dropout(dropout)
         self.ffn = Sequential(
             Linear(hidden_channels, hidden_channels * widening_factor),
-            SiLU(),
+            act(),
             Dropout(dropout),
             Linear(hidden_channels * widening_factor, hidden_channels),
             Dropout(dropout),
@@ -506,6 +509,7 @@ class SetTransformer(Module):
         num_blocks: int,
         num_seeds: int = 1,
         dropout: float = 0.1,
+        act=GELU,
         layer_type: Literal["full"] = "full",
     ):
         super().__init__()
@@ -520,7 +524,7 @@ class SetTransformer(Module):
                 self.blocks = ModuleList(
                     [
                         SetAttentionBlock(
-                            hidden_channels, num_heads, dropout * 2
+                            hidden_channels, num_heads, dropout, act=act,
                         )
                         for _ in range(num_blocks)
                     ]
