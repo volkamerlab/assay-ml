@@ -187,7 +187,6 @@ class MoleculeSetRank(Module):
         self.set_transformer = SetTransformer(
             hidden_channels=hidden_channels,
             num_heads=self.num_heads,
-            ffn_hidden_layers=2,
             num_blocks=8,
             dropout=0.0,
         )
@@ -258,7 +257,7 @@ class SparseBinSmoothing(nn.Module):
         return torch.sparse.mm(self.kernel, x.T).T
 
 
-class MoleculeBayesianSetRankModel(MoleculeSetRank):
+class MoleculeBayesianSetRankModel(nn.Module):
     def __init__(
         self,
         ligand_input_size: int,
@@ -270,10 +269,6 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         **kwargs,
     ):
         super().__init__(
-            ligand_input_size=ligand_input_size,
-            hidden_channels=hidden_channels,
-            p_dropout=p_dropout,
-            num_heads=num_heads,
         )
         self.n_bins = n_bins
         self.bin_dist = BinDistribution(
@@ -301,7 +296,6 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         self.set_transformer = SetTransformer(
             hidden_channels=hidden_channels,
             num_heads=self.num_heads,
-            ffn_hidden_layers=2,
             num_blocks=8,
             dropout=p_dropout,
         )
@@ -460,22 +454,24 @@ class MHABlock(Module):
         self,
         hidden_channels: int,
         num_heads: int,
-        ffn_hidden_layers: int,
-        dropout: float = 0.1,
+        dropout: float,
+        widening_factor: int = 2,
     ):
         super().__init__()
         self.hidden_channels = hidden_channels
         self.num_heads = num_heads
-        self.ffn_hidden_layers = ffn_hidden_layers
         self.dropout = dropout
         self.attn = MHA(hidden_channels, num_heads, dropout=dropout)
         self.dropout = Dropout(dropout)
-        self.ffn = _mlp(
-            hidden_channels, hidden_channels, hidden_channels, ffn_hidden_layers
+        self.ffn = Sequential(
+            Linear(hidden_channels, hidden_channels * widening_factor),
+            SiLU(),
+            Dropout(dropout),
+            Linear(hidden_channels * widening_factor, hidden_channels),
+            Dropout(dropout),
         )
         self.ln1 = LayerNorm(hidden_channels)
         self.ln2 = LayerNorm(hidden_channels)
-        self.ln3 = LayerNorm(hidden_channels)
 
     def forward(
         self,
@@ -484,15 +480,15 @@ class MHABlock(Module):
         attn_mask: Tensor | None = None,
         need_weights: bool = False,
     ) -> Tensor:
-        x = self.ln1(x)
         if y is None:
             y = x
         x_, attn_weights = self.attn(x, y, y, attn_mask=attn_mask, need_weights=True)
-        x = self.ln2(x + x_)
-        x = self.ln3(x + self.ffn(x))
+        x = self.ln1(x + x_)
+        x = self.ln2(x + self.ffn(x))
         if need_weights:
             return x, attn_weights
         return x
+
 
 
 class SetAttentionBlock(MHABlock):
@@ -507,7 +503,6 @@ class SetTransformer(Module):
         self,
         hidden_channels: int,
         num_heads: int,
-        ffn_hidden_layers: int,
         num_blocks: int,
         num_seeds: int = 1,
         dropout: float = 0.1,
@@ -525,7 +520,7 @@ class SetTransformer(Module):
                 self.blocks = ModuleList(
                     [
                         SetAttentionBlock(
-                            hidden_channels, num_heads, ffn_hidden_layers, dropout
+                            hidden_channels, num_heads, dropout * 2
                         )
                         for _ in range(num_blocks)
                     ]
