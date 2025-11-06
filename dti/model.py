@@ -14,7 +14,7 @@ from torch.nn import (
 )
 from torch.nn import MultiheadAttention as MHA
 from torch import nn
-from torch.nn import GELU, SiLU, BatchNorm1d
+from torch.nn import SiLU, BatchNorm1d
 import torch.nn.functional as F
 
 import pytest
@@ -187,6 +187,7 @@ class MoleculeSetRank(Module):
         self.set_transformer = SetTransformer(
             hidden_channels=hidden_channels,
             num_heads=self.num_heads,
+            ffn_hidden_layers=2,
             num_blocks=8,
             dropout=0.0,
         )
@@ -257,7 +258,7 @@ class SparseBinSmoothing(nn.Module):
         return torch.sparse.mm(self.kernel, x.T).T
 
 
-class MoleculeBayesianSetRankModel(nn.Module):
+class MoleculeBayesianSetRankModel(MoleculeSetRank):
     def __init__(
         self,
         ligand_input_size: int,
@@ -266,10 +267,13 @@ class MoleculeBayesianSetRankModel(nn.Module):
         p_dropout: float = 0.05,
         num_heads: int = 8,
         smoothing: bool = True,
-        act= GELU,
         **kwargs,
     ):
         super().__init__(
+            ligand_input_size=ligand_input_size,
+            hidden_channels=hidden_channels,
+            p_dropout=p_dropout,
+            num_heads=num_heads,
         )
         self.n_bins = n_bins
         self.bin_dist = BinDistribution(
@@ -291,24 +295,24 @@ class MoleculeBayesianSetRankModel(nn.Module):
         self.default_dist_emb = Parameter(randn(hidden_channels, device=device) * 0.02)
         self.combine_repr = Sequential(
             Linear(hidden_channels * 2, hidden_channels * 3),
-            act(),
+            SiLU(),
             Linear(hidden_channels * 3, hidden_channels),
         )
         self.set_transformer = SetTransformer(
             hidden_channels=hidden_channels,
             num_heads=self.num_heads,
+            ffn_hidden_layers=2,
             num_blocks=8,
             dropout=p_dropout,
-            act=act,
         )
         self.output = Sequential(
             Linear(hidden_channels, hidden_channels),
-            act(),
+            SiLU(),
             LayerNorm(hidden_channels),
             Linear(hidden_channels, hidden_channels * 2),
-            act(),
+            SiLU(),
             Linear(hidden_channels * 2, hidden_channels),
-            act(),
+            SiLU(),
         )
         self.readout = Linear(hidden_channels, n_bins)
         self.smoother = (
@@ -390,7 +394,7 @@ def _mlp(
     hidden_size: int,
     output_size: int,
     hidden_layers: int,
-    act=GELU,
+    act=ReLU,
 ) -> Module:
     if hidden_layers == 0:
         return Linear(input_size, output_size)
@@ -456,25 +460,22 @@ class MHABlock(Module):
         self,
         hidden_channels: int,
         num_heads: int,
-        dropout: float,
-        act = GELU,
-        widening_factor: int = 2,
+        ffn_hidden_layers: int,
+        dropout: float = 0.1,
     ):
         super().__init__()
         self.hidden_channels = hidden_channels
         self.num_heads = num_heads
+        self.ffn_hidden_layers = ffn_hidden_layers
         self.dropout = dropout
         self.attn = MHA(hidden_channels, num_heads, dropout=dropout)
         self.dropout = Dropout(dropout)
-        self.ffn = Sequential(
-            Linear(hidden_channels, hidden_channels * widening_factor),
-            act(),
-            Dropout(dropout),
-            Linear(hidden_channels * widening_factor, hidden_channels),
-            Dropout(dropout),
+        self.ffn = _mlp(
+            hidden_channels, hidden_channels, hidden_channels, ffn_hidden_layers
         )
         self.ln1 = LayerNorm(hidden_channels)
         self.ln2 = LayerNorm(hidden_channels)
+        self.ln3 = LayerNorm(hidden_channels)
 
     def forward(
         self,
@@ -483,15 +484,15 @@ class MHABlock(Module):
         attn_mask: Tensor | None = None,
         need_weights: bool = False,
     ) -> Tensor:
+        x = self.ln1(x)
         if y is None:
             y = x
         x_, attn_weights = self.attn(x, y, y, attn_mask=attn_mask, need_weights=True)
-        x = self.ln1(x + x_)
-        x = self.ln2(x + self.ffn(x))
+        x = self.ln2(x + x_)
+        x = self.ln3(x + self.ffn(x))
         if need_weights:
             return x, attn_weights
         return x
-
 
 
 class SetAttentionBlock(MHABlock):
@@ -506,10 +507,10 @@ class SetTransformer(Module):
         self,
         hidden_channels: int,
         num_heads: int,
+        ffn_hidden_layers: int,
         num_blocks: int,
         num_seeds: int = 1,
         dropout: float = 0.1,
-        act=GELU,
         layer_type: Literal["full"] = "full",
     ):
         super().__init__()
@@ -524,7 +525,7 @@ class SetTransformer(Module):
                 self.blocks = ModuleList(
                     [
                         SetAttentionBlock(
-                            hidden_channels, num_heads, dropout, act=act,
+                            hidden_channels, num_heads, ffn_hidden_layers, dropout
                         )
                         for _ in range(num_blocks)
                     ]
