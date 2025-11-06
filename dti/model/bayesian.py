@@ -85,8 +85,9 @@ class MoleculeBayesianSetRankModel(Module):
         sample_mask: Tensor,
         set_ids: Tensor,
     ) -> Tensor:
-        attn_mask = make_block_diag_mask(set_ids, num_heads=self.num_heads)
+        attn_mask = make_block_diag_mask(set_ids, num_heads=None)
         attn_mask = torch.logical_or(attn_mask, make_asymmetric_mask(sample_mask))
+        attn_mask = attn_mask.unsqueeze(0).expand(self.num_heads, -1, -1)
         sample_mask = sample_mask.float().unsqueeze(1)
         x_ligand = self.embed_ligand(ligand)
         y = y.unsqueeze(1)
