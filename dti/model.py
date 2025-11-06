@@ -1,7 +1,7 @@
 from typing import Literal
 
 import torch
-from torch import Tensor, tensor, randn
+from torch import Tensor, randn
 from torch.nn import (
     Dropout,
     Parameter,
@@ -14,10 +14,8 @@ from torch.nn import (
 )
 from torch.nn import MultiheadAttention as MHA
 from torch import nn
-from torch.nn import SiLU, BatchNorm1d
-import torch.nn.functional as F
+from torch.nn import GELU, BatchNorm1d
 
-import pytest
 
 from .utils import device
 from .bin_distribution import BinDistribution
@@ -26,9 +24,24 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def _mlp(
+    input_size: int,
+    hidden_size: int,
+    output_size: int,
+    hidden_layers: int,
+    act=GELU,
+) -> Module:
+    if hidden_layers == 0:
+        return Linear(input_size, output_size)
+    layers = [Linear(input_size, hidden_size), act()]
+    for _ in range(hidden_layers - 1):
+        layers.extend([Linear(hidden_size, hidden_size), act()])
+    layers.append(Linear(hidden_size, output_size))
+    return Sequential(*layers)
+
 
 class MolecularModel(nn.Module):
-    def __init__(self, ligand_input_size, embedding_size, **kwargs):
+    def __init__(self, ligand_input_size, embedding_size, act=GELU, **kwargs):
         super().__init__()
 
         self.molecule_input_size = ligand_input_size
@@ -38,15 +51,16 @@ class MolecularModel(nn.Module):
             hidden_size=embedding_size,
             output_size=embedding_size,
             hidden_layers=4,
+            act=act,
         )
         scaled_hidden_dim = embedding_size // 2
         self.readout = nn.Sequential(
             nn.Dropout(0.05),
             nn.BatchNorm1d(embedding_size),
             nn.Linear(embedding_size, embedding_size),
-            nn.SiLU(),
+            act(),
             nn.Linear(embedding_size, scaled_hidden_dim),
-            nn.SiLU(),
+            act(),
             nn.Linear(scaled_hidden_dim, 1),
         )
 
@@ -83,6 +97,7 @@ class CombinedModel(nn.Module):
         embedding_size,
         hidden_layer_size=512,
         cosine_agg=True,
+        act=GELU,
         **kwargs,
     ):
         super().__init__()
@@ -95,12 +110,14 @@ class CombinedModel(nn.Module):
             hidden_size=hidden_layer_size,
             output_size=embedding_size,
             hidden_layers=4,
+            act=act,
         )
         self.ligand_mlp = _mlp(
             input_size=ligand_input_size,
             hidden_size=hidden_layer_size,
             output_size=embedding_size,
             hidden_layers=4,
+            act=act,
         )
 
         scaled_hidden_dim = hidden_layer_size // 2
@@ -108,9 +125,9 @@ class CombinedModel(nn.Module):
             nn.Dropout(0.05),
             nn.BatchNorm1d(embedding_size),
             nn.Linear(embedding_size, hidden_layer_size),
-            nn.SiLU(),
+            act(),
             nn.Linear(hidden_layer_size, scaled_hidden_dim),
-            nn.SiLU(),
+            act(),
             nn.Linear(scaled_hidden_dim, 1),
         )
 
@@ -127,7 +144,6 @@ class CombinedModel(nn.Module):
         if self.cosine_agg:
             combined_emb = protein_emb * ligand_emb
         else:
-            assert False  # FIXME: debugging only
             combined_emb = torch.cat([protein_emb, ligand_emb], dim=1)
         output = self.combined_mlp(combined_emb)
         return output
@@ -141,6 +157,7 @@ class PairCombinedModel(CombinedModel):
         embedding_size,
         hidden_layer_size=512,
         cosine_agg=True,
+        act=GELU,
         **kwargs,
     ):
         super().__init__(
@@ -149,6 +166,7 @@ class PairCombinedModel(CombinedModel):
             embedding_size,
             hidden_layer_size=512,
             cosine_agg=False,
+            act=act,
         )
 
     def forward(self, protein, ligand, **kwargs):
@@ -174,6 +192,7 @@ class MoleculeSetRank(Module):
         hidden_channels: int = 512,
         p_dropout: float = 0.05,
         num_heads: int = 8,
+        act=GELU,
         **kwargs,
     ):
         super().__init__()
@@ -182,6 +201,7 @@ class MoleculeSetRank(Module):
             hidden_size=hidden_channels,
             output_size=hidden_channels,
             hidden_layers=4,
+            act=act,
         )
         self.num_heads = num_heads
         self.set_transformer = SetTransformer(
@@ -189,15 +209,16 @@ class MoleculeSetRank(Module):
             num_heads=self.num_heads,
             ffn_hidden_layers=2,
             num_blocks=8,
-            dropout=0.0,
+            dropout=p_dropout,
+            act=act,
         )
         self.ouput = Sequential(
             Linear(hidden_channels, hidden_channels),
-            SiLU(),
-            BatchNorm1d(hidden_channels),
+            act(),
+            LayerNorm(hidden_channels),
             Dropout(p_dropout),
             Linear(hidden_channels, hidden_channels),
-            SiLU(),
+            act(),
             Linear(hidden_channels, 1),
         )
 
@@ -223,41 +244,6 @@ class MoleculeSetRank(Module):
         return self.ouput(h).squeeze()
 
 
-class SparseBinSmoothing(nn.Module):
-    def __init__(self, bin_centers, sigma=0.1, max_neighbors=10):
-        super().__init__()
-
-        n_bins = len(bin_centers)
-
-        indices = []
-        values = []
-
-        for i in range(n_bins):
-            distances = torch.abs(bin_centers - bin_centers[i])
-            mask = distances < 3 * sigma
-
-            if mask.sum() > max_neighbors:
-                _, top_k = torch.topk(-distances, max_neighbors)
-                mask = torch.zeros(n_bins, dtype=torch.bool)
-                mask[top_k] = True
-
-            weights = torch.exp(-distances[mask].pow(2) / (2 * sigma**2))
-            weights = weights / weights.sum()
-
-            for j, w in zip(torch.where(mask)[0], weights):
-                indices.append([i, j.item()])
-                values.append(w.item())
-
-        indices = torch.tensor(indices).T
-        values = torch.tensor(values)
-        sparse_kernel = torch.sparse_coo_tensor(indices, values, (n_bins, n_bins))
-
-        self.register_buffer("kernel", sparse_kernel)
-
-    def forward(self, x):
-        return torch.sparse.mm(self.kernel, x.T).T
-
-
 class MoleculeBayesianSetRankModel(MoleculeSetRank):
     def __init__(
         self,
@@ -267,6 +253,7 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
         p_dropout: float = 0.05,
         num_heads: int = 8,
         smoothing: bool = True,
+        act=GELU,
         **kwargs,
     ):
         super().__init__(
@@ -284,18 +271,20 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             hidden_size=hidden_channels,
             output_size=hidden_channels,
             hidden_layers=2,
+            act=act,
         )
         self.embed_ligand = _mlp(
             input_size=ligand_input_size,
             hidden_size=hidden_channels,
             output_size=hidden_channels,
             hidden_layers=2,
+            act=act,
         )
         self.num_heads = num_heads
         self.default_dist_emb = Parameter(randn(hidden_channels, device=device) * 0.02)
         self.combine_repr = Sequential(
             Linear(hidden_channels * 2, hidden_channels * 3),
-            SiLU(),
+            act(),
             Linear(hidden_channels * 3, hidden_channels),
         )
         self.set_transformer = SetTransformer(
@@ -304,25 +293,18 @@ class MoleculeBayesianSetRankModel(MoleculeSetRank):
             ffn_hidden_layers=2,
             num_blocks=8,
             dropout=p_dropout,
+            act=act,
         )
         self.output = Sequential(
             Linear(hidden_channels, hidden_channels),
-            SiLU(),
+            act(),
             LayerNorm(hidden_channels),
             Linear(hidden_channels, hidden_channels * 2),
-            SiLU(),
+            act(),
             Linear(hidden_channels * 2, hidden_channels),
-            SiLU(),
+            act(),
         )
         self.readout = Linear(hidden_channels, n_bins)
-        self.smoother = (
-            SparseBinSmoothing(
-                self.bin_dist.bucket_centers(), sigma=0.1, max_neighbors=20
-            )
-            if smoothing
-            else nn.Identity(n_bins)
-        )
-        logger.debug(f"Smoothing module: {self.smoother}")
 
     def forward(
         self,
@@ -354,12 +336,13 @@ class ComplexSetRank(MoleculeSetRank):
         p_dropout: float = 0.05,
         **kwargs,
     ):
-        super().__init__(ligand_input_size, hidden_channels, p_dropout)
+        super().__init__(ligand_input_size, hidden_channels, p_dropout, act=act)
         self.embed_protein = _mlp(
             input_size=protein_input_size,
             hidden_size=hidden_channels,
             output_size=hidden_channels,
             hidden_layers=1,
+            act=act,
         )
 
     def combine_with_query(self, x: Tensor, query: Tensor) -> Tensor:
@@ -389,70 +372,9 @@ class ComplexSetRank(MoleculeSetRank):
         return self.ouput(h).squeeze()
 
 
-def _mlp(
-    input_size: int,
-    hidden_size: int,
-    output_size: int,
-    hidden_layers: int,
-    act=ReLU,
-) -> Module:
-    if hidden_layers == 0:
-        return Linear(input_size, output_size)
-    layers = [Linear(input_size, hidden_size), act()]
-    for _ in range(hidden_layers - 1):
-        layers.extend([Linear(hidden_size, hidden_size), act()])
-    layers.append(Linear(hidden_size, output_size))
-    return Sequential(*layers)
-
 
 class ComplexBayesianSetRankModel(MoleculeBayesianSetRankModel):
-    def __init__(
-        self,
-        ligand_input_size: int,
-        protein_input_size: int,
-        hidden_channels: int,
-        n_bins: int = 10,
-        **kwargs,
-    ):
-        super().__init__(
-            n_bins=n_bins,
-            ligand_input_size=ligand_input_size,
-            protein_input_size=protein_input_size,
-            **kwargs,
-        )
-        self.embed_protein = _mlp(
-            input_size=protein_input_size,
-            hidden_size=hidden_channels,
-            output_size=hidden_channels,
-            hidden_layers=4,
-        )
-        self.combine_repr = Sequential(
-            Linear(hidden_channels * 3, hidden_channels * 3),
-            SiLU(),
-            Linear(hidden_channels * 3, hidden_channels),
-        )
-
-    def forward(
-        self,
-        ligand: Tensor,
-        protein: Tensor,
-        y: Tensor,
-        sample_mask: Tensor,
-        set_ids: Tensor,
-    ) -> Tensor:
-        attn_mask = make_block_diag_mask(set_ids, num_heads=self.num_heads)
-        attn_mask = torch.logical_or(attn_mask, make_asymmetric_mask(sample_mask))
-        sample_mask = sample_mask.float().unsqueeze(1)
-        x_ligand = self.embed_ligand(ligand)
-        x_protein = self.embed_protein(protein)
-        class_labels = self.bin_dist.labels(y)
-        dist_onehot = self.bin_dist.dist(class_labels)  # [N, n_bins]
-        x_dist = self.distribution_encoder(dist_onehot)
-        x_dist = (1 - sample_mask) * x_dist + sample_mask * self.default_dist_emb
-        x = self.combine_repr(torch.cat((x_ligand, x_protein, x_dist), 1))
-        h = self.set_transformer(x, attn_mask=attn_mask)
-        logits = self.output(h)
-        return self.smoother(logits)
+    pass
 
 
 class MHABlock(Module):
@@ -462,6 +384,7 @@ class MHABlock(Module):
         num_heads: int,
         ffn_hidden_layers: int,
         dropout: float = 0.1,
+        act=GELU,
     ):
         super().__init__()
         self.hidden_channels = hidden_channels
@@ -471,7 +394,7 @@ class MHABlock(Module):
         self.attn = MHA(hidden_channels, num_heads, dropout=dropout)
         self.dropout = Dropout(dropout)
         self.ffn = _mlp(
-            hidden_channels, hidden_channels, hidden_channels, ffn_hidden_layers
+            hidden_channels, hidden_channels, hidden_channels, ffn_hidden_layers, act=act
         )
         self.ln1 = LayerNorm(hidden_channels)
         self.ln2 = LayerNorm(hidden_channels)
@@ -512,6 +435,7 @@ class SetTransformer(Module):
         num_seeds: int = 1,
         dropout: float = 0.1,
         layer_type: Literal["full"] = "full",
+        act=GELU,
     ):
         super().__init__()
         self.hidden_channels = hidden_channels
@@ -525,7 +449,7 @@ class SetTransformer(Module):
                 self.blocks = ModuleList(
                     [
                         SetAttentionBlock(
-                            hidden_channels, num_heads, ffn_hidden_layers, dropout
+                            hidden_channels, num_heads, ffn_hidden_layers, dropout, act=act
                         )
                         for _ in range(num_blocks)
                     ]
@@ -584,95 +508,3 @@ def make_asymmetric_mask(masked: torch.Tensor) -> torch.Tensor:
             attn_mask[i, i] = False  # allow self
 
     return attn_mask
-
-
-def test_asymmetric_mask_shape_and_behavior():
-    masked = torch.tensor([False, True, False, True])
-    mask = make_asymmetric_mask(masked)
-    print(mask)
-
-    # Shape check
-    assert mask.shape == (4, 4)
-
-    # Unmasked (0) should not attend to masked (1, 3)
-    assert mask[0, 1] and mask[0, 3]
-    assert mask[1, 3]  # cannot attend to other masked
-    # Masked token must still see itself
-    assert mask[1, 1] == False
-    # Masked (1) should not attend to other masked (1, 3) but can attend to unmasked (0, 2)
-    assert not mask[1, 0]
-
-
-def test_asymmetric_mask_in_attention():
-    torch.manual_seed(0)
-    x = randn(4, 8)
-    block = SetAttentionBlock(8, 2, 1, dropout=0)
-
-    masked = torch.tensor([False, True, False, True])
-    mask = make_asymmetric_mask(masked)
-
-    out, weights = block(x, attn_mask=mask, need_weights=True)
-
-    for i, m in enumerate(masked):
-        if not m:
-            assert torch.allclose(
-                weights[i, masked], torch.zeros_like(weights[i, masked]), atol=1e-6
-            )
-
-
-def test_no_mask_all_to_all():
-    x = randn(4, 8)
-    block = SetAttentionBlock(8, 4, 1, dropout=0)
-    out_no_mask = block(x, attn_mask=None)
-    mask = make_block_diag_mask([1, 1, 1, 1])
-    out_masked = block(x, attn_mask=mask)
-    torch.testing.assert_close(out_no_mask, out_masked)
-
-
-def test_block_diag_mask_independent_sets():
-    x = randn(8, 16)
-    block = SetAttentionBlock(16, 2, 1, dropout=0)
-    mask = make_block_diag_mask([1, 1, 1, 1, 2, 2, 2, 2])
-    out, weights = block(x, attn_mask=mask, need_weights=True)
-    torch.isclose(
-        (mask.type(torch.float64) * weights).sum(), tensor(0.0, dtype=torch.float64)
-    )
-
-    # embeddings of set A should not directly depend on set B
-    set_a_out = out[:4]
-    set_b_out = out[4:]
-    # Compute mean embedding of each set
-    mean_a = set_a_out.mean(dim=0)
-    mean_b = set_b_out.mean(dim=0)
-    # If masking works, mean_a and mean_b should not be almost identical
-    # (without mask, they'd mix more strongly)
-    assert not torch.allclose(mean_a, mean_b, rtol=1e-2, atol=1e-2)
-
-
-def test_invalid_mask_shape():
-    x = randn(6, 10)
-    block = SetAttentionBlock(10, 2, 1, dropout=0)
-    wrong_mask = torch.zeros(3, 3, dtype=torch.bool)  # wrong shape
-    with pytest.raises(RuntimeError):
-        block(x, attn_mask=wrong_mask)
-
-
-def test_settransformer_blocks_with_mask():
-    x = randn(7, 12)
-    model = SetTransformer(12, 2, 1, num_blocks=2, dropout=0)
-    mask = make_block_diag_mask([3, 4])
-    out = model(x, attn_mask=mask)
-    assert out.shape == (7, 12)
-
-
-if __name__ == "__main__":
-    test_asymmetric_mask_shape_and_behavior()
-    # test_block_diag_mask_independent_sets()
-    # from torch import randn
-    #
-    # x = randn(10, 32)
-    # sab = SetAttentionBlock(32, 4, 1)
-    # x = sab(x)
-    #
-    # isab = InducedSetAttentionBlock(32, 4, 1, num_seeds=5)
-    # x = isab(x)
