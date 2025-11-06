@@ -27,6 +27,17 @@ _defaults = dict(
 )
 
 
+def _step_mae(
+    pred_mean: torch.Tensor,
+    masked_normed: torch.Tensor,
+) -> float:
+    if pred_mean.size() != masked_normed.size():
+        logger.error(
+            "Posterior mean prediction and target values have different shapes in MAE computation"
+        )
+    return (pred_mean - masked_normed).abs().sum().item()
+
+
 def train_with_batched_masked_sets(
     model,
     loader,
@@ -103,10 +114,8 @@ def train_with_batched_masked_sets(
         masked_normed = normed_labels[sample_mask]
         masked_preds = preds[sample_mask]
         n_masked += sample_mask.float().sum()
-        true_bins = bd.labels(masked_normed)
         pred_mean = bd.mean(masked_preds)
-        true_centers = bd.bucket_centers()[true_bins]
-        total_mae += (pred_mean - true_centers).abs().sum().item()
+        total_mae += _step_mae(pred_mean, masked_normed)
         optimizer.zero_grad(set_to_none=True)
         batch_loss.backward()
         optimizer.step()
@@ -206,11 +215,10 @@ def evaluate_with_batched_masked_sets(
             total_wass += wass_dists.sum().item()
 
             pred_mean = bd.mean(masked_preds)
-            true_centers = bd.bucket_centers()[true_bins]
-            total_mae += (pred_mean - true_centers).abs().sum().item()
+            total_mae += _step_mae(pred_mean, masked_normed)
 
             del nll_losses, probs, true_bins, one_hot, cdf_pred, cdf_true
-            del wass_dists, pred_mean, true_centers, masked_preds, masked_normed
+            del wass_dists, pred_mean, masked_preds, masked_normed
 
         if save_preds:
             all_info.append(info.cpu())
