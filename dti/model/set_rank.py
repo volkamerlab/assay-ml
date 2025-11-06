@@ -44,7 +44,7 @@ class MoleculeSetRank(Module):
             dropout=p_dropout,
             act=act,
         )
-        self.ouput = Sequential(
+        self.output = Sequential(
             Linear(hidden_channels, hidden_channels),
             act(),
             LayerNorm(hidden_channels),
@@ -70,10 +70,10 @@ class MoleculeSetRank(Module):
         Returns:
             Tensor: unnormalized ranking scores (N, 1)
         """
-        x_ligand = self.embed_ligand(ligand.squeeze())
+        x_ligand = self.embed_ligand(ligand)
         attn_mask = make_block_diag_mask(set_ids, num_heads=self.num_heads)
         h = self.set_transformer(x_ligand, attn_mask=attn_mask)
-        return self.ouput(h).squeeze()
+        return self.output(h).squeeze()
 
 
 class ComplexSetRank(MoleculeSetRank):
@@ -119,4 +119,4 @@ class ComplexSetRank(MoleculeSetRank):
         x = self.combine_with_query(x_ligand, x_protein)
         attn_mask = make_block_diag_mask(set_ids, num_heads=self.num_heads)
         h = self.set_transformer(x, attn_mask=attn_mask)
-        return self.ouput(h).squeeze()
+        return self.output(h).squeeze()
