@@ -22,14 +22,15 @@ from dti.model import (
     MoleculeBayesianSetRankModel,
     ComplexBayesianSetRankModel,
 )
-from dti.data import (
+from dti.data.dataset import (
     ActivityDataset,
     SetActivityDataset,
     MultiSetActivityDataset,
-    MultiSetWithPropertiesDataset,
     PairDataset,
     PropertySetDataset,
     ResettingBatchSampler,
+)
+from dti.data.processing import (
     prepare_datasets,
     load_landrum,
     load_chembl_endpoints,
@@ -42,11 +43,11 @@ from dti.data import (
     load_activities,
     load_split,
 )
-from dti.featurization import MolFingerprint
-from dti.training import (
+from dti.data.featurization import MolFingerprint
+from dti.training.set_rank import train_and_evaluate_model
+from dti.training.bayesian import train_and_evaluate_pfn_model
+from dti.training.metrics import (
     AssayRankAccuracy,
-    train_and_evaluate_model,
-    train_and_evaluate_pfn_model,
     batch_pair_loss,
     corr_loss,
 )
@@ -57,7 +58,15 @@ from dti.utils import (
     set_random_seeds,
     save_code_snapshot,
 )
-from dti.constants import ACT, DATA, ASSAY, COMPOUND, HODGE, INTRA_ASSAY_TEST, IDENT
+from dti.utils.constants import (
+    ACT,
+    DATA,
+    ASSAY,
+    COMPOUND,
+    HODGE,
+    INTRA_ASSAY_TEST,
+    IDENT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -347,7 +356,6 @@ def run_split(
         fisher_transform=method not in [Method.IC50SETS, Method.IC50ALLSETS],
         unmasked_weight=unmasked_weight,
         n_bins=100,
-        smoothing=False,
     )
     if model_cls in [ComplexBayesianSetRankModel, MoleculeBayesianSetRankModel]:
         train_and_evaluate_pfn_model(*args, **kwargs)
