@@ -1,11 +1,8 @@
 import argparse
 import logging
-import sys
 from functools import partial
-from typing import Tuple, Callable
 import traceback
 
-import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
@@ -139,6 +136,7 @@ def run_split(
     fold: int,
     unmasked_weight: float,
     property_set_ratio: float,
+    n_bins: int,
 ):
     num_epochs = 50_000
     info_cols = [INTRA_ASSAY_TEST, IDENT, COMPOUND, ASSAY]
@@ -174,7 +172,7 @@ def run_split(
         patience_lr=100,
         fisher_transform=False,
         unmasked_weight=unmasked_weight,
-        n_bins=100,
+        n_bins=n_bins,
     )
 
     train_and_evaluate_pfn_model(*args, **kwargs)
@@ -200,13 +198,19 @@ def main():
         "--unmasked-weight",
         type=float,
         default=0.0,
-        help="[PFN] Weight of reconstruction on unmasked samples. (default: 0.0)",
+        help="Weight of reconstruction on unmasked samples. (default: 0.0)",
     )
     parser.add_argument(
         "--property-set-ratio",
         type=float,
         default=0.5,
-        help="[PFN] Proportion of physiochemical property sets during training. (default: 0.5)",
+        help="Proportion of physiochemical property sets during training. (default: 0.5)",
+    )
+    parser.add_argument(
+        "--n-bins",
+        type=int,
+        default=100,
+        help="Number of bins in bin distribution. (default: 100)",
     )
 
     args = parser.parse_args()
@@ -214,11 +218,15 @@ def main():
     mol_feat = args.mol_feat.lower()
 
     job_id = get_condor_job_id()
-    run_name = f"{DATASET_NAME}_{mol_feat}_{args.fold}_{repr(METHOD)}_{job_id}"
+    run_name = f"chembl_{mol_feat}_{args.fold}_pfn_{job_id}"
     init_logging(run_name)
     logger = logging.getLogger(run_name)
     logger.info(
-        f"seed={args.seed} method={repr(METHOD)} dataset={DATASET_NAME} fold={args.fold}"
+        f"seed={args.seed} "
+        f"fold={args.fold} "
+        f"n_bins={args.n_bins} "
+        f"prop-set-ratio={args.property_set_ratio} "
+        f"unmasked-weight={args.unmasked_weight}"
     )
 
     set_random_seeds(args.seed)
@@ -229,6 +237,7 @@ def main():
         args.fold,
         args.unmasked_weight,
         args.property_set_ratio,
+        args.n_bins,
     )
 
 

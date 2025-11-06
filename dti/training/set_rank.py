@@ -15,6 +15,7 @@ from functools import namedtuple
 from ..utils import device
 from ..utils.constants import OUTPUT, PREDICTION, TID
 from ..data.dataset import MultiSetActivityDataset
+from .metrics import fisher_transform_torch
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,83 @@ _defaults = dict(
     lr=5e-5,
     fisher_transform=True,
 )
+
+
+def train_with_batched_sets(
+    model,
+    loader,
+    optimizer,
+    criterion=nn.L1Loss(),
+    fisher_transform=True,
+    normalize_training_batches=True,
+    grad_clip: float | None = None,
+    device="cuda" if torch.cuda.is_available() else "cpu",
+):
+    model.train()
+    torch.set_grad_enabled(True)
+
+    total_loss = 0
+    steps = 0
+
+    for protein_features, ligand_features, labels, info, metadata in (
+        pbar := tqdm.tqdm(loader, desc="train")
+    ):
+        optimizer.zero_grad()
+
+        set_boundaries = metadata["set_boundaries"].squeeze()
+        num_sets = metadata["num_sets"].squeeze()
+        labels = labels.squeeze()
+        set_ids_tensor = metadata["set_ids_tensor"].to(device)
+
+        predictions = model(
+            protein_features.squeeze(),
+            ligand_features.squeeze(),
+            set_ids=set_ids_tensor,
+        ).squeeze()
+
+        batch_loss = 0
+        total_samples = 0
+
+        for i in range(num_sets):
+            start_idx = set_boundaries[i]
+            end_idx = set_boundaries[i + 1]
+
+            set_preds = predictions[start_idx:end_idx]
+            set_labels = labels[start_idx:end_idx]
+
+            if set_labels.std() < 1e-10:
+                continue
+
+            if normalize_training_batches:
+                set_labels = (set_labels - set_labels.mean()) / set_labels.std()
+
+            set_loss = criterion(set_preds, set_labels)
+
+            if fisher_transform:
+                set_loss = fisher_transform_torch(set_loss)
+
+            set_size = end_idx - start_idx
+            batch_loss += set_loss * set_size
+            total_samples += set_size
+
+        if total_samples == 0:
+            continue
+
+        batch_loss /= total_samples
+
+        batch_loss.backward()
+
+        if grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+
+        optimizer.step()
+
+        pbar.set_description(f"loss={batch_loss.item():.2e}")
+        total_loss += batch_loss.item()
+        steps += 1
+
+    mean_loss = total_loss / max(1, steps)
+    return mean_loss
 
 
 def eval_with_batched_sets(
@@ -124,30 +202,14 @@ def train_epoch(
     criterion=nn.MSELoss(),
     normalize_training_batches=False,
 ):
-    """
-    Train the model for one epoch.
-
-    Process each batch from the loader, compute loss, and update model parameters.
-
-    Args:
-        model (nn.Module): The neural network model to train.
-        loader (DataLoader): DataLoader providing batches of training data.
-        optimizer (torch.optim.Optimizer): Optimizer for updating model parameters.
-        criterion (nn.Module, optional): Loss function. Defaults to nn.MSELoss().
-        normalize_training_batches (bool, optional): Whether to normalize labels within each batch.
-            Defaults to False.
-
-    Returns:
-        float: Average loss for the epoch.
-    """
     logger.debug("Training model")
     model.train()
     torch.set_grad_enabled(True)
 
     total_loss = 0
 
-    for protein_features, ligand_features, labels, _, weights in tqdm.tqdm(
-        loader, desc="training"
+    for protein_features, ligand_features, labels, _, weights in (
+        pbar := tqdm.tqdm(loader, desc="training")
     ):
         labels = labels.squeeze()
         if normalize_training_batches:
@@ -166,6 +228,7 @@ def train_epoch(
         loss.backward()
         optimizer.step()
 
+        pbar.set_description(f"loss={loss.item():.2e}")
         total_loss += loss.item()
 
     total_loss /= len(loader)
@@ -179,24 +242,6 @@ def evaluate_epoch(
     prediction_file=None,
     rank_corr_fn=None,
 ):
-    """
-    Evaluate the model on validation or test data.
-
-    Process each batch from the loader without updating model parameters, and
-    optionally compute rank correlation and save predictions.
-
-    Args:
-        model (nn.Module): The neural network model to evaluate.
-        loader (DataLoader): DataLoader providing batches of evaluation data.
-        criterion (nn.Module, optional): Loss function for evaluation. Defaults to nn.L1Loss().
-        prediction_file (str, optional): Path to save prediction results. Defaults to None.
-        rank_corr_fn (Callable, optional): Function to compute rank correlation. Defaults to None.
-
-    Returns:
-        tuple: A tuple containing:
-            - float: Average loss for the evaluation data.
-            - float: Mean rank correlation if rank_corr_fn is provided, -1 otherwise.
-    """
     logger.debug("Evaluating model")
     model.eval()
     torch.set_grad_enabled(False)
