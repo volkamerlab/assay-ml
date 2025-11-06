@@ -19,22 +19,16 @@ from dti.model import (
     PairMolecularModel,
     ComplexSetRank,
     MoleculeSetRank,
-    MoleculeBayesianSetRankModel,
-    ComplexBayesianSetRankModel,
 )
 from dti.data.dataset import (
     ActivityDataset,
     SetActivityDataset,
     MultiSetActivityDataset,
     PairDataset,
-    PropertySetDataset,
-    ResettingBatchSampler,
 )
 from dti.data.processing import (
     prepare_datasets,
     load_landrum,
-    load_chembl_endpoints,
-    load_chembl_endpoints_protein,
     load_kinodata,
     load_nci,
     load_solubility,
@@ -45,7 +39,6 @@ from dti.data.processing import (
 )
 from dti.data.featurization import MolFingerprint
 from dti.training.set_rank import train_and_evaluate_model
-from dti.training.bayesian import train_and_evaluate_pfn_model
 from dti.training.metrics import (
     AssayRankAccuracy,
     batch_pair_loss,
@@ -57,9 +50,9 @@ from dti.utils import (
     init_logging,
     set_random_seeds,
     save_code_snapshot,
+    get_condor_job_id,
 )
 from dti.utils.constants import (
-    ACT,
     DATA,
     ASSAY,
     COMPOUND,
@@ -72,11 +65,8 @@ logger = logging.getLogger(__name__)
 
 
 def setup(method: Method, dataset: str) -> Tuple[type, type, type, Callable]:
+    """Resolves dataset string to data loading function and model/dataset classes."""
     match dataset.lower():
-        case "chembl":
-            data, mol_only = load_chembl_endpoints, True
-        case "chemblprot":
-            data, mol_only = load_chembl_endpoints_protein, False
         case "kinodata":
             data, mol_only = load_kinodata, False
         case "landrum":
@@ -85,7 +75,8 @@ def setup(method: Method, dataset: str) -> Tuple[type, type, type, Callable]:
             data_path = DATA / "raw" / "landrum_large.csv"
             data, mol_only = partial(load_landrum, data_path), False
         case "omnivore":
-            data, mol_only = partial(load_landrum, DATA / "raw" / "omnivore.csv"), False
+            data_path = DATA / "raw" / "omnivore.csv"
+            data, mol_only = partial(load_landrum, data_path), False
         case "activities":
             data, mol_only = load_activities, False
         case "solubility":
@@ -95,12 +86,11 @@ def setup(method: Method, dataset: str) -> Tuple[type, type, type, Callable]:
         case "clearance":
             data, mol_only = load_clearance, True
         case "cell_line":
-            data, mol_only = partial(load_lipo, DATA / "raw" / "cell_line.csv"), True
+            data_path = DATA / "raw" / "cell_line.csv"
+            data, mol_only = partial(load_lipo, data_path), True
         case "atcc" | "ovcar":
-            data, mol_only = (
-                partial(load_nci, DATA / "raw" / f"{dataset.lower()}.csv"),
-                True,
-            )
+            data_path = DATA / "raw" / f"{dataset.lower()}.csv"
+            data, mol_only = partial(load_nci, data_path), True
         case _:
             logger.error(f"Unknown dataset: {dataset}")
             sys.exit(1)
@@ -110,46 +100,16 @@ def setup(method: Method, dataset: str) -> Tuple[type, type, type, Callable]:
 
 
 def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]:
+    """Resolves method and mol_only flag to model and dataset classes."""
     msa = partial(
         MultiSetActivityDataset,
         max_batch_datapoints=2048,
         max_set_size=1000,
-        shuffle_within_target=(method != Method.PFN),
+        shuffle_within_target=True,  # PFN logic removed
     )
     shuffled_multiset = partial(msa, inter_assay=True)
+
     match method:
-        case Method.PFN if mol_only:
-            mswpds = partial(
-                PropertySetDataset,
-                max_batch_datapoints=2048,
-                max_set_size=1024,
-                shuffle_within_target=False,
-                property_columns=[
-                    "mw_freebase",
-                    "alogp",
-                    "hba",
-                    "hbd",
-                    "psa",
-                    "rtb",
-                    "num_ro5_violations",
-                    "full_mwt",
-                    "aromatic_rings",
-                    "heavy_atoms",
-                    "qed_weighted",
-                    "np_likeness_score",
-                ],
-            )
-            mswpds_val = partial(
-                PropertySetDataset,
-                max_batch_datapoints=2048,
-                max_set_size=2048,
-                shuffle_within_target=False,
-                property_columns=[],
-                property_set_ratio=0.0,
-            )
-            return MoleculeBayesianSetRankModel, mswpds, mswpds_val
-        case Method.PFN:
-            return ComplexBayesianSetRankModel, msa, msa
         case Method.PAIRS if mol_only:
             return PairMolecularModel, PairDataset, PairDataset
         case Method.PAIRS:
@@ -175,20 +135,12 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
         case Method.IC50ALLSETS | Method.ALLSETS:
             return ComplexSetRank, shuffled_multiset, msa
         case _:
-            logger.error(f"No model and dataset configuration for method: {method}")
+            logger.error(f"No model/dataset config for method: {method}")
             sys.exit(1)
 
 
-def train_batch(method: Method, default: int) -> int:
-    if method == Method.ALLPAIRS:
-        return int(np.sqrt(default))
-    elif method.on_sets or method == Method.IC50CORR:
-        return 1
-    else:
-        return default
-
-
 def loss_fn(method: Method, default: Callable) -> Callable:
+    """Resolves method to a corresponding loss function."""
     match method:
         case Method.IC50CORR | Method.SETS | Method.ALLSETS:
             return corr_loss
@@ -198,6 +150,15 @@ def loss_fn(method: Method, default: Callable) -> Callable:
             return nn.SmoothL1Loss()
         case _:
             return nn.SmoothL1Loss(reduction="none")
+
+
+def train_batch(method: Method, default: int) -> int:
+    if method == Method.ALLPAIRS:
+        return int(np.sqrt(default))
+    elif method.on_sets or method == Method.IC50CORR:
+        return 1
+    else:
+        return default
 
 
 def test_batch(method: Method, default: int) -> int:
@@ -214,11 +175,9 @@ def prepare_dataset_splits(
     train_target: str = "scaled_ic50",
     test_target: str = "scaled_ic50",
     need_data: bool = True,
-    property_set_ratio: float = 0.5,
 ):
     """Prepare and return model class, dataloaders, ligand_dim, and raw data."""
     data_dir = DATA / "processed" / dataset_name
-    aggregate = not dataset_name.startswith("chembl")
     inter_assay_weight = None
 
     if method == Method.HODGE:
@@ -226,6 +185,7 @@ def prepare_dataset_splits(
 
     model_cls, dataset_cls, val_dataset_cls, load_data = setup(method, dataset_name)
 
+    data = None
     if not (data_dir / f"{fold}").exists():
         data = load_data()
         prepare_datasets(
@@ -233,20 +193,17 @@ def prepare_dataset_splits(
             data_dir,
             5,
             random_valset=False,
-            aggregate=aggregate,
+            aggregate=True,
         )
     elif need_data:
         data = load_data()
 
-    train_dataset_path = data_dir / str(fold) / "train.pt"
-    val_dataset_path = data_dir / str(fold) / "val.pt"
-    test_dataset_path = data_dir / str(fold) / "test.pt"
     train_data, val_data, test_data = load_split(
         fold,
         data_dir,
         test_target,
         inter_assay_weight=inter_assay_weight,
-        scale_targets=method != Method.PFN,
+        scale_targets=True,
     )
     mol_feat = MolFingerprint(mol_feat)
     data_kwargs = dict(
@@ -256,28 +213,26 @@ def prepare_dataset_splits(
 
     val_dataset = val_dataset_cls(val_data, target=test_target, **data_kwargs)
     test_dataset = val_dataset_cls(test_data, target=test_target, **data_kwargs)
-    train_data_kwargs = dict(data_kwargs)
-    train_data_kwargs["property_set_ratio"] = property_set_ratio
-    train_dataset = dataset_cls(train_data, target=train_target, **train_data_kwargs)
+    train_dataset = dataset_cls(train_data, target=train_target, **data_kwargs)
 
     assert len(train_dataset) > 0
 
     train_loader = DataLoader(
         train_dataset,
-        batch_sampler=ResettingBatchSampler(train_dataset, batch_size=1),
-        shuffle=False,
+        batch_size=train_batch(method, batch_size),
+        shuffle=True,
         num_workers=0,
         drop_last=method.on_pairs,
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_sampler=ResettingBatchSampler(val_dataset, batch_size=1),
+        batch_size=test_batch(method, batch_size),
         shuffle=False,
         num_workers=0,
     )
     test_loader = DataLoader(
         test_dataset,
-        batch_sampler=ResettingBatchSampler(test_dataset, batch_size=1),
+        batch_size=test_batch(method, batch_size),
         shuffle=False,
         num_workers=0,
     )
@@ -288,7 +243,7 @@ def prepare_dataset_splits(
         val_loader,
         test_loader,
         mol_feat.dim,
-        data if need_data else None,
+        data,
     )
 
 
@@ -298,10 +253,8 @@ def run_split(
     method: Method,
     dataset_name: str,
     fold: int,
-    seed: int,
-    unmasked_weight: float,
-    property_set_ratio: float,
 ):
+    """Runs a single fold of an experiment."""
     batch_size = 512
     num_epochs = 50_000  # early stopping in place
     info_cols = [INTRA_ASSAY_TEST, IDENT, COMPOUND, ASSAY]
@@ -310,9 +263,6 @@ def run_split(
         case Method.HODGE:
             train_target = HODGE
             test_target = "scaled_ic50"
-        case Method.PFN:
-            train_target = ACT
-            test_target = ACT
         case _:
             train_target = "scaled_ic50"
             test_target = "scaled_ic50"
@@ -333,8 +283,7 @@ def run_split(
         batch_size,
         train_target=train_target,
         test_target=test_target,
-        need_data=method != Method.PFN,
-        property_set_ratio=property_set_ratio,
+        need_data=True,
     )
 
     rstat = pearsonr
@@ -354,15 +303,11 @@ def run_split(
         patience_termination=20 if train_short else 1000,
         patience_lr=10 if train_short else 100,
         fisher_transform=method not in [Method.IC50SETS, Method.IC50ALLSETS],
-        unmasked_weight=unmasked_weight,
-        n_bins=100,
     )
-    if model_cls in [ComplexBayesianSetRankModel, MoleculeBayesianSetRankModel]:
-        train_and_evaluate_pfn_model(*args, **kwargs)
-    else:
-        assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
-        kwargs["rank_corr_fn"] = assay_rank
-        train_and_evaluate_model(*args, **kwargs)
+
+    assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
+    kwargs["rank_corr_fn"] = assay_rank
+    train_and_evaluate_model(*args, **kwargs)
 
     logger.info(f"{run_name} finished")
 
@@ -383,18 +328,6 @@ def main():
         default="morgan",
         help="Molecular features (default: morgan)",
     )
-    parser.add_argument(
-        "--unmasked-weight",
-        type=float,
-        default=0.0,
-        help="[PFN] Weight of reconstruction on unmasked samples. (default: 0.0)",
-    )
-    parser.add_argument(
-        "--property-set-ratio",
-        type=float,
-        default=0.5,
-        help="[PFN] Proportion of physiochemical property sets during training. (default: 0.5)",
-    )
 
     args = parser.parse_args()
 
@@ -403,9 +336,7 @@ def main():
     mol_feat = args.mol_feat.lower()
 
     run_name = "_".join(
-        map(
-            str, [dataset_name, mol_feat, args.fold, repr(method), uuid.uuid4().hex[:4]]
-        )
+        map(str, [dataset_name, mol_feat, args.fold, repr(method), get_condor_job_id()])
     )
     init_logging(run_name)
     logger = logging.getLogger(run_name)
@@ -422,9 +353,6 @@ def main():
         method,
         dataset_name,
         args.fold,
-        args.seed,
-        args.unmasked_weight,
-        args.property_set_ratio,
     )
 
 
