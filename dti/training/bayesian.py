@@ -1,0 +1,392 @@
+from typing import Type, Any, Dict
+
+import tqdm
+import pandas as pd
+import numpy as np
+import torch
+from torch import nn
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.utils.data import DataLoader
+import logging
+from functools import namedtuple
+
+from ..utils import device
+from ..utils.constants import OUTPUT
+
+logger = logging.getLogger(__name__)
+
+_defaults = dict(
+    protein_dim=1280,
+    ligand_dim=2048,
+    embedding_size=512,
+    hidden_channels=512,
+    num_epochs=500,
+    patience_termination=100,
+    patience_lr=20,
+    lr=5e-5,
+)
+
+
+def train_with_batched_masked_sets(
+    model,
+    loader,
+    optimizer,
+    mask_fraction: float = 0.2,
+    unmasked_weight: float = 0.0,
+    **kwargs,
+):
+    model.train()
+    device = next(model.parameters()).device
+    logger.info(f"training with unmasked_weight={unmasked_weight}")
+
+    bd = model.bin_dist
+    clip_range = (bd.edges[0], bd.edges[-1])
+    logger.debug(f"clipping labels to [{clip_range[0].item()}, {clip_range[1].item()}]")
+
+    total_loss = 0.0
+    steps = 0
+    masked_weight = 1.0
+
+    n_masked = 0
+    total_mae = 0
+
+    for batch_idx, (
+        protein_features,
+        ligand_features,
+        labels,
+        _,
+        metadata,
+    ) in enumerate(pbar := tqdm.tqdm(loader, desc="training")):
+        set_boundaries = metadata["set_boundaries"].squeeze()
+        num_sets = metadata["num_sets"].squeeze().item()
+        set_ids_tensor = metadata["set_ids_tensor"].to(device, non_blocking=True)
+
+        ligand_features = ligand_features.squeeze().to(device, non_blocking=True)
+        protein_features = protein_features.squeeze().to(device, non_blocking=True)
+        labels = labels.squeeze().to(device, non_blocking=True)
+        batch_size = labels.size(0)
+
+        sample_mask = _generate_mask_for_sets(
+            set_boundaries, num_sets, batch_size, mask_fraction
+        )
+
+        with torch.no_grad():
+            normed_labels = _normalize_sets_minmax(
+                labels,
+                set_boundaries,
+                num_sets,
+                mask=sample_mask,
+                clip_range=clip_range,
+            )
+
+        context_labels = normed_labels.clone()
+        context_labels[sample_mask] = 0.0
+        preds = model(
+            ligand_features,
+            protein_features,
+            context_labels,
+            sample_mask,
+            set_ids_tensor,
+        )
+
+        nll_losses = -bd.log_prob(normed_labels, preds)
+
+        if unmasked_weight == 1.0:
+            batch_loss = nll_losses.mean()
+        elif unmasked_weight == 0.0:
+            batch_loss = nll_losses[sample_mask].mean()
+        else:
+            weights = torch.full_like(nll_losses, unmasked_weight)
+            weights[sample_mask] = masked_weight
+            batch_loss = (nll_losses * weights).mean()
+
+        masked_normed = normed_labels[sample_mask]
+        masked_preds = preds[sample_mask]
+        n_masked += sample_mask.float().sum()
+        true_bins = bd.labels(masked_normed)
+        pred_mean = bd.mean(masked_preds)
+        true_centers = bd.bucket_centers()[true_bins]
+        total_mae += (pred_mean - true_centers).abs().sum().item()
+        optimizer.zero_grad(set_to_none=True)
+        batch_loss.backward()
+        optimizer.step()
+
+        loss_value = batch_loss.detach().item()
+        total_loss += loss_value
+        steps += 1
+        pbar.set_description(f"train batch loss={loss_value:.4e}")
+
+    avg_mae = total_mae / max(1, n_masked)
+    logger.info(f"train MAE: {avg_mae:.4e}")
+    return total_loss / max(1, steps)
+
+
+@torch.no_grad()
+def evaluate_with_batched_masked_sets(
+    model,
+    loader,
+    mask_fraction: float = 0.2,
+    predictions_file=None,
+):
+    model.eval()
+    device = next(model.parameters()).device
+
+    total_loss = 0.0
+    total_wass = 0.0
+    total_mae = 0.0
+    n_masked = 0
+
+    all_info = []
+    all_labels = []
+    all_normed = []
+    all_masks = []
+    all_probs = []
+    save_preds = predictions_file is not None
+
+    bd = model.bin_dist
+    clip_range = (bd.edges[0], bd.edges[-1])
+    bin_edges = bd.edges.to(device)
+    bin_widths = torch.diff(bin_edges)
+    total_width = (bin_edges[-1] - bin_edges[0]).clamp_min(1e-6)
+
+    for batch_idx, (
+        protein_features,
+        ligand_features,
+        labels,
+        info,
+        metadata,
+    ) in enumerate(
+        pbar := tqdm.tqdm(loader, desc="testing" if save_preds else "evaluating")
+    ):
+        set_boundaries = metadata["set_boundaries"].squeeze()
+        num_sets = metadata["num_sets"].squeeze()
+        set_ids_tensor = metadata["set_ids_tensor"].to(device, non_blocking=True)
+
+        ligand_features = ligand_features.squeeze().to(device, non_blocking=True)
+        protein_features = protein_features.squeeze().to(device, non_blocking=True)
+        labels = labels.squeeze().to(device, non_blocking=True)
+        info = info.squeeze().to(device, non_blocking=True)
+
+        # info[:,0] is boolean mask indicator
+        assert len(torch.unique(info[:, 0])) == 2
+        sample_mask = info[:, 0].bool()
+
+        normed_labels = _normalize_sets_minmax(
+            labels, set_boundaries, num_sets, mask=sample_mask, clip_range=clip_range
+        )
+
+        context_labels = normed_labels.clone()
+        context_labels[sample_mask] = 0.0
+        preds = model(
+            ligand_features,
+            protein_features,
+            context_labels,
+            sample_mask,
+            set_ids_tensor,
+        )
+
+        if sample_mask.any():
+            masked_preds = preds[sample_mask]
+            masked_normed = normed_labels[sample_mask]
+            n_masked_batch = masked_preds.size(0)
+
+            nll_losses = -bd.log_prob(masked_normed, masked_preds)
+            total_loss += nll_losses.sum().item()
+            n_masked += n_masked_batch
+
+            probs = torch.softmax(masked_preds, dim=-1)
+            true_bins = bd.labels(masked_normed)
+            one_hot = bd.dist(true_bins)
+
+            cdf_pred = torch.cumsum(probs, dim=-1)
+            cdf_true = torch.cumsum(one_hot, dim=-1)
+            wass_dists = (torch.abs(cdf_pred - cdf_true) * bin_widths).sum(
+                dim=-1
+            ) / total_width
+            total_wass += wass_dists.sum().item()
+
+            pred_mean = bd.mean(masked_preds)
+            true_centers = bd.bucket_centers()[true_bins]
+            total_mae += (pred_mean - true_centers).abs().sum().item()
+
+            del nll_losses, probs, true_bins, one_hot, cdf_pred, cdf_true
+            del wass_dists, pred_mean, true_centers, masked_preds, masked_normed
+
+        if save_preds:
+            all_info.append(info.cpu())
+            all_labels.append(labels.cpu())
+            all_normed.append(normed_labels.cpu())
+            all_masks.append(sample_mask.cpu())
+            all_probs.append(torch.softmax(preds, dim=-1).cpu())
+
+        del preds
+
+        if (batch_idx + 1) % 100 == 0:
+            torch.cuda.empty_cache()
+
+    avg_loss = total_loss / max(1, n_masked)
+    avg_wass = total_wass / max(1, n_masked)
+    avg_mae = total_mae / max(1, n_masked)
+
+    if save_preds and all_info:
+        predictions_file = predictions_file.with_suffix(".npz")
+        predictions_file.parent.mkdir(parents=True, exist_ok=True)
+
+        data_to_save = {
+            "info": torch.cat(all_info).numpy(),
+            "true_labels": torch.cat(all_labels).numpy(),
+            "normed_labels": torch.cat(all_normed).numpy(),
+            "is_masked": torch.cat(all_masks).numpy(),
+            "probs": torch.cat(all_probs).numpy(),
+        }
+
+        np.savez_compressed(predictions_file, **data_to_save)
+
+    return {"nll": avg_loss, "wasserstein": avg_wass, "mae": avg_mae}
+
+
+def train_and_evaluate_pfn_model(
+    model_cls: Type[nn.Module],
+    run_name: str,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    test_loader: DataLoader,
+    target_name: str,
+    index: int,
+    **kwargs: Dict[str, Any],
+) -> None:
+    logger.info(f"training model for target: {target_name}")
+    Epoch = namedtuple(
+        "Epoch",
+        [
+            "epoch",
+            "lr",
+            "train_loss",
+            "val_loss",
+        ],
+    )
+
+    opts: Dict[str, Any] = _defaults | kwargs
+
+    logger.info("training options:")
+    for k, v in opts.items():
+        logger.info(f" - {k}={v}")
+
+    model = model_cls(
+        ligand_input_size=opts["ligand_dim"],
+        protein_input_size=opts["protein_dim"],
+        **opts,
+    ).to(device)
+
+    model.bin_dist.fit(train_loader)
+    with open(OUTPUT / run_name / "bin_dist", "w") as f_bins:
+        f_bins.write(f"{','.join([str(x.item()) for x in model.bin_dist.edges])}")
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=opts["lr"])
+    scheduler = ReduceLROnPlateau(
+        optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
+    )
+
+    best_loss = float("inf")
+    epochs_without_improvement = 0
+    optimization = []
+
+    for epoch in range(opts["num_epochs"]):
+        train_loss = train_with_batched_masked_sets(
+            model,
+            train_loader,
+            optimizer,
+            unmasked_weight=opts.get("unmasked_weight", 1.0),
+        )
+        val_results = evaluate_with_batched_masked_sets(model, val_loader)
+        val_loss = val_results["nll"]
+
+        scheduler.step(val_loss)
+        lr = scheduler.get_last_lr()
+
+        logger.info(f"epoch: {epoch + 1}")
+        logger.info(f" train loss: {train_loss:.4e}")
+        logger.info(f" val masked NLL: {val_results['nll']:.4e}")
+        logger.info(f" val masked EMD: {val_results['wasserstein']:.4e}")
+        logger.info(f" val masked MAE: {val_results['mae']:.4e}")
+
+        optimization.append(Epoch(epoch, lr, train_loss, val_loss))
+        pd.DataFrame(optimization).to_csv(
+            OUTPUT / run_name / "optimization.csv", index=False
+        )
+
+        if val_loss < best_loss:
+            logger.info("validation improved, saving model.")
+            best_loss = val_loss
+            epochs_without_improvement = 0
+            torch.save(model.state_dict(), OUTPUT / run_name / "model.pt")
+        else:
+            epochs_without_improvement += 1
+            if epochs_without_improvement >= opts["patience_termination"]:
+                logger.info(f"early stopping triggered after {epoch + 1} epochs.")
+                break
+
+    logger.info("loading best model for final test evaluation...")
+    model.load_state_dict(torch.load(OUTPUT / run_name / "model.pt"))
+
+    test_results = evaluate_with_batched_masked_sets(
+        model,
+        test_loader,
+        predictions_file=OUTPUT / run_name / "predictions.npz",
+    )
+    logger.info("final test set performance:")
+    logger.info(f" test masked NLL: {test_results['nll']:.4e}")
+    logger.info(f" test masked EMD: {test_results['wasserstein']:.4e}")
+    logger.info(f" test masked MAE: {test_results['mae']:.4e}")
+
+
+def _normalize_sets_minmax(
+    labels, set_boundaries, num_sets, mask=None, clip_range=None
+):
+    normed_labels = torch.zeros_like(labels)
+
+    for i in range(num_sets):
+        start_idx = set_boundaries[i]
+        end_idx = set_boundaries[i + 1]
+        set_labels = labels[start_idx:end_idx]
+        set_size = end_idx - start_idx
+        if set_size < 2:
+            continue
+
+        if mask is not None:
+            set_mask = mask[start_idx:end_idx]
+            unmasked = set_labels[~set_mask]
+        else:
+            unmasked = set_labels
+
+        if unmasked.numel() < 2:
+            continue
+
+        min_val = unmasked.min()
+        max_val = unmasked.max()
+        range_val = (max_val - min_val).clamp_min(1e-6)
+        normed = (set_labels - min_val) / range_val
+
+        if clip_range is not None:
+            normed = normed.clamp(*clip_range)
+
+        normed_labels[start_idx:end_idx] = normed
+
+    return normed_labels
+
+
+def _generate_mask_for_sets(set_boundaries, num_sets, total_size, mask_fraction):
+    sample_mask = torch.zeros(total_size, dtype=torch.bool, device=device)
+
+    for i in range(num_sets):
+        start_idx = set_boundaries[i]
+        end_idx = set_boundaries[i + 1]
+        set_size = end_idx - start_idx
+        if set_size < 2:
+            continue
+
+        n_masked = max(1, int(set_size * mask_fraction))
+        mask_idx = torch.randperm(set_size, device=device)[:n_masked]
+        sample_mask[start_idx:end_idx][mask_idx] = True
+
+    return sample_mask

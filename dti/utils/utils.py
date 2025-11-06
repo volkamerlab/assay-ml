@@ -3,11 +3,9 @@ import functools
 import subprocess
 import time
 import logging
-import tarfile
 from pathlib import Path
 from enum import unique, StrEnum, auto
 import random
-import shutil
 
 import torch
 import pandas as pd

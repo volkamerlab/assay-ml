@@ -13,8 +13,8 @@ from rdkit import Chem
 from rdkit.Chem import rdFingerprintGenerator
 from transformers import AutoTokenizer, AutoModel
 
-from .constants import DATA, TID, SEQUENCE
-from .utils import device
+from ..utils.constants import DATA, TID, SEQUENCE
+from ..utils import device
 
 
 logger = logging.getLogger(__name__)
