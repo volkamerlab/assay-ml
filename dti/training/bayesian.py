@@ -21,8 +21,8 @@ _defaults = dict(
     embedding_size=512,
     hidden_channels=512,
     num_epochs=500,
-    patience_termination=100,
-    patience_lr=20,
+    patience_termination=30,
+    patience_lr=10,
     lr=5e-5,
 )
 
@@ -116,9 +116,11 @@ def train_with_batched_masked_sets(
         batch_loss.backward()
         optimizer.step()
 
-        masked_normed = normed_labels[sample_mask & real_assay]
-        masked_preds = preds[sample_mask & real_assay]
-        n_masked += sample_mask.float().sum()
+        real_samples = sample_mask & real_assay
+        masked_normed = normed_labels[real_samples]
+        masked_preds = preds[real_samples]
+
+        n_masked += real_samples.float().sum()
         pred_mean = bd.mean(masked_preds)
         total_mae += _step_mae(pred_mean, masked_normed)
 
@@ -219,20 +221,12 @@ def evaluate_with_batched_masked_sets(
             pred_mean = bd.mean(masked_preds)
             total_mae += _step_mae(pred_mean, masked_normed)
 
-            del nll_losses, probs, true_bins, one_hot, cdf_pred, cdf_true
-            del wass_dists, pred_mean, masked_preds, masked_normed
-
         if save_preds:
             all_info.append(info.cpu())
             all_labels.append(labels.cpu())
             all_normed.append(normed_labels.cpu())
             all_masks.append(sample_mask.cpu())
             all_probs.append(torch.softmax(preds, dim=-1).cpu())
-
-        del preds
-
-        if (batch_idx + 1) % 100 == 0:
-            torch.cuda.empty_cache()
 
     avg_loss = total_loss / max(1, n_masked)
     avg_wass = total_wass / max(1, n_masked)
