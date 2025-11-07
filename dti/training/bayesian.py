@@ -146,7 +146,7 @@ def _step_corr_per_set(
         except ValueError:
             continue
 
-    return total_z_transformed_rho.item(), num_valid_sets
+    return total_z_transformed_rho, num_valid_sets
 
 
 def _compute_masked_metrics(
