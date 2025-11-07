@@ -345,7 +345,6 @@ def train_with_batched_masked_sets(
 def evaluate_with_batched_masked_sets(
     model,
     loader,
-    mask_fraction: float = 0.2,  # Not used, but kept for signature consistency
     predictions_file=None,
 ):
     model.eval()
@@ -484,7 +483,7 @@ def train_and_evaluate_pfn_model(
     ).to(device)
 
     model.bin_dist.fit(train_loader)
-    (OUTPUT / run_name).mkdir(parents=True, exist_ok=True)  # Ensure dir exists
+    (OUTPUT / run_name).mkdir(parents=True, exist_ok=True)
     with open(OUTPUT / run_name / "bin_dist", "w") as f_bins:
         f_bins.write(f"{','.join([str(x.item()) for x in model.bin_dist.edges])}")
 
@@ -544,10 +543,8 @@ def train_and_evaluate_pfn_model(
         predictions_file=OUTPUT / run_name / "predictions.npz",
     )
     logger.info("final test set performance:")
-    logger.info(f" test masked NLL: {test_results['NLL']:.4e}")
-    logger.info(f" test masked EMD: {test_results['EMD']:.4e}")
-    logger.info(f" test masked MAE: {test_results['MAE']:.4e}")
-    logger.info(f" test masked R2:  {test_results['R2']:.4e}")
+    for metric, value in test_results.items():
+        logger.info(f" test {metric}: {value:.4e}")
 
 
 def _normalize_sets_minmax(
