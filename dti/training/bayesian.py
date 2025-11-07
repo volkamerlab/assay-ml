@@ -71,6 +71,7 @@ def train_with_batched_masked_sets(
         set_boundaries = metadata["set_boundaries"].squeeze()
         num_sets = metadata["num_sets"].squeeze().item()
         set_ids_tensor = metadata["set_ids_tensor"].to(device, non_blocking=True)
+        real_assay = metadata["real_assay"].squeeze().to(device, non_blocking=True)
 
         ligand_features = ligand_features.squeeze().to(device, non_blocking=True)
         protein_features = protein_features.squeeze().to(device, non_blocking=True)
@@ -111,14 +112,15 @@ def train_with_batched_masked_sets(
             weights[sample_mask] = masked_weight
             batch_loss = (nll_losses * weights).mean()
 
-        masked_normed = normed_labels[sample_mask]
-        masked_preds = preds[sample_mask]
-        n_masked += sample_mask.float().sum()
-        pred_mean = bd.mean(masked_preds)
-        total_mae += _step_mae(pred_mean, masked_normed)
         optimizer.zero_grad(set_to_none=True)
         batch_loss.backward()
         optimizer.step()
+
+        masked_normed = normed_labels[sample_mask & real_assay]
+        masked_preds = preds[sample_mask & real_assay]
+        n_masked += sample_mask.float().sum()
+        pred_mean = bd.mean(masked_preds)
+        total_mae += _step_mae(pred_mean, masked_normed)
 
         loss_value = batch_loss.detach().item()
         total_loss += loss_value

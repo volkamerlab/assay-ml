@@ -576,6 +576,10 @@ class PropertySetDataset(Dataset):
                     current_total_datapoints += set_size
 
                     coeffs = self.random.standard_normal(self.n_properties)
+                    ignored = self.random.integers(
+                        0, self.n_properties, self.n_properties - 4
+                    )
+                    coeffs[ignored] = 0
                     coeffs /= np.linalg.norm(coeffs)
 
                     sample_idx = self.random.choice(
@@ -649,7 +653,7 @@ class PropertySetDataset(Dataset):
         if self.random.random() < 0.9:
             labels += torch.randn_like(labels) * self.noise_std
         else:
-            labels *= torch.randn_like(labels) * self.noise_std
+            labels *= 1 + torch.randn_like(labels) * self.noise_std
 
     def __len__(self):
         """Returns the number of batches in an epoch."""
@@ -671,6 +675,7 @@ class PropertySetDataset(Dataset):
         all_indices_list = []
         all_labels_list = []
         set_sizes = []
+        real_assay = []
 
         for item in batch_plan:
             set_type = item[0]
@@ -679,6 +684,7 @@ class PropertySetDataset(Dataset):
             set_sizes.append(len(indices))
             all_indices_list.append(indices)
 
+            real_assay.extend([set_type == "assay"] * len(indices))
             if set_type == "assay":
                 all_labels_list.append(self.assay_labels[indices])
             else:
@@ -709,6 +715,7 @@ class PropertySetDataset(Dataset):
             "num_sets": num_sets,
             "set_ids_tensor": set_ids_tensor,
             "set_boundaries": set_boundaries,
+            "real_assay": torch.tensor(real_assay),
         }
 
         return prot_feats, lig_feats, all_labels, info, metadata
