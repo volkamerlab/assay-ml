@@ -138,7 +138,7 @@ def run_split(
     property_set_ratio: float,
     n_bins: int,
 ):
-    num_epochs = 50_000
+    num_epochs = 1_000
     info_cols = [INTRA_ASSAY_TEST, IDENT, COMPOUND, ASSAY]
 
     (
@@ -168,8 +168,8 @@ def run_split(
         ligand_dim=ligand_dim,
         multi_batch=False,
         num_epochs=num_epochs,
-        patience_termination=1000,
-        patience_lr=100,
+        patience_termination=30,
+        patience_lr=10,
         fisher_transform=False,
         unmasked_weight=unmasked_weight,
         n_bins=n_bins,
