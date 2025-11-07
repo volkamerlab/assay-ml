@@ -436,8 +436,39 @@ class PropertySetDataset(Dataset):
 
         self._prepare_property_data()
 
+        self.property_coeff_pool_size = 32
+        self.coeff_drift_alpha = 0.9
+        self._init_property_coeff_pool()
+
         self.batches_plan = None
         self.used_batches = None
+
+    def _init_property_coeff_pool(self):
+        if not hasattr(self, "n_properties") or self.n_properties == 0:
+            self.property_coeff_pool = []
+            return
+        self.property_coeff_pool = [
+            self._random_coeff_vector() for _ in range(self.property_coeff_pool_size)
+        ]
+
+    def _drift_property_coeff_pool(self):
+        if not self.property_coeff_pool:
+            return
+        new_coeffs = [
+            self._random_coeff_vector() for _ in range(self.property_coeff_pool_size)
+        ]
+        self.property_coeff_pool = [
+            self.coeff_drift_alpha * old + (1 - self.coeff_drift_alpha) * new
+            for old, new in zip(self.property_coeff_pool, new_coeffs)
+        ]
+        self.property_coeff_pool = [
+            c / np.linalg.norm(c) for c in self.property_coeff_pool
+        ]
+
+    def _random_coeff_vector(self):
+        coeffs = self.random.standard_normal(self.n_properties)
+        coeffs /= np.linalg.norm(coeffs)
+        return coeffs
 
     def _prepare_property_data(self):
         """
@@ -504,6 +535,7 @@ class PropertySetDataset(Dataset):
         )
 
     def prepare_epoch(self):
+        self._drift_property_coeff_pool()
         self._make_batches()
         self.used_batches = np.zeros(len(self.batches_plan), dtype=bool)
 
@@ -575,12 +607,7 @@ class PropertySetDataset(Dataset):
 
                     current_total_datapoints += set_size
 
-                    coeffs = self.random.standard_normal(self.n_properties)
-                    ignored = self.random.integers(
-                        0, self.n_properties, self.n_properties - 4
-                    )
-                    coeffs[ignored] = 0
-                    coeffs /= np.linalg.norm(coeffs)
+                    coeffs = self.random.choice(self.property_coeff_pool)
 
                     sample_idx = self.random.choice(
                         len(self.common_valid_indices), size=set_size, replace=False
