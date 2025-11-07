@@ -149,6 +149,20 @@ def _step_corr_per_set(
     return total_z_transformed_rho, num_valid_sets
 
 
+def _step_brier(
+    bd: BinDistribution,
+    masked_preds: torch.Tensor,
+    masked_normed: torch.Tensor,
+) -> float:
+    probs = torch.softmax(masked_preds, dim=-1)
+    true_bins = bd.labels(masked_normed)
+    one_hot = bd.dist(true_bins)
+
+    brier_scores = (probs - one_hot).pow(2).sum(dim=-1)
+
+    return brier_scores.sum().item()
+
+
 def _compute_masked_metrics(
     bd: BinDistribution,
     preds: torch.Tensor,
@@ -168,10 +182,12 @@ def _compute_masked_metrics(
 
     mae = _step_mae(bd, masked_preds, masked_normed)
     wass = _step_wass(bd, masked_preds, masked_normed)
+    brier = _step_brier(bd, masked_preds, masked_normed)
 
     metrics = {
         "mae": mae,
         "wass": wass,
+        "brier": brier,
         "n_masked": n_masked,
     }
 
@@ -279,6 +295,7 @@ def train_with_batched_masked_sets(
 
     n_masked = 0
     total_mae = 0
+    total_brier = 0
     total_wass = 0
 
     for batch in (pbar := tqdm.tqdm(loader, desc="train")):
@@ -328,6 +345,7 @@ def train_with_batched_masked_sets(
         n_masked += batch_metrics["n_masked"]
         total_wass += batch_metrics["wass"]
         total_mae += batch_metrics["mae"]
+        total_brier += batch_metrics["brier"]
 
         loss_value = batch_loss.detach().item()
         total_loss += loss_value
@@ -336,7 +354,8 @@ def train_with_batched_masked_sets(
 
     return {
         "NLL": total_loss / max(1, steps),
-        "EMD": total_wass / max(1, steps),
+        "EMD": total_wass / max(1, n_masked),
+        "Brier": total_brier / max(1, n_masked),
         "MAE": total_mae / max(1, n_masked),
     }
 
@@ -353,6 +372,7 @@ def evaluate_with_batched_masked_sets(
     total_loss = 0.0
     total_wass = 0.0
     total_mae = 0.0
+    total_brier = 0.0
     total_var_sse = 0.0
     total_var_sst = 0.0
     total_z_rho = 0.0
@@ -399,6 +419,7 @@ def evaluate_with_batched_masked_sets(
 
         n_masked += batch_metrics["n_masked"]
         total_wass += batch_metrics["wass"]
+        total_brier += batch_metrics["brier"]
         total_mae += batch_metrics["mae"]
         total_var_sse += batch_metrics["sse"]
         total_var_sst += batch_metrics["sst"]
@@ -423,6 +444,7 @@ def evaluate_with_batched_masked_sets(
     avg_loss = total_loss / max(1, n_masked)
     avg_wass = total_wass / max(1, n_masked)
     avg_mae = total_mae / max(1, n_masked)
+    avg_brier = total_brier / max(1, n_masked)
     avg_var_explained = 1.0 - (total_var_sse / (total_var_sst + 1e-6))
     if num_valid_sets > 0:
         avg_z_rho = total_z_rho / num_valid_sets
@@ -452,6 +474,7 @@ def evaluate_with_batched_masked_sets(
         "NLL": avg_loss,
         "EMD": avg_wass,
         "MAE": avg_mae,
+        "Brier": avg_brier,
         "R2": avg_var_explained,
         "Spearman": avg_spearman_rho,
         "Pearson": avg_pearson_r,
