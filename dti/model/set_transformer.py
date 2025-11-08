@@ -24,25 +24,24 @@ class MHABlock(Module):
         num_heads: int,
         ffn_hidden_layers: int,
         dropout: float = 0.1,
+        fanout_factor: int = 2,
         act=GELU,
     ):
         super().__init__()
         self.hidden_channels = hidden_channels
         self.num_heads = num_heads
         self.ffn_hidden_layers = ffn_hidden_layers
-        self.dropout = dropout
         self.attn = MHA(hidden_channels, num_heads, dropout=dropout)
         self.dropout = Dropout(dropout)
         self.ffn = mlp(
             hidden_channels,
-            hidden_channels,
+            hidden_channels * fanout_factor,
             hidden_channels,
             ffn_hidden_layers,
             act=act,
         )
         self.ln1 = LayerNorm(hidden_channels)
         self.ln2 = LayerNorm(hidden_channels)
-        self.ln3 = LayerNorm(hidden_channels)
 
     def forward(
         self,
@@ -51,12 +50,11 @@ class MHABlock(Module):
         attn_mask: Tensor | None = None,
         need_weights: bool = False,
     ) -> Tensor:
-        x = self.ln1(x)
         if y is None:
             y = x
         x_, attn_weights = self.attn(x, y, y, attn_mask=attn_mask, need_weights=True)
-        x = self.ln2(x + x_)
-        x = self.ln3(x + self.ffn(x))
+        x = self.ln1(x + x_)
+        x = self.ln2(x + self.ffn(x))
         if need_weights:
             return x, attn_weights
         return x
