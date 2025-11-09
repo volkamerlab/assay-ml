@@ -3,6 +3,7 @@ import logging
 from functools import partial
 import traceback
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
@@ -138,7 +139,7 @@ def run_split(
     property_set_ratio: float,
     n_bins: int,
 ):
-    num_epochs = 1_000
+    num_epochs = 1
     info_cols = [INTRA_ASSAY_TEST, IDENT, COMPOUND, ASSAY]
 
     (
@@ -164,12 +165,14 @@ def run_split(
         METHOD,
         fold,
     ]
+    # patience increases logarithmically with n_bins and linearly with prop set ratio
+    patience = int(np.log10(n_bins) * 10 * (1 + property_set_ratio) + 5)
     kwargs = dict(
         ligand_dim=ligand_dim,
         multi_batch=False,
         num_epochs=num_epochs,
-        patience_termination=30,
-        patience_lr=10,
+        patience_termination=patience * 2,
+        patience_lr=patience,
         fisher_transform=False,
         unmasked_weight=unmasked_weight,
         n_bins=n_bins,
