@@ -1,4 +1,5 @@
 from collections.abc import Iterator, Iterable
+import hashlib
 import functools
 import logging
 from pathlib import Path
@@ -9,6 +10,7 @@ import numpy as np
 
 import torch
 from torch.utils.data import Dataset, Sampler
+from torch_geometric.data import Data, Batch
 from sklearn.preprocessing import StandardScaler
 
 from .featurization import MolFingerprint, esm2_features
@@ -761,6 +763,179 @@ class ResettingBatchSampler(Sampler):
         if self.dataset.batches_plan is None:
             self.dataset._make_batches()
         return len(self.dataset.batches_plan)
+
+
+class GraphPropertySetDataset(PropertySetDataset):
+    def __init__(
+        self,
+        data: pd.DataFrame,
+        mol_featurizer: MolFingerprint,
+        target: str = ACT,
+        property_columns: list[str] = None,
+        info_cols: list[str] = [],
+        model_name: str = "esm2_t33_650M_UR50D",
+        processed_dir: Path = DATA / "processed",
+        force_reprocess: bool = False,
+        **kwargs,
+    ):
+        super(PropertySetDataset, self).__init__()
+
+        self.protein_features = None
+        self.processed_dir = processed_dir
+        hash_args = f"{data.shape}{info_cols}{target}{processed_dir}"
+        logger.debug(f"dataset hash from {hash_args}")
+        args_hash = hashlib.sha256(hash_args.encode("UTF-8")).hexdigest()
+        self.processed_path = self.processed_dir / f"graph_data_{args_hash}.pt"
+        self.processed_dir.mkdir(exist_ok=True)
+
+        if not force_reprocess and self.processed_path.exists():
+            logger.info(f"Loading processed data from {self.processed_path}...")
+            self._load_processed()
+
+        else:
+            logger.info("Computing molecular graphs...")
+
+            graphs = mol_featurizer.compute_parallel(data[SMILES].values)
+            mask = [g is not None for g in graphs]
+
+            valid_count = sum(mask)
+            if len(mask) - valid_count > 0:
+                logger.info(
+                    f"Dropping {len(mask) - valid_count}/{len(mask)} data points "
+                    f"with invalid graphs."
+                )
+
+            self.data = data[mask].copy().reset_index(drop=True)
+            self.ligand_graphs = [g for g in graphs if g is not None]
+
+            logger.info("Computing protein features...")
+
+            self.assay_labels = torch.tensor(
+                self.data[target].values, dtype=torch.float32
+            )
+
+            self.info = torch.tensor(self.data[info_cols].values.astype(np.int64))
+
+            self._save_processed()
+
+        self.min_batch_size = kwargs.get("min_batch_size", 3)
+        self.max_set_size = kwargs.get("max_set_size", 0)
+        self.random = np.random.default_rng(kwargs.get("random_seed", 0))
+
+        self.assay_sets = []
+        grouped = self.data.groupby(ASSAY, sort=False)
+        num_unused = 0
+
+        for _, group in grouped:
+            group_idcs = group.index.values
+            group_size = len(group_idcs)
+
+            if group_size < self.min_batch_size:
+                num_unused += group_size
+                continue
+
+            self.random.shuffle(group_idcs)
+
+            if self.max_set_size > 0 and group_size > self.max_set_size:
+                num_splits = (group_size + self.max_set_size - 1) // self.max_set_size
+                sub_batches = np.array_split(group_idcs, num_splits)
+                for batch in sub_batches:
+                    if len(batch) >= self.min_batch_size:
+                        self.assay_sets.append(batch)
+                    else:
+                        num_unused += len(batch)
+            else:
+                self.assay_sets.append(group_idcs)
+
+        logger.info(
+            f"Created {len(self.assay_sets)} assay sets. "
+            f"({num_unused}/{len(self.data)} datapoints unused)"
+        )
+
+        self.property_set_ratio = kwargs.get("property_set_ratio", 0.5)
+        self.noise_std = kwargs.get("noise_std", 0.1)
+        self.max_batch_datapoints = kwargs.get("max_batch_datapoints", 2048)
+        self.property_columns = property_columns or []
+
+        self._prepare_property_data()
+
+        self.property_coeff_pool_size = 32
+        self.coeff_drift_alpha = 0.9
+        self._init_property_coeff_pool()
+
+        self.batches_plan = None
+        self.used_batches = None
+
+    def _save_processed(self):
+        logger.info(f"Saving processed data to {self.processed_path}...")
+        data_to_save = {
+            "data": self.data,  # The filtered dataframe
+            "ligand_graphs": self.ligand_graphs,  # The list of Data objects
+            "assay_labels": self.assay_labels,
+            "info": self.info,
+        }
+        torch.save(data_to_save, self.processed_path)
+
+    def _load_processed(self):
+        data = torch.load(self.processed_path, weights_only=False)
+        self.data = data["data"]
+        self.ligand_graphs = data["ligand_graphs"]
+        self.assay_labels = data["assay_labels"]
+        self.info = data["info"]
+
+    def __getitem__(self, idx):
+        batch_plan = self._get_next_batch(idx)
+
+        num_sets = len(batch_plan)
+        all_indices_list = []
+        all_labels_list = []
+        set_sizes = []
+        real_assay = []
+
+        for item in batch_plan:
+            set_type = item[0]
+            indices = item[1]
+
+            set_sizes.append(len(indices))
+            all_indices_list.append(indices)
+
+            real_assay.extend([set_type == "assay"] * len(indices))
+            if set_type == "assay":
+                all_labels_list.append(self.assay_labels[indices])
+            else:
+                coeffs_tensor = item[2]
+                labels = self._compute_property_labels(indices, coeffs_tensor)
+                all_labels_list.append(labels)
+
+        all_indices = np.concatenate(all_indices_list)
+        all_labels = torch.cat(all_labels_list)
+
+        prot_feats = (
+            torch.ones(1)
+            if self.protein_features is None
+            else self.protein_features[all_indices]
+        )
+        info = self.info[all_indices]
+
+        graphs_in_batch = [self.ligand_graphs[i] for i in all_indices]
+        lig_feats = Batch.from_data_list(graphs_in_batch)
+
+        set_sizes_tensor = torch.tensor(set_sizes, dtype=torch.long)
+        set_boundaries = torch.cat(
+            [torch.tensor([0]), torch.cumsum(set_sizes_tensor, 0)]
+        ).numpy()
+        set_ids_tensor = torch.repeat_interleave(
+            torch.arange(num_sets), set_sizes_tensor
+        )
+
+        metadata = {
+            "num_sets": num_sets,
+            "set_ids_tensor": set_ids_tensor,
+            "set_boundaries": set_boundaries,
+            "real_assay": torch.tensor(real_assay),
+        }
+
+        return prot_feats, lig_feats, all_labels, info, metadata
 
 
 class MultiSetActivityDataset(ActivityDataset):

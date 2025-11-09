@@ -221,10 +221,14 @@ def _process_batch(
     ) = batch
 
     set_boundaries = metadata["set_boundaries"].squeeze()
-    num_sets = metadata["num_sets"].squeeze().item()
+    num_sets = metadata["num_sets"]
+    if isinstance(num_sets, torch.Tensor):
+        num_sets = num_sets.squeeze().item()
     set_ids_tensor = metadata["set_ids_tensor"].to(device, non_blocking=True)
 
-    ligand_features = ligand_features.squeeze().to(device, non_blocking=True)
+    ligand_features = ligand_features
+    if isinstance(ligand_features, torch.Tensor):
+        ligand_features = ligand_features.squeeze().to(device, non_blocking=True)
     protein_features = protein_features.squeeze().to(device, non_blocking=True)
     labels = labels.squeeze().to(device, non_blocking=True)
     info = info.squeeze().to(device, non_blocking=True)

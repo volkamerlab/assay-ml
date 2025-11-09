@@ -20,6 +20,7 @@ dependencies = [
     "seaborn>=0.13.2",
     "statsmodels>=0.14.4",
     "torch>=2.6.0",
+    "torch-geometric>=2.7.0",
     "torcheval>=0.0.7",
     "tqdm>=4.67.1",
     "transformers>=4.56.1",

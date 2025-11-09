@@ -11,4 +11,5 @@ from .set_rank import (
 from .bayesian import (
     MoleculeBayesianSetRankModel,
     ComplexBayesianSetRankModel,
+    GraphMoleculeBayesianSetRankModel,
 )

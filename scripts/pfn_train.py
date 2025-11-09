@@ -6,9 +6,14 @@ import traceback
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+from torch_geometric.loader import DataLoader as PyGDataLoader
 
-from dti.model import MoleculeBayesianSetRankModel
-from dti.data.dataset import PropertySetDataset, ResettingBatchSampler
+from dti.model import MoleculeBayesianSetRankModel, GraphMoleculeBayesianSetRankModel
+from dti.data.dataset import (
+    PropertySetDataset,
+    ResettingBatchSampler,
+    GraphPropertySetDataset,
+)
 from dti.data.processing import (
     prepare_datasets,
     load_chembl_endpoints,
@@ -61,9 +66,13 @@ def prepare_dataset_splits(
         scale_targets=False,
     )
     mol_feat = MolFingerprint(mol_feat)
-    data_kwargs = dict()
+    dataset_cls = (
+        GraphPropertySetDataset
+        if mol_feat is MolFingerprint.GRAPH
+        else PropertySetDataset
+    )
     val_dataset_cls = partial(
-        PropertySetDataset,
+        dataset_cls,
         max_batch_datapoints=2048,
         max_set_size=2048,
         shuffle_within_target=False,
@@ -72,11 +81,12 @@ def prepare_dataset_splits(
         property_columns=[],
         property_set_ratio=0.0,
         target=ACT,
+        processed_dir=data_dir,
     )
 
     val_dataset = val_dataset_cls(val_data)
     test_dataset = val_dataset_cls(test_data)
-    train_dataset = PropertySetDataset(
+    train_dataset = dataset_cls(
         train_data,
         max_batch_datapoints=2048,
         max_set_size=1024,
@@ -99,28 +109,40 @@ def prepare_dataset_splits(
             "qed_weighted",
             "np_likeness_score",
         ],
+        processed_dir=data_dir,
     )
 
     assert len(train_dataset) > 0
 
-    train_loader = DataLoader(
+    if mol_feat is MolFingerprint.GRAPH:
+        data_loader_cls = PyGDataLoader
+        collate_fn = lambda data: data[0]
+    else:
+        collate_fn = None
+
+    data_loader_cls = DataLoader
+
+    train_loader = data_loader_cls(
         train_dataset,
         batch_sampler=ResettingBatchSampler(train_dataset, batch_size=1),
         shuffle=False,
         num_workers=0,
         drop_last=False,
+        collate_fn=collate_fn,
     )
-    val_loader = DataLoader(
+    val_loader = data_loader_cls(
         val_dataset,
         batch_sampler=ResettingBatchSampler(val_dataset, batch_size=1),
         shuffle=False,
         num_workers=0,
+        collate_fn=collate_fn,
     )
-    test_loader = DataLoader(
+    test_loader = data_loader_cls(
         test_dataset,
         batch_sampler=ResettingBatchSampler(test_dataset, batch_size=1),
         shuffle=False,
         num_workers=0,
+        collate_fn=collate_fn,
     )
 
     return (
@@ -156,8 +178,14 @@ def run_split(
         property_set_ratio=property_set_ratio,
     )
 
+    model_cls = (
+        GraphMoleculeBayesianSetRankModel
+        if MolFingerprint(mol_feat) == MolFingerprint.GRAPH
+        else MoleculeBayesianSetRankModel
+    )
+
     args = [
-        MoleculeBayesianSetRankModel,
+        model_cls,
         run_name,
         train_loader,
         val_loader,

@@ -7,6 +7,7 @@ from multiprocessing import Pool
 from enum import StrEnum, auto
 
 import torch
+from torch_geometric.utils.smiles import from_smiles
 import tqdm.auto as tqdm
 from esm import FastaBatchedDataset, pretrained
 from rdkit import Chem
@@ -27,6 +28,7 @@ class MolFingerprint(StrEnum):
     TOPOTORSION = auto()
     ATOMPAIR = auto()
     CHEMBERTA = auto()
+    GRAPH = auto()
 
     def _get_mfpgen(
         self,
@@ -56,10 +58,13 @@ class MolFingerprint(StrEnum):
 
     @property
     def dim(self):
-        if self == MolFingerprint.CHEMBERTA:
-            return 384
-        else:
-            return 2048
+        match self:
+            case MolFingerprint.CHEMBERTA:
+                return 384
+            case MolFingerprint.GRAPH:
+                return 9
+            case _:
+                return 2048
 
     @functools.cache
     def compute(
@@ -72,6 +77,9 @@ class MolFingerprint(StrEnum):
             return smiles_to_dl_embedding(
                 [smi], model_name="DeepChem/ChemBERTa-77M-MLM", pooling="mean"
             )[0]
+
+        if self is MolFingerprint.GRAPH:
+            return from_smiles(smi)
 
         mol = Chem.MolFromSmiles(smi)
         if mol is None:
@@ -93,6 +101,9 @@ class MolFingerprint(StrEnum):
     ):
         if self is MolFingerprint.CHEMBERTA:
             logger.warning("Parallel compute not supported for ChemBERTa")
+            return [self.compute(s, **kwargs) for s in tqdm.tqdm(smiles)]
+
+        if self is MolFingerprint.GRAPH:
             return [self.compute(s, **kwargs) for s in tqdm.tqdm(smiles)]
 
         with Pool(n_jobs) as p:
