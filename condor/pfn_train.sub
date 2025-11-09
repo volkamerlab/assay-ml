@@ -13,7 +13,8 @@ request_memory = 300GB
 requirements = (GPUs_Capability >= 7.0) && (GPUs_GlobalMemoryMb >= 16000)
 +WantGPUHomeMounted = true
 queue fold, script, n_bins, mol_feat, unmasked_weight, physcem from (
-    0, scripts/pfn_train.py, 10, morgan, 0.0, 0.25
-    0, scripts/pfn_train.py, 100, morgan, 0.0, 0.25
-    0, scripts/pfn_train.py, 1000, morgan, 0.0, 0.25
+    0, scripts/pfn_train.py, 10,    morgan, 0.0, 0.25
+    0, scripts/pfn_train.py, 100,   morgan, 0.0, 0.25
+    0, scripts/pfn_train.py, 1000,  morgan, 0.0, 0.25
+    0, scripts/pfn_train.py, 10000,  morgan, 0.0, 0.25
 )

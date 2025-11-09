@@ -516,7 +516,7 @@ def train_and_evaluate_pfn_model(
 
     optimizer = torch.optim.Adam(model.parameters(), lr=opts["lr"])
     scheduler = ReduceLROnPlateau(
-        optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
+        optimizer, mode="min", factor=0.5, patience=opts["patience_lr"], cooldown=opts["patience_lr"],
     )
 
     best_loss = float("inf")
