@@ -1,13 +1,16 @@
+import os
+import re
+import uuid
+import shutil
+import tarfile
 from typing import Union
 import functools
 import subprocess
 import time
 import logging
-import tarfile
 from pathlib import Path
 from enum import unique, StrEnum, auto
 import random
-import shutil
 
 import torch
 import pandas as pd
@@ -149,6 +152,23 @@ def save_code_snapshot(run_name: str):
             tar.add(py_file, arcname=py_file)
 
     logger.info(f"code archive created: {archive_name}")
+
+
+def get_condor_job_id():
+    job_ad_path = os.getenv("_CONDOR_JOB_AD")
+    if job_ad_path and os.path.exists(job_ad_path):
+        with open(job_ad_path) as f:
+            text = f.read()
+        cluster = re.search(r"(?m)^ClusterId\s*=\s*(\d+)", text)
+        proc = re.search(r"(?m)^ProcId\s*=\s*(\d+)", text)
+        if cluster and proc:
+            return f"{cluster.group(1)}.{proc.group(1)}"
+
+    starter_pid = os.getenv("CONDOR_STARTER_PID")
+    if starter_pid:
+        return f"starter{starter_pid}"
+
+    return uuid.uuid4().hex[:4]
 
 
 def init_logging(run_name: Union[str, None] = str(time.time())):

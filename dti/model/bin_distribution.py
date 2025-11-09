@@ -5,7 +5,7 @@ from torch import nn
 import tqdm.auto as tqdm
 
 
-from .utils import device
+from ..utils import device
 
 import logging
 
