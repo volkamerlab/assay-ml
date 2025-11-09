@@ -78,7 +78,7 @@ def prepare_dataset_splits(
     test_dataset = val_dataset_cls(test_data)
     train_dataset = PropertySetDataset(
         train_data,
-        max_batch_datapoints=2048,
+        max_batch_datapoints=3072,
         max_set_size=1024,
         shuffle_within_target=False,
         property_set_ratio=property_set_ratio,
