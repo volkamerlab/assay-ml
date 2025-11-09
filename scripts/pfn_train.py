@@ -139,7 +139,7 @@ def run_split(
     property_set_ratio: float,
     n_bins: int,
 ):
-    num_epochs = 1
+    num_epochs = 1000
     info_cols = [INTRA_ASSAY_TEST, IDENT, COMPOUND, ASSAY]
 
     (
