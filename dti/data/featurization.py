@@ -99,18 +99,29 @@ class MolFingerprint(StrEnum):
     def compute_parallel(
         self, smiles: Iterable[str], n_jobs: int = 16, pbar: bool = True, **kwargs
     ):
-        if self is MolFingerprint.CHEMBERTA:
-            logger.warning("Parallel compute not supported for ChemBERTa")
-            return [self.compute(s, **kwargs) for s in tqdm.tqdm(smiles)]
-
-        if self is MolFingerprint.GRAPH:
-            return [self.compute(s, **kwargs) for s in tqdm.tqdm(smiles)]
-
-        with Pool(n_jobs) as p:
-            return p.map(
-                functools.partial(self.compute, **kwargs),
-                tqdm.tqdm(smiles) if pbar else smiles,
+        if self in {
+            MolFingerprint.GRAPH,
+            MolFingerprint.MORGAN,
+            MolFingerprint.RDKIT,
+            MolFingerprint.TOPOTORSION,
+            MolFingerprint.ATOMPAIR,
+        }:
+            logger.info(
+                f"Parallel featurization for {self.value} using {n_jobs} cores."
             )
+            with Pool(n_jobs) as p:
+                return p.map(
+                    functools.partial(self.compute, **kwargs),
+                    tqdm.tqdm(smiles, desc=f"Featurizing {self.value}")
+                    if pbar
+                    else smiles,
+                )
+
+        else:
+            logger.warning(
+                f"No parallel logic defined for {self.value}. Falling back to sequential."
+            )
+            return [self.compute(s, **kwargs) for s in tqdm.tqdm(smiles)]
 
 
 @functools.cache
