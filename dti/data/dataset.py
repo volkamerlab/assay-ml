@@ -5,6 +5,7 @@ import functools
 import logging
 from pathlib import Path
 from multiprocessing import Pool
+from threading import Lock
 
 import pandas as pd
 import numpy as np
@@ -343,6 +344,7 @@ class PropertySetDataset(Dataset):
             data, mol_featurizer, info_cols, target, **kwargs
         )
         self._setup_sets_and_properties(property_columns=property_columns, **kwargs)
+        self.lock = Lock()
 
     def _prepare_features_and_data(
         self, data, mol_featurizer, info_cols, target, **kwargs
@@ -613,12 +615,13 @@ class PropertySetDataset(Dataset):
         self.used_batches = np.zeros(len(self.batches_plan), dtype=bool)
 
     def _get_next_batch(self, idx: int):
-        if self.batches_plan is None:
-            self._make_batches()
-        if idx >= len(self.batches_plan):
-            raise IndexError("Index out of bounds")
-        self.used_batches[idx] = True
-        return self.batches_plan[idx]
+        with self.lock:
+            if self.batches_plan is None:
+                self._make_batches()
+            if idx >= len(self.batches_plan):
+                raise IndexError("Index out of bounds")
+            self.used_batches[idx] = True
+            return self.batches_plan[idx]
 
     def _compute_property_labels(self, indices, coeffs_tensor):
         props = self.property_matrix[indices]
