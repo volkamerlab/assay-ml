@@ -8,6 +8,7 @@ from torch.nn import (
     Module,
     Sequential,
     ModuleList,
+    BatchNorm1d,
 )
 from torch.nn import GELU
 import torch_geometric.nn as gnn
@@ -32,7 +33,6 @@ class MoleculeBayesianSetRankModel(Module):
         hidden_channels: int = 512,
         p_dropout: float = 0.05,
         num_heads: int = 8,
-        smoothing: bool = True,
         act=GELU,
         **kwargs,
     ):
@@ -90,7 +90,7 @@ class MoleculeBayesianSetRankModel(Module):
     def forward(
         self,
         ligand: Tensor | Batch,
-        y: Tensor,  # raw regression targets
+        y: Tensor,
         sample_mask: Tensor,
         set_ids: Tensor,
     ) -> Tensor:
@@ -117,47 +117,57 @@ class GraphMoleculeBayesianSetRankModel(MoleculeBayesianSetRankModel):
         hidden_channels: int = 512,
         p_dropout: float = 0.05,
         num_heads: int = 8,
-        smoothing: bool = True,
         act=GELU,
         **kwargs,
     ):
         super().__init__(
-            ligand_input_size=1,
+            ligand_input_size=ligand_input_size,
             n_bins=n_bins,
             hidden_channels=hidden_channels,
             p_dropout=p_dropout,
             num_heads=num_heads,
-            smoothing=smoothing,
             act=act,
-            **kwargs,
         )
+        del self.embed_ligand
 
         self.gnn_layers = ModuleList()
+        self.batch_norms = ModuleList()
         in_channels = ligand_input_size
 
-        for _ in range(num_gnn_layers):
-            mlp = Sequential(
+        for i in range(num_gnn_layers):
+            nn = Sequential(
                 Linear(in_channels, hidden_channels),
                 act(),
                 Linear(hidden_channels, hidden_channels),
             )
-            self.gnn_layers.append(gnn.GINConv(mlp, train_eps=True))
+            self.gnn_layers.append(gnn.GINEConv(nn, train_eps=True, edge_dim=3))
+            self.batch_norms.append(BatchNorm1d(hidden_channels))
             in_channels = hidden_channels
 
-        self.pooling_layer = gnn.global_add_pool
+        self.pool_add = gnn.global_add_pool
+        self.pool_mean = gnn.global_mean_pool
+        self.pool_max = gnn.global_max_pool
 
-        del self.embed_ligand
+        self.pool_combine = Sequential(
+            Linear(hidden_channels * 3, hidden_channels),
+            act(),
+            Dropout(p_dropout),
+        )
 
-    def _embed_ligand(
-        self,
-        ligand: Batch,
-    ) -> Tensor:
+    def _embed_ligand(self, ligand: Batch) -> Tensor:
         x, edge_index, batch_idx = ligand.x, ligand.edge_index, ligand.batch
+        edge_attr = ligand.edge_attr.float()
 
-        for gnn_layer in self.gnn_layers:
-            x = gnn_layer(x, edge_index)
+        for gnn_layer, bn in zip(self.gnn_layers, self.batch_norms):
+            x = gnn_layer(x, edge_index, edge_attr)
+            x = bn(x)
 
-        return self.pooling_layer(x, batch_idx)
+        h_add = self.pool_add(x, batch_idx)
+        h_mean = self.pool_mean(x, batch_idx)
+        h_max = self.pool_max(x, batch_idx)
+
+        h_combined = torch.cat([h_add, h_mean, h_max], dim=1)
+        return self.pool_combine(h_combined)
 
 
 class ComplexBayesianSetRankModel(MoleculeBayesianSetRankModel):
