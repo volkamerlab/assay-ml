@@ -8,7 +8,6 @@ from torch.nn import (
     Module,
     Sequential,
     ModuleList,
-    BatchNorm1d,
 )
 from torch.nn import GELU
 import torch_geometric.nn as gnn
@@ -113,20 +112,17 @@ class GraphMoleculeBayesianSetRankModel(MoleculeBayesianSetRankModel):
         self,
         ligand_input_size: int,
         num_gnn_layers: int = 3,
-        n_bins: int = 20,
         hidden_channels: int = 512,
         p_dropout: float = 0.05,
-        num_heads: int = 8,
         act=GELU,
         **kwargs,
     ):
         super().__init__(
             ligand_input_size=ligand_input_size,
-            n_bins=n_bins,
             hidden_channels=hidden_channels,
             p_dropout=p_dropout,
-            num_heads=num_heads,
             act=act,
+            **kwargs,
         )
         del self.embed_ligand
 
@@ -141,7 +137,7 @@ class GraphMoleculeBayesianSetRankModel(MoleculeBayesianSetRankModel):
                 Linear(hidden_channels, hidden_channels),
             )
             self.gnn_layers.append(gnn.GINEConv(nn, train_eps=True, edge_dim=3))
-            self.batch_norms.append(BatchNorm1d(hidden_channels))
+            self.batch_norms.append(LayerNorm(hidden_channels))
             in_channels = hidden_channels
 
         self.pool_add = gnn.global_add_pool
