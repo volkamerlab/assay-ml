@@ -170,9 +170,9 @@ def load_split(
     split_dir = data_dir / f"{index}"
     logger.info(f"reading dataset from {split_dir}")
 
-    val_data = pd.read_csv(split_dir / "val.csv", index_col=0)
-    train_data = pd.read_csv(split_dir / "train.csv", index_col=0)
-    test_data = pd.read_csv(split_dir / "test.csv", index_col=0)
+    val_data = pd.read_csv(split_dir / "val.csv", index_col=0, low_memory=False)
+    train_data = pd.read_csv(split_dir / "train.csv", index_col=0, low_memory=False)
+    test_data = pd.read_csv(split_dir / "test.csv", index_col=0, low_memory=False)
 
     if scale_targets:
         scaler = StandardScaler()
