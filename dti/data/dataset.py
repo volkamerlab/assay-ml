@@ -619,7 +619,8 @@ class PropertySetDataset(Dataset):
             if self.batches_plan is None:
                 self._make_batches()
             if idx >= len(self.batches_plan):
-                raise IndexError("Index out of bounds")
+                logger.error(f"Index {idx} out of bounds. Wrapping around")
+                idx = idx % len(self.batches_plan)
             self.used_batches[idx] = True
             return self.batches_plan[idx]
 
