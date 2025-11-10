@@ -727,15 +727,19 @@ class GraphPropertySetDataset(PropertySetDataset):
 
         cache_subdir.mkdir(parents=True, exist_ok=True)
 
-        lock = FileLock(lock_path, timeout=10)
-        with lock:
-            try:
-                graph = torch.load(cache_path, weights_only=False)
-            except FileNotFoundError:
-                graph = self.mol_featurizer.compute(smi)
-                if graph is None:
-                    raise ValueError(f"Graph computation failed for SMILES: {smi}")
-                torch.save(graph, cache_path)
+        lock = FileLock(lock_path, timeout=5)
+        try:
+            with lock:
+                try:
+                    graph = torch.load(cache_path, weights_only=False)
+                except FileNotFoundError:
+                    graph = self.mol_featurizer.compute(smi)
+                    if graph is None:
+                        raise ValueError(f"Graph computation failed for SMILES: {smi}")
+                    torch.save(graph, cache_path)
+        except:
+            raise ValueError(f"Failure for SMILES: {smi} and file {lock_path}")
+            graph = self.mol_featurizer.compute(smi)
         return graph
 
 
