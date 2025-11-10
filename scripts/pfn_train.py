@@ -75,13 +75,12 @@ def prepare_dataset_splits(
         else PropertySetDataset
     )
 
-    # --- 1. Prepare common arguments, including n_jobs/n_workers ---
     common_dataset_kwargs = {
         "mol_featurizer": mol_feat_instance,
         "info_cols": info_cols,
         "target": ACT,
         "processed_dir": data_dir,
-        "n_jobs": n_jobs,  # Pass n_jobs for initial parallel computation/validation
+        "n_jobs": n_jobs,
     }
 
     val_dataset_cls = partial(
@@ -94,7 +93,6 @@ def prepare_dataset_splits(
         **common_dataset_kwargs,
     )
 
-    # Dataset initialization will now use n_jobs for initial setup
     val_dataset = val_dataset_cls(val_data)
     test_dataset = val_dataset_cls(test_data)
 
@@ -130,10 +128,6 @@ def prepare_dataset_splits(
 
     data_loader_cls = DataLoader
 
-    # --- 2. Set num_workers for parallel loading/fetching ---
-    # Use n_jobs for DataLoader workers.
-    # Set persistent_workers=True for efficiency if you are training over multiple epochs.
-
     loader_kwargs = {
         "batch_sampler": ResettingBatchSampler(train_dataset, batch_size=1),
         "shuffle": False,
@@ -144,20 +138,18 @@ def prepare_dataset_splits(
 
     train_loader = data_loader_cls(train_dataset, drop_last=False, **loader_kwargs)
 
-    # Validation/Test loaders typically don't need persistent workers
-    # but the num_workers setting is still key for parallel fetching.
     val_loader = data_loader_cls(
         val_dataset,
         batch_sampler=ResettingBatchSampler(val_dataset, batch_size=1),
         shuffle=False,
-        num_workers=n_jobs,  # Changed from 0 to n_jobs
+        num_workers=n_jobs,
         collate_fn=collate_fn,
     )
     test_loader = data_loader_cls(
         test_dataset,
         batch_sampler=ResettingBatchSampler(test_dataset, batch_size=1),
         shuffle=False,
-        num_workers=n_jobs,  # Changed from 0 to n_jobs
+        num_workers=0,
         collate_fn=collate_fn,
     )
 
