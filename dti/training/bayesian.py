@@ -225,9 +225,9 @@ def _process_batch(
         num_sets = num_sets.squeeze().item()
     set_ids_tensor = metadata["set_ids_tensor"].to(device, non_blocking=True)
 
-    ligand_features = ligand_features
     if isinstance(ligand_features, torch.Tensor):
-        ligand_features = ligand_features.squeeze().to(device, non_blocking=True)
+        ligand_features = ligand_features.squeeze()
+    ligand_features = ligand_features.to(device, non_blocking=True)
     labels = labels.squeeze().to(device, non_blocking=True)
     info = info.squeeze().to(device, non_blocking=True)
     batch_size = labels.size(0)
