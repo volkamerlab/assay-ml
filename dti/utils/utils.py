@@ -207,6 +207,12 @@ def get_scaffold(smiles: str, generic: bool = True) -> str:
         return None
 
 
+def check_smi_valid(smi: str) -> bool:
+    if smi is None or not isinstance(smi, str):
+        return False
+    return Chem.MolFromSmiles(smi) is not None
+
+
 def add_scaffold_col(
     data: pd.DataFrame, name: str = "_scaffold", progress: bool = True
 ):

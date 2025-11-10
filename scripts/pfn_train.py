@@ -47,10 +47,11 @@ MOL_ONLY = True
 def prepare_dataset_splits(
     dataset_name: str,
     fold: int,
-    method: Method,
+    method: "Method",
     mol_feat: str,
     info_cols: list[str],
     property_set_ratio: float,
+    n_jobs: int = 8,
 ):
     data_dir = DATA / "processed" / dataset_name
 
@@ -65,36 +66,44 @@ def prepare_dataset_splits(
         inter_assay_weight=None,
         scale_targets=False,
     )
-    mol_feat = MolFingerprint(mol_feat)
+
+    mol_feat_instance = MolFingerprint(mol_feat)
+
     dataset_cls = (
         GraphPropertySetDataset
-        if mol_feat is MolFingerprint.GRAPH
+        if mol_feat_instance is MolFingerprint.GRAPH
         else PropertySetDataset
     )
+
+    # --- 1. Prepare common arguments, including n_jobs/n_workers ---
+    common_dataset_kwargs = {
+        "mol_featurizer": mol_feat_instance,
+        "info_cols": info_cols,
+        "target": ACT,
+        "processed_dir": data_dir,
+        "n_jobs": n_jobs,  # Pass n_jobs for initial parallel computation/validation
+    }
+
     val_dataset_cls = partial(
         dataset_cls,
         max_batch_datapoints=2048,
         max_set_size=2048,
         shuffle_within_target=False,
-        mol_featurizer=mol_feat,
-        info_cols=info_cols,
         property_columns=[],
         property_set_ratio=0.0,
-        target=ACT,
-        processed_dir=data_dir,
+        **common_dataset_kwargs,
     )
 
+    # Dataset initialization will now use n_jobs for initial setup
     val_dataset = val_dataset_cls(val_data)
     test_dataset = val_dataset_cls(test_data)
+
     train_dataset = dataset_cls(
         train_data,
         max_batch_datapoints=3072,
         max_set_size=1024,
         shuffle_within_target=False,
         property_set_ratio=property_set_ratio,
-        mol_featurizer=mol_feat,
-        info_cols=info_cols,
-        target=ACT,
         property_columns=[
             "mw_freebase",
             "alogp",
@@ -109,39 +118,46 @@ def prepare_dataset_splits(
             "qed_weighted",
             "np_likeness_score",
         ],
-        processed_dir=data_dir,
+        **common_dataset_kwargs,
     )
 
     assert len(train_dataset) > 0
 
-    if mol_feat is MolFingerprint.GRAPH:
-        data_loader_cls = PyGDataLoader
+    if mol_feat_instance is MolFingerprint.GRAPH:
         collate_fn = lambda data: data[0]
     else:
         collate_fn = None
 
     data_loader_cls = DataLoader
 
-    train_loader = data_loader_cls(
-        train_dataset,
-        batch_sampler=ResettingBatchSampler(train_dataset, batch_size=1),
-        shuffle=False,
-        num_workers=0,
-        drop_last=False,
-        collate_fn=collate_fn,
-    )
+    # --- 2. Set num_workers for parallel loading/fetching ---
+    # Use n_jobs for DataLoader workers.
+    # Set persistent_workers=True for efficiency if you are training over multiple epochs.
+
+    loader_kwargs = {
+        "batch_sampler": ResettingBatchSampler(train_dataset, batch_size=1),
+        "shuffle": False,
+        "num_workers": n_jobs,  # Changed from 0 to n_jobs
+        "collate_fn": collate_fn,
+        "persistent_workers": True,  # Recommended for performance
+    }
+
+    train_loader = data_loader_cls(train_dataset, drop_last=False, **loader_kwargs)
+
+    # Validation/Test loaders typically don't need persistent workers
+    # but the num_workers setting is still key for parallel fetching.
     val_loader = data_loader_cls(
         val_dataset,
         batch_sampler=ResettingBatchSampler(val_dataset, batch_size=1),
         shuffle=False,
-        num_workers=0,
+        num_workers=n_jobs,  # Changed from 0 to n_jobs
         collate_fn=collate_fn,
     )
     test_loader = data_loader_cls(
         test_dataset,
         batch_sampler=ResettingBatchSampler(test_dataset, batch_size=1),
         shuffle=False,
-        num_workers=0,
+        num_workers=n_jobs,  # Changed from 0 to n_jobs
         collate_fn=collate_fn,
     )
 
@@ -149,7 +165,7 @@ def prepare_dataset_splits(
         train_loader,
         val_loader,
         test_loader,
-        mol_feat.dim,
+        mol_feat_instance.dim,
     )
 
 

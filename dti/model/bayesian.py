@@ -90,7 +90,6 @@ class MoleculeBayesianSetRankModel(Module):
     def forward(
         self,
         ligand: Tensor | Batch,
-        _protein: Tensor,  # ignored
         y: Tensor,  # raw regression targets
         sample_mask: Tensor,
         set_ids: Tensor,

@@ -213,7 +213,6 @@ def _process_batch(
     mask_fraction: float = 0.2,
 ):
     (
-        protein_features,
         ligand_features,
         labels,
         info,
@@ -229,7 +228,6 @@ def _process_batch(
     ligand_features = ligand_features
     if isinstance(ligand_features, torch.Tensor):
         ligand_features = ligand_features.squeeze().to(device, non_blocking=True)
-    protein_features = protein_features.squeeze().to(device, non_blocking=True)
     labels = labels.squeeze().to(device, non_blocking=True)
     info = info.squeeze().to(device, non_blocking=True)
     batch_size = labels.size(0)
@@ -260,7 +258,6 @@ def _process_batch(
     with torch.set_grad_enabled(is_train):
         preds = model(
             ligand_features,
-            protein_features,
             context_labels,
             sample_mask,
             set_ids_tensor,
@@ -516,7 +513,11 @@ def train_and_evaluate_pfn_model(
 
     optimizer = torch.optim.Adam(model.parameters(), lr=opts["lr"])
     scheduler = ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=opts["patience_lr"], cooldown=opts["patience_lr"],
+        optimizer,
+        mode="min",
+        factor=0.5,
+        patience=opts["patience_lr"],
+        cooldown=opts["patience_lr"],
     )
 
     best_loss = float("inf")

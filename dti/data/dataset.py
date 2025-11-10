@@ -1,11 +1,15 @@
 from collections.abc import Iterator, Iterable
+import os
 import hashlib
 import functools
 import logging
 from pathlib import Path
+from multiprocessing import Pool
 
 import pandas as pd
 import numpy as np
+from filelock import FileLock
+import logging
 
 
 import torch
@@ -26,10 +30,11 @@ from ..utils.constants import (
     INTRA_ASSAY_TEST,
     IDENT,
 )
-from ..utils import device
+from ..utils import device, check_smi_valid
 from ..utils.hodge_ranking import parallel_hodge_rank
 
 logger = logging.getLogger(__name__)
+logging.getLogger("filelock").setLevel(logging.WARNING)
 
 
 class ActivityDataset(Dataset):
@@ -322,35 +327,6 @@ class SetActivityDataset(ActivityDataset):
 
 
 class PropertySetDataset(Dataset):
-    """
-    A self-contained dataset for handling assay sets and dynamically generated
-    property sets.
-
-    This class combines logic from ActivityDataset, MultiSetActivityDataset, and
-    MultiSetWithPropertiesDataset, removing inheritance and vectorizing
-    property-related operations for performance.
-
-    Property sets are created on-the-fly each epoch by:
-    1. Generating random linear coefficients.
-    2. Sampling molecules that have all required property values.
-    3. Calculating labels via a vectorized (matrix @ vector) operation.
-
-    Args:
-        data (pd.DataFrame): DataFrame containing all data.
-        mol_featurizer (MolFingerprint): A MolFingerprint featurizer instance.
-        target (str): Column name for the primary target (assay labels).
-        property_columns (list[str]): List of column names in 'data' to be
-                                      used for dynamic property sets.
-        info_cols (list[str]): Column names to include as info tensors.
-        model_name (str): Name of the protein language model (for esm2_features).
-        property_set_ratio (float): Ratio of property sets to assay sets per batch.
-        noise_std (float): Std. dev. of Gaussian noise for property set labels.
-        min_batch_size (int): Minimum number of samples for any set.
-        max_set_size (int): Maximum number of samples for any set (0 for no limit).
-        max_batch_datapoints (int): Max total datapoints across all sets in a batch.
-        random_seed (int): Random seed for reproducibility.
-    """
-
     def __init__(
         self,
         data: pd.DataFrame,
@@ -359,21 +335,21 @@ class PropertySetDataset(Dataset):
         property_columns: list[str] = None,
         info_cols: list[str] = [],
         model_name: str = "esm2_t33_650M_UR50D",
-        property_set_ratio: float = 0.5,
-        noise_std: float = 0.1,
-        min_batch_size: int = 3,
-        max_set_size: int = 0,
-        max_batch_datapoints: int = 2048,
-        random_seed: int = 0,
         **kwargs,
     ):
         super().__init__()
-        logger.info(
-            f"Creating PropertySetDataset of size {len(data)} with prop set ratio {property_set_ratio}"
+        logger.info(f"Creating PropertySetDataset of size {len(data)}")
+        self._prepare_features_and_data(
+            data, mol_featurizer, info_cols, target, **kwargs
         )
+        self._setup_sets_and_properties(property_columns=property_columns, **kwargs)
 
+    def _prepare_features_and_data(
+        self, data, mol_featurizer, info_cols, target, **kwargs
+    ):
         logger.info("Computing molecular fingerprints...")
-        fps = mol_featurizer.compute_parallel(data[SMILES].values)
+        n_jobs = kwargs.get("n_jobs", 16)
+        fps = mol_featurizer.compute_parallel(data[SMILES].values, n_jobs=n_jobs)
         mask = [fp is not None for fp in fps]
 
         valid_count = sum(mask)
@@ -390,16 +366,17 @@ class PropertySetDataset(Dataset):
             dtype=torch.float32,
         )
 
-        logger.info("Computing protein features...")
-        self.protein_features = esm2_features(self.data, model_name=model_name)
-
         self.assay_labels = torch.tensor(self.data[target].values, dtype=torch.float32)
-
         self.info = torch.tensor(self.data[info_cols].values.astype(np.int64))
 
-        self.min_batch_size = min_batch_size
-        self.max_set_size = max_set_size
-        self.random = np.random.default_rng(random_seed)
+    def _setup_sets_and_properties(self, property_columns: list[str] = None, **kwargs):
+        """
+        Shared logic to build assay sets and property data.
+        This is called *after* _prepare_features_and_data.
+        """
+        self.min_batch_size = kwargs.get("min_batch_size", 3)
+        self.max_set_size = kwargs.get("max_set_size", 0)
+        self.random = np.random.default_rng(kwargs.get("random_seed", 0))
 
         self.assay_sets = []
         grouped = self.data.groupby(ASSAY, sort=False)
@@ -408,13 +385,10 @@ class PropertySetDataset(Dataset):
         for _, group in grouped:
             group_idcs = group.index.values
             group_size = len(group_idcs)
-
             if group_size < self.min_batch_size:
                 num_unused += group_size
                 continue
-
             self.random.shuffle(group_idcs)
-
             if self.max_set_size > 0 and group_size > self.max_set_size:
                 num_splits = (group_size + self.max_set_size - 1) // self.max_set_size
                 sub_batches = np.array_split(group_idcs, num_splits)
@@ -425,15 +399,14 @@ class PropertySetDataset(Dataset):
                         num_unused += len(batch)
             else:
                 self.assay_sets.append(group_idcs)
-
         logger.info(
             f"Created {len(self.assay_sets)} assay sets. "
             f"({num_unused}/{len(self.data)} datapoints unused)"
         )
 
-        self.property_set_ratio = property_set_ratio
-        self.noise_std = noise_std
-        self.max_batch_datapoints = max_batch_datapoints
+        self.property_set_ratio = kwargs.get("property_set_ratio", 0.5)
+        self.noise_std = kwargs.get("noise_std", 0.1)
+        self.max_batch_datapoints = kwargs.get("max_batch_datapoints", 2048)
         self.property_columns = property_columns or []
 
         self._prepare_property_data()
@@ -444,6 +417,56 @@ class PropertySetDataset(Dataset):
 
         self.batches_plan = None
         self.used_batches = None
+
+    def _get_ligand_features(self, indices: np.ndarray):
+        return self.ligand_features[indices]
+
+    def __getitem__(self, idx):
+        batch_plan = self._get_next_batch(idx)
+
+        num_sets = len(batch_plan)
+        all_indices_list = []
+        all_labels_list = []
+        set_sizes = []
+        real_assay = []
+
+        for item in batch_plan:
+            set_type = item[0]
+            indices = item[1]
+            set_sizes.append(len(indices))
+            all_indices_list.append(indices)
+            real_assay.extend([set_type == "assay"] * len(indices))
+
+            if set_type == "assay":
+                all_labels_list.append(self.assay_labels[indices])
+            else:
+                coeffs_tensor = item[2]
+                labels = self._compute_property_labels(indices, coeffs_tensor)
+                all_labels_list.append(labels)
+
+        all_indices = np.concatenate(all_indices_list)
+        all_labels = torch.cat(all_labels_list)
+
+        info = self.info[all_indices]
+
+        lig_feats = self._get_ligand_features(all_indices)
+
+        set_sizes_tensor = torch.tensor(set_sizes, dtype=torch.long)
+        set_boundaries = torch.cat(
+            [torch.tensor([0]), torch.cumsum(set_sizes_tensor, 0)]
+        ).numpy()
+        set_ids_tensor = torch.repeat_interleave(
+            torch.arange(num_sets), set_sizes_tensor
+        )
+
+        metadata = {
+            "num_sets": num_sets,
+            "set_ids_tensor": set_ids_tensor,
+            "set_boundaries": set_boundaries,
+            "real_assay": torch.tensor(real_assay),
+        }
+
+        return lig_feats, all_labels, info, metadata
 
     def _init_property_coeff_pool(self):
         if not hasattr(self, "n_properties") or self.n_properties == 0:
@@ -473,66 +496,50 @@ class PropertySetDataset(Dataset):
         return coeffs
 
     def _prepare_property_data(self):
-        """
-        Vectorized preparation of property data.
-        Normalizes all properties and stacks them into a single tensor
-        `self.property_matrix` of shape (N_molecules, N_properties).
-        """
         if not self.property_columns:
             logger.info("No property columns specified.")
             self.available_properties = []
             self.property_matrix = torch.empty(len(self.data), 0)
             self.common_valid_indices = np.array([], dtype=np.int64)
+            self.n_properties = 0
             return
-
         prop_tensors = []
         self.available_properties = []
-
         for prop_col in self.property_columns:
             if prop_col not in self.data.columns:
                 logger.warning(f"Property column '{prop_col}' not in data. Skipping.")
                 continue
-
             values = self.data[prop_col].values.astype(np.float32)
             valid_mask = ~np.isnan(values)
-
             if valid_mask.sum() < self.min_batch_size:
                 logger.warning(
-                    f"Property {prop_col} has too few valid values "
-                    f"({valid_mask.sum()}). Skipping."
+                    f"Property {prop_col} has too few valid values. Skipping."
                 )
                 continue
-
             scaler = StandardScaler()
             valid_values = values[valid_mask].reshape(-1, 1)
             scaler.fit(valid_values)
             normalized_values = scaler.transform(valid_values).flatten()
-
             prop_tensor = torch.full(
                 (len(self.data),), float("nan"), dtype=torch.float32
             )
             prop_tensor[valid_mask] = torch.from_numpy(normalized_values)
-
             prop_tensors.append(prop_tensor)
             self.available_properties.append(prop_col)
 
         if not prop_tensors:
-            logger.warning("No valid property columns found after filtering.")
             self.property_matrix = torch.empty(len(self.data), 0)
             self.common_valid_indices = np.array([], dtype=np.int64)
+            self.n_properties = 0
             return
 
         self.property_matrix = torch.stack(prop_tensors, dim=1)
         self.n_properties = self.property_matrix.shape[1]
-
         valid_mask_all = ~torch.isnan(self.property_matrix).any(dim=1)
         self.common_valid_indices = torch.where(valid_mask_all)[0].numpy()
-
         self.property_matrix.nan_to_num_(0.0)
-
         logger.info(
-            f"Prepared {self.n_properties} property columns: "
-            f"{self.available_properties}. "
+            f"Prepared {self.n_properties} property columns. "
             f"{len(self.common_valid_indices)} molecules have all properties."
         )
 
@@ -542,26 +549,17 @@ class PropertySetDataset(Dataset):
         self.used_batches = np.zeros(len(self.batches_plan), dtype=bool)
 
     def _make_batches(self):
-        """
-        Creates the 'plan' for an epoch.
-        Shuffles assay sets and mixes in dynamically created property sets,
-        packing them into batches based on `max_batch_datapoints`.
-        """
         logger.debug("Remaking batches for new epoch...")
         self.batches_plan = []
-
         assay_set_indices = self.random.permutation(len(self.assay_sets))
         shuffled_assay_sets = [self.assay_sets[i] for i in assay_set_indices]
-
         while shuffled_assay_sets:
-            current_batch_sets = []  # (type, indices, [coeffs])
+            current_batch_sets = []
             current_total_datapoints = 0
             num_assay_sets_in_batch = 0
-
             while shuffled_assay_sets:
                 assay_set = shuffled_assay_sets[-1]
                 set_size = len(assay_set)
-
                 max_datapoints = self.max_batch_datapoints * (
                     1 - self.property_set_ratio
                 )
@@ -571,13 +569,8 @@ class PropertySetDataset(Dataset):
                     current_batch_sets.append(("assay", shuffled_assay_sets.pop()))
                 else:
                     break
-
             if not current_batch_sets and shuffled_assay_sets:
-                logger.warning(
-                    f"Assay set with size {len(shuffled_assay_sets[-1])} "
-                    f"exceeds max_batch_datapoints ({self.max_batch_datapoints}). "
-                    f"Creating oversized batch."
-                )
+                logger.warning(f"Assay set too large, creating oversized batch.")
                 assay_set = shuffled_assay_sets.pop()
                 current_batch_sets.append(("assay", assay_set))
                 current_total_datapoints += len(assay_set)
@@ -598,24 +591,17 @@ class PropertySetDataset(Dataset):
                         if self.max_set_size > 0
                         else max_available
                     )
-
                     if max_size < self.min_batch_size:
                         continue
-
                     set_size = self.random.integers(self.min_batch_size, max_size + 1)
-
                     if current_total_datapoints + set_size > self.max_batch_datapoints:
                         break
-
                     current_total_datapoints += set_size
-
                     coeffs = self.random.choice(self.property_coeff_pool)
-
                     sample_idx = self.random.choice(
                         len(self.common_valid_indices), size=set_size, replace=False
                     )
                     selected_indices = self.common_valid_indices[sample_idx]
-
                     current_batch_sets.append(
                         ("property", selected_indices, torch.from_numpy(coeffs).float())
                     )
@@ -626,36 +612,15 @@ class PropertySetDataset(Dataset):
 
         self.used_batches = np.zeros(len(self.batches_plan), dtype=bool)
 
-        total_assay_sets = 0
-        total_property_sets = 0
-        for batch in self.batches_plan:
-            for set_info in batch:
-                if set_info[0] == "assay":
-                    total_assay_sets += 1
-                elif set_info[0] == "property":
-                    total_property_sets += 1
-
-        logger.info(
-            f"Created {len(self.batches_plan)} batches for the epoch. "
-            f"({total_assay_sets} total assay sets; {total_property_sets} total property sets)"
-        )
-
     def _get_next_batch(self, idx: int):
         if self.batches_plan is None:
             self._make_batches()
         if idx >= len(self.batches_plan):
-            raise IndexError(
-                f"Index {idx} out of bounds for batch plan length {len(self.batches_plan)}. "
-                "The DataLoader is requesting too many batches."
-            )
-
+            raise IndexError("Index out of bounds")
         self.used_batches[idx] = True
         return self.batches_plan[idx]
 
     def _compute_property_labels(self, indices, coeffs_tensor):
-        """
-        (N_samples, N_properties) @ (N_properties,) -> (N_samples,)
-        """
         props = self.property_matrix[indices]
         labels = props @ coeffs_tensor
         labels = self._corruption(labels)
@@ -685,69 +650,9 @@ class PropertySetDataset(Dataset):
             labels *= 1 + torch.randn_like(labels) * self.noise_std
 
     def __len__(self):
-        """Returns the number of batches in an epoch."""
         if self.batches_plan is None:
             self._make_batches()
         return len(self.batches_plan)
-
-    def __getitem__(self, idx):
-        """
-        Fetches a batch of data.
-
-        This method dynamically constructs the label tensor for the batch by
-        either grabbing pre-computed assay labels or calculating property labels
-        on the fly using a fast vectorized operation.
-        """
-        batch_plan = self._get_next_batch(idx)
-
-        num_sets = len(batch_plan)
-        all_indices_list = []
-        all_labels_list = []
-        set_sizes = []
-        real_assay = []
-
-        for item in batch_plan:
-            set_type = item[0]
-            indices = item[1]
-
-            set_sizes.append(len(indices))
-            all_indices_list.append(indices)
-
-            real_assay.extend([set_type == "assay"] * len(indices))
-            if set_type == "assay":
-                all_labels_list.append(self.assay_labels[indices])
-            else:
-                coeffs_tensor = item[2]
-                labels = self._compute_property_labels(indices, coeffs_tensor)
-                all_labels_list.append(labels)
-
-        all_indices = np.concatenate(all_indices_list)
-        all_labels = torch.cat(all_labels_list)
-
-        prot_feats = (
-            torch.ones(1)
-            if self.protein_features is None
-            else self.protein_features[all_indices]
-        )
-        lig_feats = self.ligand_features[all_indices]
-        info = self.info[all_indices]
-
-        set_sizes_tensor = torch.tensor(set_sizes, dtype=torch.long)
-        set_boundaries = torch.cat(
-            [torch.tensor([0]), torch.cumsum(set_sizes_tensor, 0)]
-        ).numpy()
-        set_ids_tensor = torch.repeat_interleave(
-            torch.arange(num_sets), set_sizes_tensor
-        )
-
-        metadata = {
-            "num_sets": num_sets,
-            "set_ids_tensor": set_ids_tensor,
-            "set_boundaries": set_boundaries,
-            "real_assay": torch.tensor(real_assay),
-        }
-
-        return prot_feats, lig_feats, all_labels, info, metadata
 
 
 class ResettingBatchSampler(Sampler):
@@ -773,169 +678,74 @@ class GraphPropertySetDataset(PropertySetDataset):
         target: str = ACT,
         property_columns: list[str] = None,
         info_cols: list[str] = [],
-        model_name: str = "esm2_t33_650M_UR50D",
-        processed_dir: Path = DATA / "processed",
-        force_reprocess: bool = False,
         **kwargs,
     ):
-        super(PropertySetDataset, self).__init__()
+        super().__init__(
+            data=data,
+            mol_featurizer=mol_featurizer,
+            target=target,
+            property_columns=property_columns,
+            info_cols=info_cols,
+            **kwargs,
+        )
 
-        self.protein_features = None
-        self.processed_dir = processed_dir
-        hash_args = f"{data.shape}{info_cols}{target}{processed_dir}"
-        logger.debug(f"dataset hash from {hash_args}")
-        args_hash = hashlib.sha256(hash_args.encode("UTF-8")).hexdigest()
-        self.processed_path = self.processed_dir / f"graph_data_{args_hash}.pt"
-        self.processed_dir.mkdir(exist_ok=True)
+    def _prepare_features_and_data(
+        self, data, mol_featurizer, info_cols, target, **kwargs
+    ):
+        logger.info("Initializing GraphPropertySetDataset (on-the-fly).")
 
-        if not force_reprocess and self.processed_path.exists():
-            logger.info(f"Loading processed data from {self.processed_path}...")
-            self._load_processed()
+        cache_dir_str = os.getenv("GRAPH_CACHE_DIR")
+        if not cache_dir_str:
+            raise EnvironmentError("GRAPH_CACHE_DIR environment variable must be set.")
+        self.scratch_dir = Path(cache_dir_str)
+        self.scratch_dir.mkdir(exist_ok=True, parents=True)
+        logger.info(f"Using sharded graph cache at: {self.scratch_dir}")
 
-        else:
-            logger.info("Computing molecular graphs...")
+        self.mol_featurizer = mol_featurizer
+        n_jobs = kwargs.get("n_jobs", 16)
 
-            graphs = mol_featurizer.compute_parallel(data[SMILES].values)
-            mask = [g is not None for g in graphs]
+        logger.info(f"Validating {len(data)} SMILES strings...")
+        with Pool(n_jobs) as p:
+            mask = p.map(check_smi_valid, data[SMILES].values)
 
-            valid_count = sum(mask)
-            if len(mask) - valid_count > 0:
-                logger.info(
-                    f"Dropping {len(mask) - valid_count}/{len(mask)} data points "
-                    f"with invalid graphs."
-                )
-
-            self.data = data[mask].copy().reset_index(drop=True)
-            self.ligand_graphs = [g for g in graphs if g is not None]
-
-            logger.info("Computing protein features...")
-
-            self.assay_labels = torch.tensor(
-                self.data[target].values, dtype=torch.float32
+        valid_count = sum(mask)
+        if len(mask) - valid_count > 0:
+            logger.info(
+                f"Dropping {len(mask) - valid_count}/{len(mask)} data points "
+                f"with invalid SMILES."
             )
 
-            self.info = torch.tensor(self.data[info_cols].values.astype(np.int64))
+        self.data = data[mask].copy().reset_index(drop=True)
 
-            self._save_processed()
+        self.smiles_list = self.data[SMILES].values
 
-        self.min_batch_size = kwargs.get("min_batch_size", 3)
-        self.max_set_size = kwargs.get("max_set_size", 0)
-        self.random = np.random.default_rng(kwargs.get("random_seed", 0))
+        self.assay_labels = torch.tensor(self.data[target].values, dtype=torch.float32)
+        self.info = torch.tensor(self.data[info_cols].values.astype(np.int64))
 
-        self.assay_sets = []
-        grouped = self.data.groupby(ASSAY, sort=False)
-        num_unused = 0
+    def _get_ligand_features(self, indices: np.ndarray):
+        smiles_to_fetch = self.smiles_list[indices]
+        graphs_in_batch = [self._get_graph_from_smi(smi) for smi in smiles_to_fetch]
+        return Batch.from_data_list(graphs_in_batch)
 
-        for _, group in grouped:
-            group_idcs = group.index.values
-            group_size = len(group_idcs)
+    def _get_graph_from_smi(self, smi: str):
+        hash_str = hashlib.sha256(smi.encode()).hexdigest()
 
-            if group_size < self.min_batch_size:
-                num_unused += group_size
-                continue
+        cache_subdir = self.scratch_dir / hash_str[0:2] / hash_str[2:4]
+        cache_path = cache_subdir / f"{hash_str}.pt"
+        lock_path = cache_subdir / f"{hash_str}.lock"
 
-            self.random.shuffle(group_idcs)
+        cache_subdir.mkdir(parents=True, exist_ok=True)
 
-            if self.max_set_size > 0 and group_size > self.max_set_size:
-                num_splits = (group_size + self.max_set_size - 1) // self.max_set_size
-                sub_batches = np.array_split(group_idcs, num_splits)
-                for batch in sub_batches:
-                    if len(batch) >= self.min_batch_size:
-                        self.assay_sets.append(batch)
-                    else:
-                        num_unused += len(batch)
-            else:
-                self.assay_sets.append(group_idcs)
-
-        logger.info(
-            f"Created {len(self.assay_sets)} assay sets. "
-            f"({num_unused}/{len(self.data)} datapoints unused)"
-        )
-
-        self.property_set_ratio = kwargs.get("property_set_ratio", 0.5)
-        self.noise_std = kwargs.get("noise_std", 0.1)
-        self.max_batch_datapoints = kwargs.get("max_batch_datapoints", 2048)
-        self.property_columns = property_columns or []
-
-        self._prepare_property_data()
-
-        self.property_coeff_pool_size = 32
-        self.coeff_drift_alpha = 0.9
-        self._init_property_coeff_pool()
-
-        self.batches_plan = None
-        self.used_batches = None
-
-    def _save_processed(self):
-        logger.info(f"Saving processed data to {self.processed_path}...")
-        data_to_save = {
-            "data": self.data,  # The filtered dataframe
-            "ligand_graphs": self.ligand_graphs,  # The list of Data objects
-            "assay_labels": self.assay_labels,
-            "info": self.info,
-        }
-        torch.save(data_to_save, self.processed_path)
-
-    def _load_processed(self):
-        data = torch.load(self.processed_path, weights_only=False)
-        self.data = data["data"]
-        self.ligand_graphs = data["ligand_graphs"]
-        self.assay_labels = data["assay_labels"]
-        self.info = data["info"]
-
-    def __getitem__(self, idx):
-        batch_plan = self._get_next_batch(idx)
-
-        num_sets = len(batch_plan)
-        all_indices_list = []
-        all_labels_list = []
-        set_sizes = []
-        real_assay = []
-
-        for item in batch_plan:
-            set_type = item[0]
-            indices = item[1]
-
-            set_sizes.append(len(indices))
-            all_indices_list.append(indices)
-
-            real_assay.extend([set_type == "assay"] * len(indices))
-            if set_type == "assay":
-                all_labels_list.append(self.assay_labels[indices])
-            else:
-                coeffs_tensor = item[2]
-                labels = self._compute_property_labels(indices, coeffs_tensor)
-                all_labels_list.append(labels)
-
-        all_indices = np.concatenate(all_indices_list)
-        all_labels = torch.cat(all_labels_list)
-
-        prot_feats = (
-            torch.ones(1)
-            if self.protein_features is None
-            else self.protein_features[all_indices]
-        )
-        info = self.info[all_indices]
-
-        graphs_in_batch = [self.ligand_graphs[i] for i in all_indices]
-        lig_feats = Batch.from_data_list(graphs_in_batch)
-
-        set_sizes_tensor = torch.tensor(set_sizes, dtype=torch.long)
-        set_boundaries = torch.cat(
-            [torch.tensor([0]), torch.cumsum(set_sizes_tensor, 0)]
-        ).numpy()
-        set_ids_tensor = torch.repeat_interleave(
-            torch.arange(num_sets), set_sizes_tensor
-        )
-
-        metadata = {
-            "num_sets": num_sets,
-            "set_ids_tensor": set_ids_tensor,
-            "set_boundaries": set_boundaries,
-            "real_assay": torch.tensor(real_assay),
-        }
-
-        return prot_feats, lig_feats, all_labels, info, metadata
+        lock = FileLock(lock_path, timeout=10)
+        with lock:
+            try:
+                graph = torch.load(cache_path, weights_only=False)
+            except FileNotFoundError:
+                graph = self.mol_featurizer.compute(smi)
+                if graph is None:
+                    raise ValueError(f"Graph computation failed for SMILES: {smi}")
+                torch.save(graph, cache_path)
+        return graph
 
 
 class MultiSetActivityDataset(ActivityDataset):
