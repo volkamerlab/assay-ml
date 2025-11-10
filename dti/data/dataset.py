@@ -702,20 +702,7 @@ class GraphPropertySetDataset(PropertySetDataset):
         logger.info(f"Using sharded graph cache at: {self.scratch_dir}")
 
         self.mol_featurizer = mol_featurizer
-        n_jobs = kwargs.get("n_jobs", 16)
-
-        logger.info(f"Validating {len(data)} SMILES strings...")
-        with Pool(n_jobs) as p:
-            mask = p.map(check_smi_valid, data[SMILES].values)
-
-        valid_count = sum(mask)
-        if len(mask) - valid_count > 0:
-            logger.info(
-                f"Dropping {len(mask) - valid_count}/{len(mask)} data points "
-                f"with invalid SMILES."
-            )
-
-        self.data = data[mask].copy().reset_index(drop=True)
+        self.data = data.reset_index(drop=True)
 
         self.smiles_list = self.data[SMILES].values
 
