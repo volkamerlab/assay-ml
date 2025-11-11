@@ -335,40 +335,60 @@ class PropertySetDataset(Dataset):
         property_columns: list[str] = None,
         info_cols: list[str] = [],
         model_name: str = "esm2_t33_650M_UR50D",
+        cache_dir: Path | None = None,
         **kwargs,
     ):
         super().__init__()
         logger.info(f"Creating PropertySetDataset of size {len(data)}")
         self._prepare_features_and_data(
-            data, mol_featurizer, info_cols, target, **kwargs
+            data, mol_featurizer, info_cols, target, cache_dir, **kwargs
         )
         self._setup_sets_and_properties(property_columns=property_columns, **kwargs)
         self.lock = Lock()
 
     def _prepare_features_and_data(
-        self, data, mol_featurizer, info_cols, target, **kwargs
+        self, data, mol_featurizer, info_cols, target, cache_dir=None, **kwargs
     ):
+        if cache_dir:
+            os.makedirs(cache_dir, exist_ok=True)
+            paths = {
+                "ligand_features": os.path.join(cache_dir, "ligand_features.pt"),
+                "assay_labels": os.path.join(cache_dir, "assay_labels.pt"),
+                "info": os.path.join(cache_dir, "info.pt"),
+                "data": os.path.join(cache_dir, "data.csv"),
+            }
+            if all(os.path.exists(p) for p in paths.values()):
+                logger.info(f"Loading cached features from {cache_dir}")
+                self.ligand_features = torch.load(paths["ligand_features"])
+                self.assay_labels = torch.load(paths["assay_labels"])
+                self.info = torch.load(paths["info"])
+                self.data = pd.read_csv(paths["data"])
+                return
+
         logger.info("Computing molecular fingerprints...")
         n_jobs = kwargs.get("n_jobs", 16)
         fps = mol_featurizer.compute_parallel(data[SMILES].values, n_jobs=n_jobs)
         mask = [fp is not None for fp in fps]
-
-        valid_count = sum(mask)
-        if len(mask) - valid_count > 0:
-            logger.info(
-                f"Dropping {len(mask) - valid_count}/{len(mask)} data points "
-                f"with invalid fingerprints."
-            )
+        if (n_invalid := len(mask) - sum(mask)) > 0:
+            logger.info(f"Dropping {n_invalid}/{len(mask)} invalid fingerprints.")
 
         self.data = data[mask].copy().reset_index(drop=True)
-
         self.ligand_features = torch.tensor(
-            np.stack([fp for fp in fps if fp is not None]),
-            dtype=torch.float32,
+            np.stack([fp for fp in fps if fp is not None]), dtype=torch.float32
+        )
+        self.assay_labels = torch.tensor(self.data[target].values, dtype=torch.float32)
+        self.info = (
+            torch.tensor(self.data[info_cols].values.astype(np.int64))
+            if info_cols
+            else torch.empty((len(self.data), 0), dtype=torch.int64)
         )
 
-        self.assay_labels = torch.tensor(self.data[target].values, dtype=torch.float32)
-        self.info = torch.tensor(self.data[info_cols].values.astype(np.int64))
+        if cache_dir:
+            logger.info(f"Caching features to {cache_dir}")
+            torch.save(self.ligand_features, paths["ligand_features"])
+            torch.save(self.assay_labels, paths["assay_labels"])
+            torch.save(self.info, paths["info"])
+            self.data.to_csv(paths["data"], index=False)
 
     def _setup_sets_and_properties(self, property_columns: list[str] = None, **kwargs):
         self.min_batch_size = kwargs.get("min_batch_size", 3)
@@ -689,7 +709,7 @@ class GraphPropertySetDataset(PropertySetDataset):
         )
 
     def _prepare_features_and_data(
-        self, data, mol_featurizer, info_cols, target, **kwargs
+        self, data, mol_featurizer, info_cols, target, cache_dir, **kwargs
     ):
         logger.info("Initializing GraphPropertySetDataset (on-the-fly).")
 

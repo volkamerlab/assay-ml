@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import logging
 from functools import partial
 import traceback
@@ -56,7 +57,7 @@ def prepare_dataset_splits(
     mol_feat: str,
     info_cols: list[str],
     property_set_ratio: float,
-    n_jobs: int = 12,
+    n_jobs: int = 8,
 ):
     data_dir = DATA / "processed" / dataset_name
 
@@ -102,8 +103,12 @@ def prepare_dataset_splits(
         **common_dataset_kwargs,
     )
 
-    val_dataset = val_dataset_cls(val_data)
-    test_dataset = val_dataset_cls(test_data)
+    hash_args = str([dataset_name, fold, method, mol_feat, info_cols])
+    hash_args = hashlib.sha256(hash_args.encode()).hexdigest()
+
+    val_dataset = val_dataset_cls(val_data, cache_dir=data_dir / hash_args / "val")
+
+    test_dataset = val_dataset_cls(test_data, cache_dir=data_dir / hash_args / "test")
 
     train_dataset = dataset_cls(
         train_data,
@@ -125,6 +130,7 @@ def prepare_dataset_splits(
             "qed_weighted",
             "np_likeness_score",
         ],
+        cache_dir=data_dir / hash_args / "train",
         **common_dataset_kwargs,
     )
 

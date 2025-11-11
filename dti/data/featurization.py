@@ -287,7 +287,7 @@ class MolFingerprint(StrEnum):
                 MolFingerprint.ALLFP,
                 MolFingerprint.GRAPH,
                 MolFingerprint.ALL,
-                # MolFingerprint.CHEMBERTA,
+                MolFingerprint.CHEMBERTA,
             )
         ]
 
