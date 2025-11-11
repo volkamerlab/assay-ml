@@ -80,7 +80,6 @@ def prepare_dataset_splits(
         "info_cols": info_cols,
         "target": ACT,
         "processed_dir": data_dir,
-        "n_jobs": n_jobs,
     }
 
     match mol_feat_instance:
@@ -112,7 +111,11 @@ def prepare_dataset_splits(
 
     train_dataset = dataset_cls(
         train_data,
-        max_batch_datapoints=2560,
+        max_batch_datapoints=(
+            1536
+            if mol_feat_instance in (MolFingerprint.ALL, MolFingerprint.ALLFP)
+            else 2560
+        ),
         max_set_size=1024,
         shuffle_within_target=False,
         property_set_ratio=property_set_ratio,
