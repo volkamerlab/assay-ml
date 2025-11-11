@@ -281,18 +281,21 @@ class MolFingerprint(StrEnum):
             case _:
                 return 2048
 
+    @property
+    def members_all(self):
+        return [
+            m
+            for m in MolFingerprint
+            if m not in (MolFingerprint.ALL, MolFingerprint.GRAPH)
+        ]
+
     @functools.cache
     def compute(self, smi: str, target: str = "numpy", cache_dir: Path = None):
         """Compute fingerprint, embedding, or graph for a single SMILES."""
 
         if self is MolFingerprint.ALL:
-            members = [
-                m
-                for m in MolFingerprint
-                if m not in (MolFingerprint.ALL, MolFingerprint.GRAPH)
-            ]
             all_fps = []
-            for feat in members:
+            for feat in self.members_all:
                 if feat is MolFingerprint.CHEMBERTA:
                     fp = feat.compute(smi)
                 else:
@@ -361,16 +364,13 @@ class MolFingerprint(StrEnum):
             logger.warning(f"Computation failed for SMILES={smi}: {e}")
             return None
 
-    def compute_parallel(
-        self, smiles: Iterable[str], n_jobs: int = 16, pbar: bool = True, **kwargs
-    ):
+    def compute_parallel(self, smiles: Iterable[str], n_jobs: int = 16, **kwargs):
         if self in {
             MolFingerprint.GRAPH,
             MolFingerprint.MORGAN,
             MolFingerprint.RDKIT,
             MolFingerprint.TOPOTORSION,
             MolFingerprint.ATOMPAIR,
-            MolFingerprint.ALL,
         }:
             logger.info(
                 f"Parallel featurization for {self.value} using {n_jobs} cores."
@@ -378,26 +378,26 @@ class MolFingerprint(StrEnum):
             with Pool(n_jobs) as p:
                 return p.map(
                     functools.partial(self.compute, **kwargs),
-                    tqdm.tqdm(smiles, desc=f"featurizing {self.value}")
-                    if pbar
-                    else smiles,
+                    tqdm.tqdm(smiles, desc=f"featurizing {self.value}"),
                 )
+        elif self == MolFingerprint.ALL:
+            self.compute_parallel
         elif self == MolFingerprint.CHEMBERTA:
-            _batch_size = 256
+            _batch_size = 512
             embeddings = list()
             for batch in tqdm.tqdm(
                 range(0, len(smiles), _batch_size), desc=f"featurizing {self.value}"
             ):
                 smi_batch = list(smiles[batch : min(len(smiles), batch + _batch_size)])
-                embeddings.extend(
-                    list(
-                        smiles_to_dl_embedding(
-                            smi_batch,
-                            model_name="DeepChem/ChemBERTa-77M-MLM",
-                            pooling="mean",
-                        )[0]
-                    )
+                batch_embds = smiles_to_dl_embedding(
+                    smi_batch,
+                    model_name="DeepChem/ChemBERTa-77M-MLM",
+                    pooling="mean",
                 )
+                logger.debug(len(batch_embds))
+                embeddings.extend(list(batch_embds))
+
+            assert len(smiles) == len(embeddings), (len(smiles), len(embeddings))
             return embeddings
         else:
             logger.warning(
