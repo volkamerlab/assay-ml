@@ -6,9 +6,12 @@ from typing import Union, Iterable, List, Tuple
 from multiprocessing import Pool
 from enum import StrEnum, auto
 
+import torch.nn.functional as F
 import torch
+from torch_geometric.data import Data
 from torch_geometric.utils.smiles import from_smiles
 import tqdm.auto as tqdm
+import numpy as np
 from esm import FastaBatchedDataset, pretrained
 from rdkit import Chem
 from rdkit.Chem import rdFingerprintGenerator
@@ -22,6 +25,206 @@ logger = logging.getLogger(__name__)
 _mfpgen_cache: dict[Tuple, object] = {}
 
 
+# Lifted from pyg
+x_map: dict[str, list] = {
+    "atomic_num": list(range(0, 119)),
+    "chirality": [
+        "CHI_UNSPECIFIED",
+        "CHI_TETRAHEDRAL_CW",
+        "CHI_TETRAHEDRAL_CCW",
+        "CHI_OTHER",
+        "CHI_TETRAHEDRAL",
+        "CHI_ALLENE",
+        "CHI_SQUAREPLANAR",
+        "CHI_TRIGONALBIPYRAMIDAL",
+        "CHI_OCTAHEDRAL",
+    ],
+    "degree": list(range(0, 11)),
+    "formal_charge": list(range(-5, 7)),
+    "num_hs": list(range(0, 9)),
+    "num_radical_electrons": list(range(0, 5)),
+    "hybridization": [
+        "UNSPECIFIED",
+        "S",
+        "SP",
+        "SP2",
+        "SP3",
+        "SP3D",
+        "SP3D2",
+        "OTHER",
+    ],
+    "is_aromatic": [False, True],
+    "is_in_ring": [False, True],
+}
+
+e_map: dict[str, list] = {
+    "bond_type": [
+        "UNSPECIFIED",
+        "SINGLE",
+        "DOUBLE",
+        "TRIPLE",
+        "QUADRUPLE",
+        "QUINTUPLE",
+        "HEXTUPLE",
+        "ONEANDAHALF",
+        "TWOANDAHALF",
+        "THREEANDAHALF",
+        "FOURANDAHALF",
+        "FIVEANDAHALF",
+        "AROMATIC",
+        "IONIC",
+        "HYDROGEN",
+        "THREECENTER",
+        "DATIVEONE",
+        "DATIVE",
+        "DATIVEL",
+        "DATIVER",
+        "OTHER",
+        "ZERO",
+    ],
+    "stereo": [
+        "STEREONONE",
+        "STEREOANY",
+        "STEREOZ",
+        "STEREOE",
+        "STEREOCIS",
+        "STEREOTRANS",
+    ],
+    "is_conjugated": [False, True],
+}
+
+NODE_FEATURE_DIM = sum(len(v) for v in x_map.values())
+EDGE_FEATURE_DIM = sum(len(v) for v in e_map.values())
+
+
+def from_rdmol_one_hot(mol) -> "torch_geometric.data.Data":
+    """
+    Converts an RDKit Mol instance to a PyG Data instance with
+    one-hot encoded features.
+    """
+    assert isinstance(mol, Chem.Mol)
+
+    xs: List[torch.Tensor] = []
+    for atom in mol.GetAtoms():
+        atom_feats = []
+        atom_feats.append(
+            F.one_hot(
+                torch.tensor(x_map["atomic_num"].index(atom.GetAtomicNum())),
+                len(x_map["atomic_num"]),
+            )
+        )
+        atom_feats.append(
+            F.one_hot(
+                torch.tensor(x_map["chirality"].index(str(atom.GetChiralTag()))),
+                len(x_map["chirality"]),
+            )
+        )
+        atom_feats.append(
+            F.one_hot(
+                torch.tensor(x_map["degree"].index(atom.GetTotalDegree())),
+                len(x_map["degree"]),
+            )
+        )
+        atom_feats.append(
+            F.one_hot(
+                torch.tensor(x_map["formal_charge"].index(atom.GetFormalCharge())),
+                len(x_map["formal_charge"]),
+            )
+        )
+        atom_feats.append(
+            F.one_hot(
+                torch.tensor(x_map["num_hs"].index(atom.GetTotalNumHs())),
+                len(x_map["num_hs"]),
+            )
+        )
+        atom_feats.append(
+            F.one_hot(
+                torch.tensor(
+                    x_map["num_radical_electrons"].index(atom.GetNumRadicalElectrons())
+                ),
+                len(x_map["num_radical_electrons"]),
+            )
+        )
+        atom_feats.append(
+            F.one_hot(
+                torch.tensor(
+                    x_map["hybridization"].index(str(atom.GetHybridization()))
+                ),
+                len(x_map["hybridization"]),
+            )
+        )
+        atom_feats.append(
+            F.one_hot(
+                torch.tensor(x_map["is_aromatic"].index(atom.GetIsAromatic())),
+                len(x_map["is_aromatic"]),
+            )
+        )
+        atom_feats.append(
+            F.one_hot(
+                torch.tensor(x_map["is_in_ring"].index(atom.IsInRing())),
+                len(x_map["is_in_ring"]),
+            )
+        )
+
+        xs.append(torch.cat(atom_feats, dim=0).float())
+
+    x = torch.stack(xs, dim=0)
+
+    edge_indices, edge_attrs_list = [], []
+    for bond in mol.GetBonds():
+        i = bond.GetBeginAtomIdx()
+        j = bond.GetEndAtomIdx()
+
+        bond_feats = []
+        bond_feats.append(
+            F.one_hot(
+                torch.tensor(e_map["bond_type"].index(str(bond.GetBondType()))),
+                len(e_map["bond_type"]),
+            )
+        )
+        bond_feats.append(
+            F.one_hot(
+                torch.tensor(e_map["stereo"].index(str(bond.GetStereo()))),
+                len(e_map["stereo"]),
+            )
+        )
+        bond_feats.append(
+            F.one_hot(
+                torch.tensor(e_map["is_conjugated"].index(bond.GetIsConjugated())),
+                len(e_map["is_conjugated"]),
+            )
+        )
+
+        bond_feature_vector = torch.cat(bond_feats, dim=0).float()
+
+        edge_indices += [[i, j], [j, i]]
+        edge_attrs_list += [bond_feature_vector, bond_feature_vector]
+
+    edge_index = torch.tensor(edge_indices)
+    edge_index = edge_index.t().to(torch.long).view(2, -1)
+
+    if edge_attrs_list:
+        edge_attr = torch.stack(edge_attrs_list, dim=0)
+    else:
+        edge_attr = torch.empty((0, EDGE_FEATURE_DIM), dtype=torch.float)
+
+    if edge_index.numel() > 0:  # Sort indices
+        perm = (edge_index[0] * x.size(0) + edge_index[1]).argsort()
+        edge_index, edge_attr = edge_index[:, perm], edge_attr[perm]
+
+    return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+
+
+def from_smiles_one_hot(smi: str, **kwargs) -> Data:
+    r"""Converts a SMILES string to a :class:`torch_geometric.data.Data`
+    instance with one-hot encoded features.
+    """
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        raise ValueError(f"Could not parse SMILES string: {smi}")
+    return from_rdmol_one_hot(mol)
+
+
 class MolFingerprint(StrEnum):
     MORGAN = auto()
     RDKIT = auto()
@@ -29,6 +232,7 @@ class MolFingerprint(StrEnum):
     ATOMPAIR = auto()
     CHEMBERTA = auto()
     GRAPH = auto()
+    ALL = auto()
 
     def _get_mfpgen(
         self,
@@ -62,7 +266,14 @@ class MolFingerprint(StrEnum):
             case MolFingerprint.CHEMBERTA:
                 return 384
             case MolFingerprint.GRAPH:
-                return 9
+                return NODE_FEATURE_DIM
+            case MolFingerprint.ALL:
+                members = [
+                    m
+                    for m in MolFingerprint
+                    if m not in (MolFingerprint.ALL, MolFingerprint.GRAPH)
+                ]
+                return sum(m.dim for m in members)
             case _:
                 return 2048
 
@@ -72,14 +283,40 @@ class MolFingerprint(StrEnum):
         smi: str,
         target: str = "numpy",
     ):
-        """Compute fingerprint or embedding for a single SMILES."""
+        """Compute fingerprint, embedding, or graph for a single SMILES."""
+
+        if self is MolFingerprint.ALL:
+            members = [
+                m
+                for m in MolFingerprint
+                if m not in (MolFingerprint.ALL, MolFingerprint.GRAPH)
+            ]
+            all_fps = []
+            for feat in members:
+                if feat is MolFingerprint.CHEMBERTA:
+                    fp = feat.compute(smi)
+                else:
+                    fp = feat.compute(smi, target="numpy")
+
+                if fp is None:
+                    logger.warning(
+                        f"Failed to compute {feat.value} for ALL on SMILES={smi}"
+                    )
+                    return None
+                all_fps.append(fp)
+            return np.concatenate(all_fps)
+
         if self is MolFingerprint.CHEMBERTA:
             return smiles_to_dl_embedding(
                 [smi], model_name="DeepChem/ChemBERTa-77M-MLM", pooling="mean"
             )[0]
 
         if self is MolFingerprint.GRAPH:
-            return from_smiles(smi)
+            try:
+                return from_smiles_one_hot(smi)
+            except Exception as e:
+                logger.warning(f"Graph computation failed for SMILES={smi}: {e}")
+                return None
 
         mol = Chem.MolFromSmiles(smi)
         if mol is None:
@@ -105,6 +342,7 @@ class MolFingerprint(StrEnum):
             MolFingerprint.RDKIT,
             MolFingerprint.TOPOTORSION,
             MolFingerprint.ATOMPAIR,
+            MolFingerprint.ALL,
         }:
             logger.info(
                 f"Parallel featurization for {self.value} using {n_jobs} cores."

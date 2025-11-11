@@ -15,6 +15,7 @@ from torch_geometric.data import Batch
 
 
 from ..utils import device
+from ..data.featurization import EDGE_FEATURE_DIM
 from .bin_distribution import BinDistribution
 from .set_transformer import SetTransformer
 from .common import make_block_diag_mask, make_asymmetric_mask, mlp
@@ -111,6 +112,7 @@ class GraphMoleculeBayesianSetRankModel(MoleculeBayesianSetRankModel):
     def __init__(
         self,
         ligand_input_size: int,
+        edge_input_size: int = EDGE_FEATURE_DIM,
         num_gnn_layers: int = 3,
         hidden_channels: int = 512,
         p_dropout: float = 0.05,
@@ -136,7 +138,9 @@ class GraphMoleculeBayesianSetRankModel(MoleculeBayesianSetRankModel):
                 act(),
                 Linear(hidden_channels, hidden_channels),
             )
-            self.gnn_layers.append(gnn.GINEConv(nn, train_eps=True, edge_dim=3))
+            self.gnn_layers.append(
+                gnn.GINEConv(nn, train_eps=True, edge_dim=edge_input_size)
+            )
             self.batch_norms.append(LayerNorm(hidden_channels))
             in_channels = hidden_channels
 

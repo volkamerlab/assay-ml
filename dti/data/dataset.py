@@ -372,10 +372,6 @@ class PropertySetDataset(Dataset):
         self.info = torch.tensor(self.data[info_cols].values.astype(np.int64))
 
     def _setup_sets_and_properties(self, property_columns: list[str] = None, **kwargs):
-        """
-        Shared logic to build assay sets and property data.
-        This is called *after* _prepare_features_and_data.
-        """
         self.min_batch_size = kwargs.get("min_batch_size", 3)
         self.max_set_size = kwargs.get("max_set_size", 0)
         self.random = np.random.default_rng(kwargs.get("random_seed", 0))
@@ -738,9 +734,127 @@ class GraphPropertySetDataset(PropertySetDataset):
                         raise ValueError(f"Graph computation failed for SMILES: {smi}")
                     torch.save(graph, cache_path)
         except:
-            raise ValueError(f"Failure for SMILES: {smi} and file {lock_path}")
+            logger.error(f"Failure for SMILES: {smi} and file {lock_path}")
             graph = self.mol_featurizer.compute(smi)
         return graph
+
+
+class GraphAndFingerprintDataset(PropertySetDataset):
+    def __init__(
+        self,
+        data: pd.DataFrame,
+        mol_featurizer: MolFingerprint,
+        graph_featurizer: MolFingerprint,
+        target: str = ACT,
+        property_columns: list[str] = None,
+        info_cols: list[str] = [],
+        **kwargs,
+    ):
+        logger.info("Initializing GraphAndFingerprintDataset.")
+
+        self.graph_featurizer = graph_featurizer
+
+        super().__init__(
+            data=data,
+            mol_featurizer=mol_featurizer,
+            target=target,
+            property_columns=property_columns,
+            info_cols=info_cols,
+            **kwargs,
+        )
+
+        self.smiles_list = self.data[SMILES].values
+
+        cache_dir_str = os.getenv("GRAPH_CACHE_DIR")
+        if not cache_dir_str:
+            raise EnvironmentError("GRAPH_CACHE_DIR environment variable must be set.")
+        self.scratch_dir = Path(cache_dir_str)
+        self.scratch_dir.mkdir(exist_ok=True, parents=True)
+        logger.info(f"Using sharded graph cache at: {self.scratch_dir}")
+
+    def _get_graph_from_smi(self, smi: str):
+        hash_str = hashlib.sha256(smi.encode()).hexdigest()
+
+        cache_subdir = self.scratch_dir / hash_str[0:2] / hash_str[2:4]
+        cache_path = cache_subdir / f"{hash_str}.pt"
+        lock_path = cache_subdir / f"{hash_str}.lock"
+
+        cache_subdir.mkdir(parents=True, exist_ok=True)
+
+        lock = FileLock(lock_path, timeout=5)
+        try:
+            with lock:
+                try:
+                    graph = torch.load(cache_path, weights_only=False)
+                except FileNotFoundError:
+                    graph = self.graph_featurizer.compute(smi)
+                    if graph is None:
+                        raise ValueError(f"Graph computation failed for SMILES: {smi}")
+                    torch.save(graph, cache_path)
+        except Exception as e:
+            logger.error(f"Failure for SMILES: {smi} and file {lock_path}. Error: {e}")
+            graph = self.graph_featurizer.compute(smi)
+            if graph is None:
+                raise ValueError(f"Graph computation failed for SMILES: {smi}")
+
+        return graph
+
+    def _get_ligand_features(self, indices: np.ndarray):
+        fingerprints = self.ligand_features[indices]
+
+        smiles_to_fetch = self.smiles_list[indices]
+        graphs_in_batch = [self._get_graph_from_smi(smi) for smi in smiles_to_fetch]
+
+        graphs = Batch.from_data_list(graphs_in_batch)
+
+        return graphs, fingerprints
+
+    def __getitem__(self, idx):
+        batch_plan = self._get_next_batch(idx)
+
+        num_sets = len(batch_plan)
+        all_indices_list = []
+        all_labels_list = []
+        set_sizes = []
+        real_assay = []
+
+        for item in batch_plan:
+            set_type = item[0]
+            indices = item[1]
+            set_sizes.append(len(indices))
+            all_indices_list.append(indices)
+            real_assay.extend([set_type == "assay"] * len(indices))
+
+            if set_type == "assay":
+                all_labels_list.append(self.assay_labels[indices])
+            else:
+                coeffs_tensor = item[2]
+                labels = self._compute_property_labels(indices, coeffs_tensor)
+                all_labels_list.append(labels)
+
+        all_indices = np.concatenate(all_indices_list)
+        all_labels = torch.cat(all_labels_list)
+
+        info = self.info[all_indices]
+
+        graphs, fingerprints = self._get_ligand_features(all_indices)
+
+        set_sizes_tensor = torch.tensor(set_sizes, dtype=torch.long)
+        set_boundaries = torch.cat(
+            [torch.tensor([0]), torch.cumsum(set_sizes_tensor, 0)]
+        ).numpy()
+        set_ids_tensor = torch.repeat_interleave(
+            torch.arange(num_sets), set_sizes_tensor
+        )
+
+        metadata = {
+            "num_sets": num_sets,
+            "set_ids_tensor": set_ids_tensor,
+            "set_boundaries": set_boundaries,
+            "real_assay": torch.tensor(real_assay),
+        }
+
+        return (graphs, fingerprints.squeeze()), all_labels, info, metadata
 
 
 class MultiSetActivityDataset(ActivityDataset):

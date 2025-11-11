@@ -13,6 +13,7 @@ from dti.data.dataset import (
     PropertySetDataset,
     ResettingBatchSampler,
     GraphPropertySetDataset,
+    GraphAndFingerprintDataset,
 )
 from dti.data.processing import (
     prepare_datasets,
@@ -69,12 +70,6 @@ def prepare_dataset_splits(
 
     mol_feat_instance = MolFingerprint(mol_feat)
 
-    dataset_cls = (
-        GraphPropertySetDataset
-        if mol_feat_instance is MolFingerprint.GRAPH
-        else PropertySetDataset
-    )
-
     common_dataset_kwargs = {
         "mol_featurizer": mol_feat_instance,
         "info_cols": info_cols,
@@ -82,6 +77,15 @@ def prepare_dataset_splits(
         "processed_dir": data_dir,
         "n_jobs": n_jobs,
     }
+
+    match mol_feat_instance:
+        case MolFingerprint.GRAPH:
+            dataset_cls = GraphPropertySetDataset
+        case MolFingerprint.ALL:
+            common_dataset_kwargs["graph_featurizer"] = MolFingerprint.GRAPH
+            dataset_cls = GraphAndFingerprintDataset
+        case _:
+            dataset_cls = PropertySetDataset
 
     val_dataset_cls = partial(
         dataset_cls,
@@ -98,7 +102,7 @@ def prepare_dataset_splits(
 
     train_dataset = dataset_cls(
         train_data,
-        max_batch_datapoints=3072,
+        max_batch_datapoints=2048,
         max_set_size=1024,
         shuffle_within_target=False,
         property_set_ratio=property_set_ratio,
@@ -131,9 +135,9 @@ def prepare_dataset_splits(
     loader_kwargs = {
         "batch_sampler": ResettingBatchSampler(train_dataset, batch_size=1),
         "shuffle": False,
-        "num_workers": n_jobs,  # Changed from 0 to n_jobs
+        "num_workers": n_jobs,
         "collate_fn": collate_fn,
-        "persistent_workers": True,  # Recommended for performance
+        "persistent_workers": True,
     }
 
     train_loader = data_loader_cls(train_dataset, drop_last=False, **loader_kwargs)
