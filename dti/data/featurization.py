@@ -1,4 +1,5 @@
 import logging
+import hashlib
 import functools
 import pandas as pd
 from pathlib import Path
@@ -16,12 +17,15 @@ from esm import FastaBatchedDataset, pretrained
 from rdkit import Chem
 from rdkit.Chem import rdFingerprintGenerator
 from transformers import AutoTokenizer, AutoModel
+from filelock import FileLock
+
 
 from ..utils.constants import DATA, TID, SEQUENCE
 from ..utils import device
 
 
 logger = logging.getLogger(__name__)
+logging.getLogger("filelock").setLevel(logging.WARNING)
 _mfpgen_cache: dict[Tuple, object] = {}
 
 
@@ -278,11 +282,7 @@ class MolFingerprint(StrEnum):
                 return 2048
 
     @functools.cache
-    def compute(
-        self,
-        smi: str,
-        target: str = "numpy",
-    ):
+    def compute(self, smi: str, target: str = "numpy", cache_dir: Path = None):
         """Compute fingerprint, embedding, or graph for a single SMILES."""
 
         if self is MolFingerprint.ALL:
@@ -307,16 +307,13 @@ class MolFingerprint(StrEnum):
             return np.concatenate(all_fps)
 
         if self is MolFingerprint.CHEMBERTA:
-            return smiles_to_dl_embedding(
-                [smi], model_name="DeepChem/ChemBERTa-77M-MLM", pooling="mean"
+            fp_compute = lambda s: smiles_to_dl_embedding(
+                [s], model_name="DeepChem/ChemBERTa-77M-MLM", pooling="mean"
             )[0]
+            return self._cache_lookup(cache_dir / str(self), smi, fp_compute)
 
         if self is MolFingerprint.GRAPH:
-            try:
-                return from_smiles_one_hot(smi)
-            except Exception as e:
-                logger.warning(f"Graph computation failed for SMILES={smi}: {e}")
-                return None
+            return self._cache_lookup(cache_dir / str(self), smi, from_smiles_one_hot)
 
         mol = Chem.MolFromSmiles(smi)
         if mol is None:
@@ -332,6 +329,37 @@ class MolFingerprint(StrEnum):
                 return mfpgen.GetFingerprint(mol)
             case _:
                 raise ValueError(f"Unknown fingerprint target: '{target}'")
+
+    def _cache_lookup(self, cache_dir: Path, smi: str, fp_compute) -> Path:
+        try:
+            if cache_dir is None:
+                return fp_compute(smi)
+            hash_str = hashlib.sha256(smi.encode()).hexdigest()
+
+            cache_subdir = cache_dir / hash_str[0:2] / hash_str[2:4]
+            cache_path = cache_subdir / f"{hash_str}.pt"
+            lock_path = cache_subdir / f"{hash_str}.lock"
+
+            cache_subdir.mkdir(parents=True, exist_ok=True)
+
+            lock = FileLock(lock_path, timeout=5)
+            try:
+                with lock:
+                    try:
+                        graph = torch.load(cache_path, weights_only=False)
+                    except FileNotFoundError:
+                        graph = fp_compute(smi)
+                        if graph is None:
+                            logger.warning(f"Computation failed for SMILES={smi}: {e}")
+                            return None
+                        torch.save(graph, cache_path)
+            except:
+                logger.error(f"Failure for SMILES: {smi} and file {lock_path}")
+                graph = fp_compute(smi)
+            return graph
+        except Exception as e:
+            logger.warning(f"Computation failed for SMILES={smi}: {e}")
+            return None
 
     def compute_parallel(
         self, smiles: Iterable[str], n_jobs: int = 16, pbar: bool = True, **kwargs
@@ -350,11 +378,25 @@ class MolFingerprint(StrEnum):
             with Pool(n_jobs) as p:
                 return p.map(
                     functools.partial(self.compute, **kwargs),
-                    tqdm.tqdm(smiles, desc=f"Featurizing {self.value}")
+                    tqdm.tqdm(smiles, desc=f"featurizing {self.value}")
                     if pbar
                     else smiles,
                 )
-
+        elif self == MolFingerprint.CHEMBERTA:
+            _batch_size = 1024
+            embeddings = list()
+            for batch in tqdm.tqdm(
+                range(0, len(smiles), _batch_size), desc=f"featurizing {self.value}"
+            ):
+                smi_batch = list(smiles[batch : min(len(smiles), batch + _batch_size)])
+                embeddings.append(
+                    smiles_to_dl_embedding(
+                        smi_batch,
+                        model_name="DeepChem/ChemBERTa-77M-MLM",
+                        pooling="mean",
+                    )[0]
+                )
+            torch.concatenate(embeddings)
         else:
             logger.warning(
                 f"No parallel logic defined for {self.value}. Falling back to sequential."
@@ -370,11 +412,10 @@ def _get_tokenizer_and_model(model_name: str) -> Tuple[object, object]:
 
 
 def smiles_to_dl_embedding(
-    smiles_list: Iterable[str],
+    smiles_list: list[str],
     model_name: str = "DeepChem/ChemBERTa-77M-MLM",
     pooling: str = "mean",
 ):
-    """Convert a list of SMILES strings into embeddings using ChemBERTa."""
     tokenizer, model = _get_tokenizer_and_model(model_name)
     encoded = tokenizer(smiles_list, padding=True, truncation=True, return_tensors="pt")
     encoded = encoded.to(device)

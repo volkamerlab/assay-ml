@@ -694,9 +694,7 @@ class GraphPropertySetDataset(PropertySetDataset):
     ):
         logger.info("Initializing GraphPropertySetDataset (on-the-fly).")
 
-        cache_dir_str = os.getenv("GRAPH_CACHE_DIR")
-        if not cache_dir_str:
-            raise EnvironmentError("GRAPH_CACHE_DIR environment variable must be set.")
+        cache_dir_str = os.environ.get("GRAPH_CACHE_DIR", "/tmp/graph_cache")
         self.scratch_dir = Path(cache_dir_str)
         self.scratch_dir.mkdir(exist_ok=True, parents=True)
         logger.info(f"Using sharded graph cache at: {self.scratch_dir}")
@@ -711,32 +709,11 @@ class GraphPropertySetDataset(PropertySetDataset):
 
     def _get_ligand_features(self, indices: np.ndarray):
         smiles_to_fetch = self.smiles_list[indices]
-        graphs_in_batch = [self._get_graph_from_smi(smi) for smi in smiles_to_fetch]
+        graphs_in_batch = [
+            self.mol_featurizer.compute(smi, cache_dir=self.scratch_dir)
+            for smi in smiles_to_fetch
+        ]
         return Batch.from_data_list(graphs_in_batch)
-
-    def _get_graph_from_smi(self, smi: str):
-        hash_str = hashlib.sha256(smi.encode()).hexdigest()
-
-        cache_subdir = self.scratch_dir / hash_str[0:2] / hash_str[2:4]
-        cache_path = cache_subdir / f"{hash_str}.pt"
-        lock_path = cache_subdir / f"{hash_str}.lock"
-
-        cache_subdir.mkdir(parents=True, exist_ok=True)
-
-        lock = FileLock(lock_path, timeout=5)
-        try:
-            with lock:
-                try:
-                    graph = torch.load(cache_path, weights_only=False)
-                except FileNotFoundError:
-                    graph = self.mol_featurizer.compute(smi)
-                    if graph is None:
-                        raise ValueError(f"Graph computation failed for SMILES: {smi}")
-                    torch.save(graph, cache_path)
-        except:
-            logger.error(f"Failure for SMILES: {smi} and file {lock_path}")
-            graph = self.mol_featurizer.compute(smi)
-        return graph
 
 
 class GraphAndFingerprintDataset(PropertySetDataset):
@@ -765,45 +742,19 @@ class GraphAndFingerprintDataset(PropertySetDataset):
 
         self.smiles_list = self.data[SMILES].values
 
-        cache_dir_str = os.getenv("GRAPH_CACHE_DIR")
-        if not cache_dir_str:
-            raise EnvironmentError("GRAPH_CACHE_DIR environment variable must be set.")
+        cache_dir_str = os.environ.get("GRAPH_CACHE_DIR", "/tmp/graph_cache")
         self.scratch_dir = Path(cache_dir_str)
         self.scratch_dir.mkdir(exist_ok=True, parents=True)
         logger.info(f"Using sharded graph cache at: {self.scratch_dir}")
-
-    def _get_graph_from_smi(self, smi: str):
-        hash_str = hashlib.sha256(smi.encode()).hexdigest()
-
-        cache_subdir = self.scratch_dir / hash_str[0:2] / hash_str[2:4]
-        cache_path = cache_subdir / f"{hash_str}.pt"
-        lock_path = cache_subdir / f"{hash_str}.lock"
-
-        cache_subdir.mkdir(parents=True, exist_ok=True)
-
-        lock = FileLock(lock_path, timeout=5)
-        try:
-            with lock:
-                try:
-                    graph = torch.load(cache_path, weights_only=False)
-                except FileNotFoundError:
-                    graph = self.graph_featurizer.compute(smi)
-                    if graph is None:
-                        raise ValueError(f"Graph computation failed for SMILES: {smi}")
-                    torch.save(graph, cache_path)
-        except Exception as e:
-            logger.error(f"Failure for SMILES: {smi} and file {lock_path}. Error: {e}")
-            graph = self.graph_featurizer.compute(smi)
-            if graph is None:
-                raise ValueError(f"Graph computation failed for SMILES: {smi}")
-
-        return graph
 
     def _get_ligand_features(self, indices: np.ndarray):
         fingerprints = self.ligand_features[indices]
 
         smiles_to_fetch = self.smiles_list[indices]
-        graphs_in_batch = [self._get_graph_from_smi(smi) for smi in smiles_to_fetch]
+        graphs_in_batch = [
+            self.mol_featurizer.compute(smi, cache_dir=self.scratch_dir)
+            for smi in smiles_to_fetch
+        ]
 
         graphs = Batch.from_data_list(graphs_in_batch)
 
@@ -854,7 +805,7 @@ class GraphAndFingerprintDataset(PropertySetDataset):
             "real_assay": torch.tensor(real_assay),
         }
 
-        return (graphs, fingerprints.squeeze()), all_labels, info, metadata
+        return (graphs, fingerprints), all_labels, info, metadata
 
 
 class MultiSetActivityDataset(ActivityDataset):
