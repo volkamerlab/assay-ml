@@ -3,6 +3,8 @@ import hashlib
 import logging
 from functools import partial
 import traceback
+from pathlib import Path
+import os
 
 import numpy as np
 import torch
@@ -102,7 +104,12 @@ def prepare_dataset_splits(
         **common_dataset_kwargs,
     )
 
-    cache_dir = data_dir / "_cached_fp" / str(fold) / mol_feat_instance.value
+    cache_dir = (
+        Path(os.environ.get("CACHE_DIR", data_dir))
+        / dataset_name
+        / str(fold)
+        / mol_feat_instance.value
+    )
     val_dataset = val_dataset_cls(val_data, cache_dir=cache_dir / "val")
     test_dataset = val_dataset_cls(test_data, cache_dir=cache_dir / "test")
 

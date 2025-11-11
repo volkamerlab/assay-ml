@@ -12,6 +12,7 @@ request_CPUs = 12
 request_memory = 400GB
 requirements = (GPUs_Capability >= 7.0) && (GPUs_GlobalMemoryMb >= 16000)
 +WantGPUHomeMounted = true
++WantScratchMounted = true
 queue fold, script, n_bins, mol_feat, unmasked_weight, physcem from (
     0, scripts/pfn_train.py, 10,    chemberta, 0.0, 0.25
     0, scripts/pfn_train.py, 100,   chemberta, 0.0, 0.25
