@@ -366,7 +366,7 @@ class MolFingerprint(StrEnum):
 def _get_tokenizer_and_model(model_name: str) -> Tuple[object, object]:
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModel.from_pretrained(model_name)
-    return tokenizer, model
+    return tokenizer, model.to(device)
 
 
 def smiles_to_dl_embedding(
@@ -377,6 +377,7 @@ def smiles_to_dl_embedding(
     """Convert a list of SMILES strings into embeddings using ChemBERTa."""
     tokenizer, model = _get_tokenizer_and_model(model_name)
     encoded = tokenizer(smiles_list, padding=True, truncation=True, return_tensors="pt")
+    encoded = encoded.to(device)
 
     with torch.no_grad():
         outputs = model(**encoded)
@@ -392,7 +393,7 @@ def smiles_to_dl_embedding(
     else:
         raise ValueError("Pooling must be 'mean' or 'cls'")
 
-    return embeddings.detach().numpy()
+    return embeddings.detach().cpu().numpy()
 
 
 def esm2_features(
