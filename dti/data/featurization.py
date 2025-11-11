@@ -381,7 +381,10 @@ class MolFingerprint(StrEnum):
                     tqdm.tqdm(smiles, desc=f"featurizing {self.value}"),
                 )
         elif self == MolFingerprint.ALL:
-            self.compute_parallel
+            embeddings = [
+                np.array(m.compute_parallel(smiles)) for m in self.members_all
+            ]
+            return np.concatenate(embeddings, axis=1)
         elif self == MolFingerprint.CHEMBERTA:
             _batch_size = 512
             embeddings = list()
@@ -394,7 +397,6 @@ class MolFingerprint(StrEnum):
                     model_name="DeepChem/ChemBERTa-77M-MLM",
                     pooling="mean",
                 )
-                logger.debug(len(batch_embds))
                 embeddings.extend(list(batch_embds))
 
             assert len(smiles) == len(embeddings), (len(smiles), len(embeddings))
