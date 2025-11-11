@@ -38,7 +38,7 @@ x_map: dict[str, list] = {
         "CHI_TETRAHEDRAL_CCW",
         "CHI_OTHER",
         "CHI_TETRAHEDRAL",
-        "CHI_ALLENE",
+        "CHI_ALLFPENE",
         "CHI_SQUAREPLANAR",
         "CHI_TRIGONALBIPYRAMIDAL",
         "CHI_OCTAHEDRAL",
@@ -236,6 +236,7 @@ class MolFingerprint(StrEnum):
     ATOMPAIR = auto()
     CHEMBERTA = auto()
     GRAPH = auto()
+    ALLFP = auto()
     ALL = auto()
 
     def _get_mfpgen(
@@ -271,13 +272,8 @@ class MolFingerprint(StrEnum):
                 return 384
             case MolFingerprint.GRAPH:
                 return NODE_FEATURE_DIM
-            case MolFingerprint.ALL:
-                members = [
-                    m
-                    for m in MolFingerprint
-                    if m not in (MolFingerprint.ALL, MolFingerprint.GRAPH)
-                ]
-                return sum(m.dim for m in members)
+            case MolFingerprint.ALLFP | MolFingerprint.ALL:
+                return sum(m.dim for m in self.members_all)
             case _:
                 return 2048
 
@@ -286,14 +282,21 @@ class MolFingerprint(StrEnum):
         return [
             m
             for m in MolFingerprint
-            if m not in (MolFingerprint.ALL, MolFingerprint.GRAPH)
+            if m
+            not in (
+                MolFingerprint.ALLFP,
+                MolFingerprint.GRAPH,
+                MolFingerprint.ALL,
+                # MolFingerprint.CHEMBERTA,
+            )
         ]
 
     @functools.cache
     def compute(self, smi: str, target: str = "numpy", cache_dir: Path = None):
-        """Compute fingerprint, embedding, or graph for a single SMILES."""
+        if self == MolFingerprint.ALL:
+            raise ValueError("combined manually")
 
-        if self is MolFingerprint.ALL:
+        if self is MolFingerprint.ALLFP:
             all_fps = []
             for feat in self.members_all:
                 if feat is MolFingerprint.CHEMBERTA:
@@ -303,7 +306,7 @@ class MolFingerprint(StrEnum):
 
                 if fp is None:
                     logger.warning(
-                        f"Failed to compute {feat.value} for ALL on SMILES={smi}"
+                        f"Failed to compute {feat.value} for ALLFP on SMILES={smi}"
                     )
                     return None
                 all_fps.append(fp)
@@ -365,7 +368,9 @@ class MolFingerprint(StrEnum):
             return None
 
     def compute_parallel(self, smiles: Iterable[str], n_jobs: int = 16, **kwargs):
-        if self in {
+        if self == MolFingerprint.ALL:
+            raise ValueError("combined manually")
+        elif self in {
             MolFingerprint.GRAPH,
             MolFingerprint.MORGAN,
             MolFingerprint.RDKIT,
@@ -380,13 +385,13 @@ class MolFingerprint(StrEnum):
                     functools.partial(self.compute, **kwargs),
                     tqdm.tqdm(smiles, desc=f"featurizing {self.value}"),
                 )
-        elif self == MolFingerprint.ALL:
+        elif self == MolFingerprint.ALLFP:
             embeddings = [
                 np.array(m.compute_parallel(smiles)) for m in self.members_all
             ]
             return np.concatenate(embeddings, axis=1)
         elif self == MolFingerprint.CHEMBERTA:
-            _batch_size = 512
+            _batch_size = 4096
             embeddings = list()
             for batch in tqdm.tqdm(
                 range(0, len(smiles), _batch_size), desc=f"featurizing {self.value}"

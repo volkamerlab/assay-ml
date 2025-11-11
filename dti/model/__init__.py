@@ -12,4 +12,5 @@ from .bayesian import (
     MoleculeBayesianSetRankModel,
     ComplexBayesianSetRankModel,
     GraphMoleculeBayesianSetRankModel,
+    AllMoleculeBayesianSetRankModel,
 )

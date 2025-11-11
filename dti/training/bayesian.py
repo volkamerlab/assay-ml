@@ -227,7 +227,15 @@ def _process_batch(
 
     if isinstance(ligand_features, torch.Tensor):
         ligand_features = ligand_features.squeeze()
-    ligand_features = ligand_features.to(device, non_blocking=True)
+    if isinstance(ligand_features, tuple):
+        ligand_graph, ligand_fps = ligand_features
+        ligand_fps = ligand_fps.squeeze()
+        ligand_features = (
+            ligand_graph.to(device, non_blocking=True),
+            ligand_fps.to(device, non_blocking=True),
+        )
+    else:
+        ligand_features = ligand_features.to(device, non_blocking=True)
     labels = labels.squeeze().to(device, non_blocking=True)
     info = info.squeeze().to(device, non_blocking=True)
     batch_size = labels.size(0)

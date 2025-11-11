@@ -8,7 +8,11 @@ import torch
 from torch.utils.data import DataLoader
 from torch_geometric.loader import DataLoader as PyGDataLoader
 
-from dti.model import MoleculeBayesianSetRankModel, GraphMoleculeBayesianSetRankModel
+from dti.model import (
+    MoleculeBayesianSetRankModel,
+    GraphMoleculeBayesianSetRankModel,
+    AllMoleculeBayesianSetRankModel,
+)
 from dti.data.dataset import (
     PropertySetDataset,
     ResettingBatchSampler,
@@ -82,8 +86,9 @@ def prepare_dataset_splits(
         case MolFingerprint.GRAPH:
             dataset_cls = GraphPropertySetDataset
         case MolFingerprint.ALL:
-            common_dataset_kwargs["graph_featurizer"] = MolFingerprint.GRAPH
             dataset_cls = GraphAndFingerprintDataset
+            common_dataset_kwargs["graph_featurizer"] = MolFingerprint.GRAPH
+            common_dataset_kwargs["mol_featurizer"] = MolFingerprint.ALLFP
         case _:
             dataset_cls = PropertySetDataset
 
@@ -125,7 +130,7 @@ def prepare_dataset_splits(
 
     assert len(train_dataset) > 0
 
-    if mol_feat_instance is MolFingerprint.GRAPH:
+    if mol_feat_instance in (MolFingerprint.GRAPH, MolFingerprint.ALL):
         collate_fn = lambda data: data[0]
     else:
         collate_fn = None
@@ -190,11 +195,13 @@ def run_split(
         property_set_ratio=property_set_ratio,
     )
 
-    model_cls = (
-        GraphMoleculeBayesianSetRankModel
-        if MolFingerprint(mol_feat) == MolFingerprint.GRAPH
-        else MoleculeBayesianSetRankModel
-    )
+    match MolFingerprint(mol_feat):
+        case MolFingerprint.GRAPH:
+            model_cls = GraphMoleculeBayesianSetRankModel
+        case MolFingerprint.ALL:
+            model_cls = AllMoleculeBayesianSetRankModel
+        case _:
+            model_cls = MoleculeBayesianSetRankModel
 
     args = [
         model_cls,

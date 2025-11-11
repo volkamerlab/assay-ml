@@ -15,7 +15,7 @@ from torch_geometric.data import Batch
 
 
 from ..utils import device
-from ..data.featurization import EDGE_FEATURE_DIM
+from ..data.featurization import EDGE_FEATURE_DIM, NODE_FEATURE_DIM
 from .bin_distribution import BinDistribution
 from .set_transformer import SetTransformer
 from .common import make_block_diag_mask, make_asymmetric_mask, mlp
@@ -89,7 +89,7 @@ class MoleculeBayesianSetRankModel(Module):
 
     def forward(
         self,
-        ligand: Tensor | Batch,
+        ligand: Tensor | Batch | tuple,
         y: Tensor,
         sample_mask: Tensor,
         set_ids: Tensor,
@@ -168,6 +168,41 @@ class GraphMoleculeBayesianSetRankModel(MoleculeBayesianSetRankModel):
 
         h_combined = torch.cat([h_add, h_mean, h_max], dim=1)
         return self.pool_combine(h_combined)
+
+
+class AllMoleculeBayesianSetRankModel(GraphMoleculeBayesianSetRankModel):
+    def __init__(
+        self,
+        ligand_input_size: int,
+        node_input_size: int = NODE_FEATURE_DIM,
+        hidden_channels: int = 512,
+        p_dropout: float = 0.05,
+        act=GELU,
+        **kwargs,
+    ):
+        super().__init__(
+            node_input_size,
+            hidden_channels=hidden_channels,
+            p_dropout=p_dropout,
+            act=act,
+            **kwargs,
+        )
+        self.embed_fp_ligand = Sequential(
+            Linear(ligand_input_size, hidden_channels),
+            act(),
+            Linear(hidden_channels, hidden_channels),
+            act(),
+            Dropout(p_dropout),
+            Linear(hidden_channels, hidden_channels),
+        )
+        self.combine_fp_graph = Linear(hidden_channels * 2, hidden_channels)
+
+    def _embed_ligand(self, ligand: tuple) -> Tensor:
+        ligand_graph, ligand_fp = ligand
+        graph_emb = super()._embed_ligand(ligand_graph)
+        fp_emb = self.embed_fp_ligand(ligand_fp)
+        h = torch.cat([graph_emb, fp_emb], dim=1)
+        return self.combine_fp_graph(h)
 
 
 class ComplexBayesianSetRankModel(MoleculeBayesianSetRankModel):

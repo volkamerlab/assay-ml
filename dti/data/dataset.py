@@ -35,7 +35,6 @@ from ..utils import device, check_smi_valid
 from ..utils.hodge_ranking import parallel_hodge_rank
 
 logger = logging.getLogger(__name__)
-logging.getLogger("filelock").setLevel(logging.WARNING)
 
 
 class ActivityDataset(Dataset):
@@ -752,7 +751,7 @@ class GraphAndFingerprintDataset(PropertySetDataset):
 
         smiles_to_fetch = self.smiles_list[indices]
         graphs_in_batch = [
-            self.mol_featurizer.compute(smi, cache_dir=self.scratch_dir)
+            self.graph_featurizer.compute(smi, cache_dir=self.scratch_dir)
             for smi in smiles_to_fetch
         ]
 
