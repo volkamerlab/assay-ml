@@ -102,12 +102,9 @@ def prepare_dataset_splits(
         **common_dataset_kwargs,
     )
 
-    hash_args = str([dataset_name, fold, method, mol_feat, info_cols])
-    hash_args = hashlib.sha256(hash_args.encode()).hexdigest()
-
-    val_dataset = val_dataset_cls(val_data, cache_dir=data_dir / hash_args / "val")
-
-    test_dataset = val_dataset_cls(test_data, cache_dir=data_dir / hash_args / "test")
+    cache_dir = data_dir / "_cached_fp" / str(fold) / mol_feat_instance.value
+    val_dataset = val_dataset_cls(val_data, cache_dir=cache_dir / "val")
+    test_dataset = val_dataset_cls(test_data, cache_dir=cache_dir / "test")
 
     train_dataset = dataset_cls(
         train_data,
@@ -133,7 +130,7 @@ def prepare_dataset_splits(
             "qed_weighted",
             "np_likeness_score",
         ],
-        cache_dir=data_dir / hash_args / "train",
+        cache_dir=cache_dir / "train",
         **common_dataset_kwargs,
     )
 

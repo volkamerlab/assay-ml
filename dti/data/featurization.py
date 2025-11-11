@@ -99,6 +99,8 @@ e_map: dict[str, list] = {
 
 NODE_FEATURE_DIM = sum(len(v) for v in x_map.values())
 EDGE_FEATURE_DIM = sum(len(v) for v in e_map.values())
+FP_DEFAULT_DIM = 2048
+FP_SMALL_DIM = 512
 
 
 def from_rdmol_one_hot(mol) -> "torch_geometric.data.Data":
@@ -241,7 +243,7 @@ class MolFingerprint(StrEnum):
 
     def _get_mfpgen(
         self,
-        fpSize: int = 2048,
+        fpSize: int = FP_DEFAULT_DIM,
     ):
         key = (self.value, fpSize)
         if key not in _mfpgen_cache:
@@ -273,9 +275,9 @@ class MolFingerprint(StrEnum):
             case MolFingerprint.GRAPH:
                 return NODE_FEATURE_DIM
             case MolFingerprint.ALLFP | MolFingerprint.ALL:
-                return sum(m.dim for m in self.members_all)
+                return sum(FP_SMALL_DIM for m in self.members_all)
             case _:
-                return 2048
+                return FP_DEFAULT_DIM
 
     @property
     def members_all(self):
@@ -291,8 +293,14 @@ class MolFingerprint(StrEnum):
             )
         ]
 
-    @functools.cache
-    def compute(self, smi: str, target: str = "numpy", cache_dir: Path = None):
+    @functools.lru_cache(maxsize=1_000_000)
+    def compute(
+        self,
+        smi: str,
+        fpSize: int = FP_DEFAULT_DIM,
+        target: str = "numpy",
+        cache_dir: Path = None,
+    ):
         if self == MolFingerprint.ALL:
             raise ValueError("combined manually")
 
@@ -302,7 +310,7 @@ class MolFingerprint(StrEnum):
                 if feat is MolFingerprint.CHEMBERTA:
                     fp = feat.compute(smi)
                 else:
-                    fp = feat.compute(smi, target="numpy")
+                    fp = feat.compute(smi, fpSize=FP_SMALL_DIM, target="numpy")
 
                 if fp is None:
                     logger.warning(
@@ -326,7 +334,7 @@ class MolFingerprint(StrEnum):
             logger.warning(f"No fp for SMILES={smi}")
             return None
 
-        mfpgen = self._get_mfpgen()
+        mfpgen = self._get_mfpgen(fpSize)
 
         match target:
             case "numpy":
@@ -382,7 +390,7 @@ class MolFingerprint(StrEnum):
             )
             with Pool(n_jobs) as p:
                 return p.map(
-                    functools.partial(self.compute, **kwargs),
+                    functools.partial(self.compute, fpSize=FP_SMALL_DIM, **kwargs),
                     tqdm.tqdm(smiles, desc=f"featurizing {self.value}"),
                 )
         elif self == MolFingerprint.ALLFP:
