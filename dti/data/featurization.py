@@ -383,20 +383,22 @@ class MolFingerprint(StrEnum):
                     else smiles,
                 )
         elif self == MolFingerprint.CHEMBERTA:
-            _batch_size = 1024
+            _batch_size = 256
             embeddings = list()
             for batch in tqdm.tqdm(
                 range(0, len(smiles), _batch_size), desc=f"featurizing {self.value}"
             ):
                 smi_batch = list(smiles[batch : min(len(smiles), batch + _batch_size)])
-                embeddings.append(
-                    smiles_to_dl_embedding(
-                        smi_batch,
-                        model_name="DeepChem/ChemBERTa-77M-MLM",
-                        pooling="mean",
-                    )[0]
+                embeddings.extend(
+                    list(
+                        smiles_to_dl_embedding(
+                            smi_batch,
+                            model_name="DeepChem/ChemBERTa-77M-MLM",
+                            pooling="mean",
+                        )[0]
+                    )
                 )
-            torch.concatenate(embeddings)
+            return embeddings
         else:
             logger.warning(
                 f"No parallel logic defined for {self.value}. Falling back to sequential."
