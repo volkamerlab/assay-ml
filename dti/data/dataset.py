@@ -610,14 +610,14 @@ class PropertySetDataset(Dataset):
         self.used_batches = np.zeros(len(self.batches_plan), dtype=bool)
 
     def _get_next_batch(self, idx: int):
-        with self.lock:
-            if self.batches_plan is None:
-                self._make_batches()
-            if idx >= len(self.batches_plan):
-                logger.error(f"Index {idx} out of bounds. Wrapping around")
-                idx = idx % len(self.batches_plan)
-            self.used_batches[idx] = True
-            return self.batches_plan[idx]
+        # with self.lock:
+        if self.batches_plan is None:
+            self._make_batches()
+        if idx >= len(self.batches_plan):
+            logger.error(f"Index {idx} out of bounds. Wrapping around")
+            idx = idx % len(self.batches_plan)
+        self.used_batches[idx] = True
+        return self.batches_plan[idx]
 
     def _compute_property_labels(self, indices, coeffs_tensor):
         props = self.property_matrix[indices]

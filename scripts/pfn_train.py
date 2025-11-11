@@ -56,7 +56,7 @@ def prepare_dataset_splits(
     mol_feat: str,
     info_cols: list[str],
     property_set_ratio: float,
-    n_jobs: int = 8,
+    n_jobs: int = 12,
 ):
     data_dir = DATA / "processed" / dataset_name
 
@@ -107,7 +107,7 @@ def prepare_dataset_splits(
 
     train_dataset = dataset_cls(
         train_data,
-        max_batch_datapoints=2048,
+        max_batch_datapoints=2560,
         max_set_size=1024,
         shuffle_within_target=False,
         property_set_ratio=property_set_ratio,
