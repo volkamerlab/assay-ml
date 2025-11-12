@@ -150,6 +150,7 @@ class GraphMoleculeBayesianSetRankModel(MoleculeBayesianSetRankModel):
                     heads=num_heads,
                     concat=True,
                     edge_dim=edge_input_size,
+                    dropout=p_dropout,
                 )
             )
             self.norms.append(LayerNorm(hidden_channels))
@@ -161,7 +162,7 @@ class GraphMoleculeBayesianSetRankModel(MoleculeBayesianSetRankModel):
             Linear(hidden_channels // 2, 1),
         )
 
-        self.pooling = gnn.GlobalAttention(gate_nn=gate_nn, nn=None)
+        self.pooling = gnn.AttentionalAggregation(gate_nn=gate_nn, nn=None)
 
     def _embed_ligand(self, ligand: Batch) -> Tensor:
         x, edge_index, batch_idx = ligand.x, ligand.edge_index, ligand.batch
