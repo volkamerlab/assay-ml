@@ -117,6 +117,7 @@ class GraphMoleculeBayesianSetRankModel(MoleculeBayesianSetRankModel):
         hidden_channels: int = 512,
         p_dropout: float = 0.05,
         act=GELU,
+        num_heads: int = 4,
         **kwargs,
     ):
         super().__init__(
@@ -124,50 +125,54 @@ class GraphMoleculeBayesianSetRankModel(MoleculeBayesianSetRankModel):
             hidden_channels=hidden_channels,
             p_dropout=p_dropout,
             act=act,
+            num_heads=num_heads,
             **kwargs,
         )
         del self.embed_ligand
+        self.act = act
+
+        if hidden_channels % num_heads != 0:
+            raise ValueError(
+                f"hidden_channels ({hidden_channels}) must be divisible "
+                f"by num_heads ({num_heads})"
+            )
+        head_channels = hidden_channels // num_heads
 
         self.gnn_layers = ModuleList()
-        self.batch_norms = ModuleList()
+        self.norms = ModuleList()
         in_channels = ligand_input_size
 
         for i in range(num_gnn_layers):
-            nn = Sequential(
-                Linear(in_channels, hidden_channels),
-                act(),
-                Linear(hidden_channels, hidden_channels),
-            )
             self.gnn_layers.append(
-                gnn.GINEConv(nn, train_eps=True, edge_dim=edge_input_size)
+                gnn.GATv2Conv(
+                    in_channels=in_channels,
+                    out_channels=head_channels,
+                    heads=num_heads,
+                    concat=True,
+                    edge_dim=edge_input_size,
+                )
             )
-            self.batch_norms.append(LayerNorm(hidden_channels))
+            self.norms.append(LayerNorm(hidden_channels))
             in_channels = hidden_channels
 
-        self.pool_add = gnn.global_add_pool
-        self.pool_mean = gnn.global_mean_pool
-        self.pool_max = gnn.global_max_pool
-
-        self.pool_combine = Sequential(
-            Linear(hidden_channels * 3, hidden_channels),
-            act(),
-            Dropout(p_dropout),
+        gate_nn = Sequential(
+            Linear(hidden_channels, hidden_channels // 2),
+            self.act(),
+            Linear(hidden_channels // 2, 1),
         )
+
+        self.pooling = gnn.GlobalAttention(gate_nn=gate_nn, nn=None)
 
     def _embed_ligand(self, ligand: Batch) -> Tensor:
         x, edge_index, batch_idx = ligand.x, ligand.edge_index, ligand.batch
         edge_attr = ligand.edge_attr.float()
 
-        for gnn_layer, bn in zip(self.gnn_layers, self.batch_norms):
+        for gnn_layer, bn in zip(self.gnn_layers, self.norms):
             x = gnn_layer(x, edge_index, edge_attr)
             x = bn(x)
 
-        h_add = self.pool_add(x, batch_idx)
-        h_mean = self.pool_mean(x, batch_idx)
-        h_max = self.pool_max(x, batch_idx)
-
-        h_combined = torch.cat([h_add, h_mean, h_max], dim=1)
-        return self.pool_combine(h_combined)
+        h_graph = self.pooling(x, batch_idx)
+        return h_graph
 
 
 class AllMoleculeBayesianSetRankModel(GraphMoleculeBayesianSetRankModel):
