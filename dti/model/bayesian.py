@@ -195,13 +195,15 @@ class AllMoleculeBayesianSetRankModel(GraphMoleculeBayesianSetRankModel):
             Dropout(p_dropout),
             Linear(hidden_channels, hidden_channels),
         )
+        self.ln_graph = LayerNorm(hidden_channels)
+        self.ln_fps = LayerNorm(hidden_channels)
         self.combine_fp_graph = Linear(hidden_channels * 2, hidden_channels)
 
     def _embed_ligand(self, ligand: tuple) -> Tensor:
         ligand_graph, ligand_fp = ligand
         graph_emb = super()._embed_ligand(ligand_graph)
         fp_emb = self.embed_fp_ligand(ligand_fp)
-        h = torch.cat([graph_emb, fp_emb], dim=1)
+        h = torch.cat([self.ln_graph(graph_emb), self.ln_fps(fp_emb)], dim=1)
         return self.combine_fp_graph(h)
 
 
