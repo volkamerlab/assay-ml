@@ -1,3 +1,4 @@
+import os
 import logging
 import hashlib
 import functools
@@ -7,6 +8,7 @@ from typing import Union, Iterable, List, Tuple
 from multiprocessing import Pool
 from enum import StrEnum, auto
 
+import uuid
 import torch.nn.functional as F
 import torch
 from torch_geometric.data import Data
@@ -353,6 +355,7 @@ class MolFingerprint(StrEnum):
             cache_subdir = cache_dir / hash_str[0:2] / hash_str[2:4]
             cache_path = cache_subdir / f"{hash_str}.pt"
             lock_path = cache_subdir / f"{hash_str}.lock"
+            temp_path = cache_subdir / f"{hash_str}{uuid.uuid1()}.tmp"
 
             cache_subdir.mkdir(parents=True, exist_ok=True)
 
@@ -366,10 +369,18 @@ class MolFingerprint(StrEnum):
                         if graph is None:
                             logger.warning(f"Computation failed for SMILES={smi}: {e}")
                             return None
-                        torch.save(graph, cache_path)
-            except:
-                logger.error(f"Failure for SMILES: {smi} and file {lock_path}")
+                        torch.save(graph, temp_path)
+                        os.rename(temp_path, cache_path)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to load cached file {cache_path}, re-computing. Error: {e}"
+                )
                 graph = fp_compute(smi)
+                if graph is None:
+                    raise ValueError(f"Computation failed for SMILES: {smi}")
+
+                torch.save(graph, temp_path)
+                os.rename(temp_path, cache_path)
             return graph
         except Exception as e:
             logger.warning(f"Computation failed for SMILES={smi}: {e}")
