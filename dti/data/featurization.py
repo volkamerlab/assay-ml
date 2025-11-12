@@ -356,12 +356,12 @@ class MolFingerprint(StrEnum):
 
             cache_subdir.mkdir(parents=True, exist_ok=True)
 
-            lock = FileLock(lock_path, timeout=5)
+            lock = FileLock(lock_path, timeout=10)
             try:
                 with lock:
                     try:
                         graph = torch.load(cache_path, weights_only=False)
-                    except FileNotFoundError:
+                    except FileNotFoundError as e:
                         graph = fp_compute(smi)
                         if graph is None:
                             logger.warning(f"Computation failed for SMILES={smi}: {e}")
