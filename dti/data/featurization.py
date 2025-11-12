@@ -100,7 +100,7 @@ e_map: dict[str, list] = {
 NODE_FEATURE_DIM = sum(len(v) for v in x_map.values())
 EDGE_FEATURE_DIM = sum(len(v) for v in e_map.values())
 FP_DEFAULT_DIM = 2048
-FP_SMALL_DIM = 512
+FP_SMALL_DIM = 1024
 
 
 def from_rdmol_one_hot(mol) -> "torch_geometric.data.Data":
