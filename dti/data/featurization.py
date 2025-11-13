@@ -12,7 +12,6 @@ import uuid
 import torch.nn.functional as F
 import torch
 from torch_geometric.data import Data
-from torch_geometric.utils.smiles import from_smiles
 import tqdm.auto as tqdm
 import numpy as np
 from esm import FastaBatchedDataset, pretrained
@@ -299,7 +298,6 @@ class MolFingerprint(StrEnum):
     def graph_based(self):
         return self in (MolFingerprint.ALL, MolFingerprint.GRAPH)
 
-    @functools.lru_cache(maxsize=100_000)
     def compute(
         self,
         smi: str,
@@ -363,7 +361,7 @@ class MolFingerprint(StrEnum):
 
             cache_subdir.mkdir(parents=True, exist_ok=True)
 
-            lock = FileLock(lock_path, timeout=10)
+            lock = FileLock(lock_path, timeout=1)
             try:
                 with lock:
                     try:
