@@ -28,16 +28,6 @@ logger = logging.getLogger(__name__)
 
 
 class ActivityDataset(Dataset):
-    """Dataset class for molecular activity data with protein and ligand features.
-
-    Args:
-        data (pd.DataFrame): DataFrame containing activity data.
-        target (str): Column name for target values. Defaults to ACT.
-        info_cols (List[str]): Column names to include as information. Defaults to [].
-        model_name (str): Name of the protein language model. Defaults to "esm2_t33_650M_UR50D".
-        n_jobs (int): Number of parallel jobs for fingerprint computation. Defaults to 16.
-    """
-
     def __init__(
         self,
         data: pd.DataFrame,
@@ -82,30 +72,12 @@ class ActivityDataset(Dataset):
 
     @functools.cached_property
     def weights(self):
-        """Get sample weights for the dataset.
-
-        Returns:
-            torch.Tensor: Uniform weights for all samples.
-        """
         return torch.ones(len(self.labels)).to(device)
 
     def __len__(self):
-        """Get the number of samples in the dataset.
-
-        Returns:
-            int: Number of samples.
-        """
         return len(self.labels)
 
     def __getitem__(self, idx):
-        """Get a sample from the dataset.
-
-        Args:
-            idx (int): Index of the sample.
-
-        Returns:
-            tuple: Protein features, ligand features, label, and info for the sample.
-        """
         prot_feats = (
             torch.ones(1).to(device)
             if self.protein_features is None
@@ -121,13 +93,6 @@ class ActivityDataset(Dataset):
 
 
 class PairDataset(ActivityDataset):
-    """Dataset for pairwise comparisons of molecular activities within the same assay.
-
-    Args:
-        data (pd.DataFrame): DataFrame containing activity data.
-        **kwargs: Additional arguments passed to ActivityDataset.
-    """
-
     def __init__(
         self,
         data: pd.DataFrame,
@@ -152,30 +117,12 @@ class PairDataset(ActivityDataset):
 
     @functools.cached_property
     def weights(self):
-        """Get sample weights for the dataset based on group size.
-
-        Returns:
-            torch.Tensor: Weights for each pair.
-        """
         return self._weights
 
     def __len__(self):
-        """Get the number of pairs in the dataset.
-
-        Returns:
-            int: Number of pairs.
-        """
         return len(self.pairs)
 
     def __getitem__(self, idx):
-        """Get a pair sample from the dataset.
-
-        Args:
-            idx (int): Index of the pair.
-
-        Returns:
-            tuple: Protein features, stacked ligand features, activity difference, concatenated info, and sample weights
-        """
         p = self.pairs[idx]
 
         if self.protein_features is None:
@@ -205,18 +152,6 @@ class PairDataset(ActivityDataset):
 
 
 class SetActivityDataset(ActivityDataset):
-    """Dataset that groups samples by assay and returns batches of samples.
-
-    Args:
-        data (pd.DataFrame): DataFrame containing activity data.
-        target (str): Column name for target values.
-        info_cols (List[str]): Column names to include as information.
-        model_name (str): Name of the protein language model. Defaults to "esm2_t33_650M_UR50D".
-        min_batch_size (int): Minimum size of a batch. Defaults to 3.
-        max_batch_size (int): Maximum size of a batch. For no limit use 0. Defaults to 0.
-        random_seed (int): Random seed for shuffling. Defaults to 0.
-    """
-
     def __init__(
         self,
         data,
@@ -241,7 +176,6 @@ class SetActivityDataset(ActivityDataset):
         self._make_batches()
 
     def _make_batches(self):
-        """Create batches of samples from groups, respecting size constraints."""
         self.batches = []
         num_unused = 0
         for group in self.groups_index:
@@ -262,14 +196,6 @@ class SetActivityDataset(ActivityDataset):
         logger.debug(f"Number of unused examples: {num_unused} / {len(self.data)}")
 
     def _get_next_batch(self, idx: int):
-        """Get the next available batch and mark it as used.
-
-        Args:
-            idx (int): Index of the batch.
-
-        Returns:
-            np.ndarray: Indices of samples in the batch.
-        """
         if np.all(self.used):
             self._make_batches()
         self.used[idx] = True
@@ -277,30 +203,12 @@ class SetActivityDataset(ActivityDataset):
 
     @property
     def weights(self):
-        """Get sample weights for the dataset.
-
-        Returns:
-            torch.Tensor: Uniform weights for all batches.
-        """
         return torch.ones(len(self), device=device)
 
     def __len__(self):
-        """Get the number of batches in the dataset.
-
-        Returns:
-            int: Number of batches.
-        """
         return len(self.batches)
 
     def __getitem__(self, idx):
-        """Get a batch of samples from the dataset.
-
-        Args:
-            idx (int): Index of the batch.
-
-        Returns:
-            tuple: Protein features, ligand features, labels, info for the batch, and sample weight.
-        """
         batch_idcs = self._get_next_batch(idx)
         prot_feats = (
             torch.ones(1, device=device)
@@ -866,21 +774,6 @@ def _estimate_degree_histogram(
 
 
 class MultiSetActivityDataset(ActivityDataset):
-    """Dataset that processes multiple sets in a single batch while preserving set identity.
-
-    Args:
-        data (pd.DataFrame): DataFrame containing activity data.
-        target (str): Column name for target values.
-        info_cols (List[str]): Column names to include as information.
-        inter_assay (bool): Compute inter-assay sets (same target).
-        shuffle_within_target (bool): Retain target for inter-assay sets.
-        model_name (str): Name of the protein language model.
-        min_batch_size (int): Minimum size of a set to be included.
-        max_set_size (int): Maximum samples per set (0 for no limit).
-        sets_per_batch (int): Number of sets to process in a single batch.
-        random_seed (int): Random seed for shuffling.
-    """
-
     def __init__(
         self,
         data,
@@ -938,7 +831,6 @@ class MultiSetActivityDataset(ActivityDataset):
         logger.debug(f"Number of unused examples: {num_unused} / {len(self.data)}")
 
     def _shuffle_data(self):
-        """Shuffle data only within groups of identical protein features."""
         prot_array = self.data[TID].values.astype(str)
         _, group_ids = np.unique(prot_array, return_inverse=True)
 
@@ -960,7 +852,6 @@ class MultiSetActivityDataset(ActivityDataset):
         self.info = self.info[new_order]
 
     def _make_batches(self):
-        """Create batches of multiple sets for processing."""
         if self.inter_assay:
             self._shuffle_data()
 
@@ -989,25 +880,17 @@ class MultiSetActivityDataset(ActivityDataset):
         )
 
     def _get_next_batch(self, idx: int):
-        """Get the next available batch and mark it as used."""
         if self.used.all():
             self._make_batches()
         self.used[idx] = True
         return self.batches[idx], self.batch_set_ids[idx]
 
     def __len__(self):
-        """Get the number of batches in the dataset."""
         if not hasattr(self, "batches"):
             self._make_batches()
         return len(self.batches)
 
     def __getitem__(self, idx):
-        """Get a batch of multiple sets from the dataset.
-
-        Returns:
-            tuple: Protein features, ligand features, labels, info for each set in the batch,
-                  and metadata to track set boundaries for the loss function.
-        """
         batch_sets, batch_ids = self._get_next_batch(idx)
 
         set_sizes = np.array([len(s) for s in batch_sets], dtype=np.int32)

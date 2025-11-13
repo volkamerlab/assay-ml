@@ -32,7 +32,7 @@ _mfpgen_cache: dict[Tuple, object] = {}
 
 # Lifted from pyg
 x_map: dict[str, list] = {
-    "atomic_num": list(range(0, 119)),
+    "atomic_num": list(map(str, range(0, 119))),
     "chirality": [
         "CHI_UNSPECIFIED",
         "CHI_TETRAHEDRAL_CW",
@@ -44,10 +44,10 @@ x_map: dict[str, list] = {
         "CHI_TRIGONALBIPYRAMIDAL",
         "CHI_OCTAHEDRAL",
     ],
-    "degree": list(range(0, 11)),
-    "formal_charge": list(range(-5, 7)),
-    "num_hs": list(range(0, 9)),
-    "num_radical_electrons": list(range(0, 5)),
+    "degree": list(map(str, range(0, 11))),
+    "formal_charge": list(map(str, range(-5, 7))),
+    "num_hs": list(map(str, range(0, 9))),
+    "num_radical_electrons": list(map(str, range(0, 5))),
     "hybridization": [
         "UNSPECIFIED",
         "S",
@@ -58,8 +58,8 @@ x_map: dict[str, list] = {
         "SP3D2",
         "OTHER",
     ],
-    "is_aromatic": [False, True],
-    "is_in_ring": [False, True],
+    "is_aromatic": [str(False), str(True)],
+    "is_in_ring": [str(False), str(True)],
 }
 
 e_map: dict[str, list] = {
@@ -95,7 +95,7 @@ e_map: dict[str, list] = {
         "STEREOCIS",
         "STEREOTRANS",
     ],
-    "is_conjugated": [False, True],
+    "is_conjugated": [str(False), str(True)],
 }
 
 NODE_FEATURE_DIM = sum(len(v) for v in x_map.values())
@@ -114,64 +114,23 @@ def from_rdmol_one_hot(mol) -> "torch_geometric.data.Data":
     xs: List[torch.Tensor] = []
     for atom in mol.GetAtoms():
         atom_feats = []
-        atom_feats.append(
-            F.one_hot(
-                torch.tensor(x_map["atomic_num"].index(atom.GetAtomicNum())),
-                len(x_map["atomic_num"]),
+        for feat_key, accessor in [
+            ("atomic_num", "GetAtomicNum"),
+            ("chirality", "GetChiralTag"),
+            ("degree", "GetTotalDegree"),
+            ("formal_charge", "GetFormalCharge"),
+            ("num_hs", "GetTotalNumHs"),
+            ("num_radical_electrons", "GetNumRadicalElectrons"),
+            ("hybridization", "GetHybridization"),
+            ("is_aromatic", "GetIsAromatic"),
+            ("is_in_ring", "IsInRing"),
+        ]:
+            atom_feats.append(
+                F.one_hot(
+                    torch.tensor(x_map[feat_key].index(str(getattr(atom, accessor)()))),
+                    len(x_map[feat_key]),
+                )
             )
-        )
-        atom_feats.append(
-            F.one_hot(
-                torch.tensor(x_map["chirality"].index(str(atom.GetChiralTag()))),
-                len(x_map["chirality"]),
-            )
-        )
-        atom_feats.append(
-            F.one_hot(
-                torch.tensor(x_map["degree"].index(atom.GetTotalDegree())),
-                len(x_map["degree"]),
-            )
-        )
-        atom_feats.append(
-            F.one_hot(
-                torch.tensor(x_map["formal_charge"].index(atom.GetFormalCharge())),
-                len(x_map["formal_charge"]),
-            )
-        )
-        atom_feats.append(
-            F.one_hot(
-                torch.tensor(x_map["num_hs"].index(atom.GetTotalNumHs())),
-                len(x_map["num_hs"]),
-            )
-        )
-        atom_feats.append(
-            F.one_hot(
-                torch.tensor(
-                    x_map["num_radical_electrons"].index(atom.GetNumRadicalElectrons())
-                ),
-                len(x_map["num_radical_electrons"]),
-            )
-        )
-        atom_feats.append(
-            F.one_hot(
-                torch.tensor(
-                    x_map["hybridization"].index(str(atom.GetHybridization()))
-                ),
-                len(x_map["hybridization"]),
-            )
-        )
-        atom_feats.append(
-            F.one_hot(
-                torch.tensor(x_map["is_aromatic"].index(atom.GetIsAromatic())),
-                len(x_map["is_aromatic"]),
-            )
-        )
-        atom_feats.append(
-            F.one_hot(
-                torch.tensor(x_map["is_in_ring"].index(atom.IsInRing())),
-                len(x_map["is_in_ring"]),
-            )
-        )
 
         xs.append(torch.cat(atom_feats, dim=0).float())
 
@@ -183,24 +142,17 @@ def from_rdmol_one_hot(mol) -> "torch_geometric.data.Data":
         j = bond.GetEndAtomIdx()
 
         bond_feats = []
-        bond_feats.append(
-            F.one_hot(
-                torch.tensor(e_map["bond_type"].index(str(bond.GetBondType()))),
-                len(e_map["bond_type"]),
+        for feat_key, accessor in [
+            ("bond_type", "GetBondType"),
+            ("stereo", "GetStereo"),
+            ("is_conjugated", "GetIsConjugated"),
+        ]:
+            bond_feats.append(
+                F.one_hot(
+                    torch.tensor(e_map[feat_key].index(str(getattr(bond, accessor)()))),
+                    len(e_map[feat_key]),
+                )
             )
-        )
-        bond_feats.append(
-            F.one_hot(
-                torch.tensor(e_map["stereo"].index(str(bond.GetStereo()))),
-                len(e_map["stereo"]),
-            )
-        )
-        bond_feats.append(
-            F.one_hot(
-                torch.tensor(e_map["is_conjugated"].index(bond.GetIsConjugated())),
-                len(e_map["is_conjugated"]),
-            )
-        )
 
         bond_feature_vector = torch.cat(bond_feats, dim=0).float()
 

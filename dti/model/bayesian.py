@@ -134,7 +134,7 @@ class GraphMoleculeBayesianSetRankModel(MoleculeBayesianSetRankModel):
         aggregators = ["mean", "min", "max", "sum", "var"]
         scalers = ["identity", "amplification", "attenuation"]
 
-        self.deg_histogram = deg  # Store the degree histogram
+        self.deg_histogram = deg
 
         self.gnn_layers = ModuleList()
         self.norms = ModuleList()
