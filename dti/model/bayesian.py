@@ -18,7 +18,7 @@ from ..utils import device
 from ..data.featurization import EDGE_FEATURE_DIM, NODE_FEATURE_DIM
 from .bin_distribution import BinDistribution
 from .set_transformer import SetTransformer
-from .common import make_block_diag_mask, make_asymmetric_mask, mlp
+from .common import make_block_diag_mask, make_asymmetric_mask
 
 import logging
 

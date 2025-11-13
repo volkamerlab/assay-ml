@@ -1,7 +1,6 @@
 import argparse
 import logging
 import traceback
-import uuid
 import sys
 from functools import partial
 from typing import Tuple, Callable

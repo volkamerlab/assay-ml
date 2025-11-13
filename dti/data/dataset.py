@@ -1,40 +1,28 @@
-from collections.abc import Iterator, Iterable
 import os
-import hashlib
 import functools
 import logging
 from pathlib import Path
-from multiprocessing import Pool
 from threading import Lock
 
 import pandas as pd
 import numpy as np
-from filelock import FileLock
-import logging
 from rdkit import Chem
 from tqdm.auto import tqdm
 
 
 import torch
 from torch.utils.data import Dataset, Sampler
-from torch_geometric.data import Data, Batch
+from torch_geometric.data import Batch
 from sklearn.preprocessing import StandardScaler
 
 from .featurization import MolFingerprint, esm2_features
 from ..utils.constants import (
-    DATA,
     SMILES,
     ACT,
     TID,
-    SEQUENCE,
     ASSAY,
-    COMPOUND,
-    HODGE,
-    INTRA_ASSAY_TEST,
-    IDENT,
 )
-from ..utils import device, check_smi_valid
-from ..utils.hodge_ranking import parallel_hodge_rank
+from ..utils import device
 
 logger = logging.getLogger(__name__)
 
@@ -589,7 +577,7 @@ class PropertySetDataset(Dataset):
                 else:
                     break
             if not current_batch_sets and shuffled_assay_sets:
-                logger.warning(f"Assay set too large, creating oversized batch.")
+                logger.warning("Assay set too large, creating oversized batch.")
                 assay_set = shuffled_assay_sets.pop()
                 current_batch_sets.append(("assay", assay_set))
                 current_total_datapoints += len(assay_set)

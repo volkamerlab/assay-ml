@@ -1,5 +1,4 @@
 import argparse
-import hashlib
 import logging
 from functools import partial
 import traceback
@@ -9,7 +8,6 @@ import os
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from torch_geometric.loader import DataLoader as PyGDataLoader
 
 from dti.model import (
     MoleculeBayesianSetRankModel,

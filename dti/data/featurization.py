@@ -12,7 +12,6 @@ import uuid
 import torch.nn.functional as F
 import torch
 from torch_geometric.data import Data
-from torch_geometric.utils.smiles import from_smiles
 import tqdm.auto as tqdm
 import numpy as np
 from esm import FastaBatchedDataset, pretrained

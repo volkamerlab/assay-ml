@@ -1,5 +1,4 @@
 from collections.abc import Iterator, Iterable
-import functools
 import logging
 from pathlib import Path
 
@@ -7,8 +6,6 @@ import pandas as pd
 import numpy as np
 
 
-import torch
-from torch.utils.data import Dataset, Sampler
 from sklearn.preprocessing import StandardScaler
 
 from ..utils.constants import (
@@ -24,8 +21,6 @@ from ..utils.constants import (
     IDENT,
 )
 from ..utils.hodge_ranking import parallel_hodge_rank
-from ..utils import device
-from .featurization import MolFingerprint, esm2_features
 
 logger = logging.getLogger(__name__)
 
