@@ -636,7 +636,7 @@ class PropertySetDataset(Dataset):
         if self.batches_plan is None:
             self._make_batches()
         if idx >= len(self.batches_plan):
-            logger.error(f"Index {idx} out of bounds. Wrapping around")
+            logger.warning(f"Index {idx} out of bounds. Wrapping around")
             idx = idx % len(self.batches_plan)
         self.used_batches[idx] = True
         return self.batches_plan[idx]
@@ -710,55 +710,6 @@ class GraphPropertySetDataset(PropertySetDataset):
             **kwargs,
         )
 
-    def _estimate_degree_histogram(self, **kwargs):
-        """
-        Estimates the node degree histogram from a subsample of SMILES.
-        Uses RDKit for a lightweight calculation.
-        """
-        sample_size = kwargs.get("deg_sample_size", 100_000)
-        max_deg = kwargs.get("deg_max_value", 4)
-
-        logger.info(f"Estimating degree histogram from a subsample of {sample_size}...")
-
-        if len(self.smiles_list) <= sample_size:
-            sample_smiles = self.smiles_list
-            sample_size = len(self.smiles_list)
-        else:
-            sample_smiles = np.random.choice(
-                self.smiles_list, sample_size, replace=False
-            )
-
-        all_degrees = []
-        for smi in tqdm(sample_smiles, desc="Estimating degrees", leave=False):
-            mol = Chem.MolFromSmiles(smi)
-            if mol is None:
-                continue
-            for atom in mol.GetAtoms():
-                all_degrees.append(atom.GetDegree())
-
-        if not all_degrees:
-            logger.warning(
-                "No valid molecules found in subsample. Cannot estimate degrees."
-            )
-            self.deg_histogram = torch.zeros(max_deg + 1, dtype=torch.long)
-            return
-
-        all_degrees_tensor = torch.tensor(all_degrees, dtype=torch.long)
-
-        self.deg_histogram = torch.bincount(all_degrees_tensor, minlength=max_deg + 1)
-
-        if len(self.deg_histogram) > max_deg + 1:
-            logger.info(f"Found degrees higher than {max_deg}, folding into last bin.")
-            extra_degrees = self.deg_histogram[max_deg + 1 :].sum()
-            self.deg_histogram = self.deg_histogram[: max_deg + 1]
-            self.deg_histogram[max_deg] += extra_degrees
-
-        self.deg_histogram = self.deg_histogram.to(torch.long)
-
-        logger.info(
-            f"Estimated degree histogram (n={sample_size}): {self.deg_histogram.numpy()}"
-        )
-
     def _prepare_features_and_data(
         self, data, mol_featurizer, info_cols, target, cache_dir, **kwargs
     ):
@@ -778,7 +729,9 @@ class GraphPropertySetDataset(PropertySetDataset):
         self.info = torch.tensor(self.data[info_cols].values.astype(np.int64))
         self.deg_histogram = None
         if kwargs.get("estimate_deg", False):
-            self._estimate_degree_histogram(**kwargs)
+            self.deg_histogram = _estimate_degree_histogram(
+                self.smiles_list,
+            )
 
     def _get_ligand_features(self, indices: np.ndarray):
         smiles_to_fetch = self.smiles_list[indices]
@@ -819,6 +772,11 @@ class GraphAndFingerprintDataset(PropertySetDataset):
         self.scratch_dir = Path(cache_dir_str)
         self.scratch_dir.mkdir(exist_ok=True, parents=True)
         logger.info(f"Using sharded graph cache at: {self.scratch_dir}")
+        self.deg_histogram = None
+        if kwargs.get("estimate_deg", False):
+            self.deg_histogram = _estimate_degree_histogram(
+                self.smiles_list,
+            )
 
     def _get_ligand_features(self, indices: np.ndarray):
         fingerprints = self.ligand_features[indices]
@@ -879,6 +837,44 @@ class GraphAndFingerprintDataset(PropertySetDataset):
         }
 
         return (graphs, fingerprints), all_labels, info, metadata
+
+
+def _estimate_degree_histogram(
+    smiles_list, count_h_atoms=False, sample_size=10_000, max_deg=4
+):
+    logger.info(f"Estimating degree histogram from a subsample of {sample_size}...")
+
+    if len(smiles_list) <= sample_size:
+        sample_smiles = smiles_list
+        sample_size = len(smiles_list)
+    else:
+        sample_smiles = np.random.choice(smiles_list, sample_size, replace=False)
+
+    all_degrees = []
+    for smi in tqdm(sample_smiles, desc="Estimating degrees", leave=False):
+        mol = Chem.MolFromSmiles(smi)
+        if mol is None:
+            continue
+        for atom in mol.GetAtoms():
+            all_degrees.append(
+                atom.GetTotalDegree() if count_h_atoms else atom.GetDegree()
+            )
+
+    all_degrees_tensor = torch.tensor(all_degrees, dtype=torch.long)
+    deg_histogram = torch.bincount(all_degrees_tensor, minlength=max_deg + 1)
+
+    if len(deg_histogram) > max_deg + 1:
+        logger.warning(f"Found degrees higher than {max_deg}, folding into last bin.")
+        extra_degrees = deg_histogram[max_deg + 1 :].sum()
+        deg_histogram = deg_histogram[: max_deg + 1]
+        deg_histogram[max_deg] += extra_degrees
+
+    deg_histogram = deg_histogram.to(torch.long)
+
+    logger.info(
+        f"Estimated degree histogram (n={sample_size}): {deg_histogram.numpy()}"
+    )
+    return deg_histogram
 
 
 class MultiSetActivityDataset(ActivityDataset):
