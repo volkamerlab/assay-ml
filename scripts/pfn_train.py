@@ -134,6 +134,7 @@ def prepare_dataset_splits(
             "np_likeness_score",
         ],
         cache_dir=cache_dir / "train",
+        estimate_deg=mol_feat_instance.graph_based,
         **common_dataset_kwargs,
     )
 
@@ -232,6 +233,7 @@ def run_split(
         fisher_transform=False,
         unmasked_weight=unmasked_weight,
         n_bins=n_bins,
+        deg=train_loader.dataset.deg_histogram,
     )
 
     train_and_evaluate_pfn_model(*args, **kwargs)

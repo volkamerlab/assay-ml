@@ -112,12 +112,13 @@ class GraphMoleculeBayesianSetRankModel(MoleculeBayesianSetRankModel):
     def __init__(
         self,
         ligand_input_size: int,
+        deg: Tensor,
         edge_input_size: int = EDGE_FEATURE_DIM,
-        num_gnn_layers: int = 3,
+        num_gnn_layers: int = 6,
         hidden_channels: int = 512,
         p_dropout: float = 0.05,
         act=GELU,
-        num_heads: int = 4,
+        num_towers: int = 4,
         **kwargs,
     ):
         super().__init__(
@@ -125,33 +126,31 @@ class GraphMoleculeBayesianSetRankModel(MoleculeBayesianSetRankModel):
             hidden_channels=hidden_channels,
             p_dropout=p_dropout,
             act=act,
-            num_heads=num_heads,
             **kwargs,
         )
         del self.embed_ligand
         self.act = act
 
-        if hidden_channels % num_heads != 0:
-            raise ValueError(
-                f"hidden_channels ({hidden_channels}) must be divisible "
-                f"by num_heads ({num_heads})"
-            )
-        head_channels = hidden_channels // num_heads
+        aggregators = ["mean", "min", "max", "sum", "var"]
+        scalers = ["identity", "amplification", "attenuation"]
+
+        self.deg_histogram = deg  # Store the degree histogram
 
         self.gnn_layers = ModuleList()
         self.norms = ModuleList()
-        in_channels = ligand_input_size
+
+        self.node_stem = Linear(ligand_input_size, hidden_channels)
+        in_channels = hidden_channels
 
         for i in range(num_gnn_layers):
-            self.gnn_layers.append(
-                gnn.GATv2Conv(
-                    in_channels=in_channels,
-                    out_channels=head_channels,
-                    heads=num_heads,
-                    concat=True,
-                    edge_dim=edge_input_size,
-                    dropout=p_dropout,
-                )
+            gnn.PNAConv(
+                in_channels=in_channels,
+                out_channels=hidden_channels,
+                aggregators=aggregators,
+                scalers=scalers,
+                deg=self.deg_histogram,
+                edge_dim=edge_input_size,
+                towers=num_towers,
             )
             self.norms.append(LayerNorm(hidden_channels))
             in_channels = hidden_channels
@@ -161,16 +160,22 @@ class GraphMoleculeBayesianSetRankModel(MoleculeBayesianSetRankModel):
             self.act(),
             Linear(hidden_channels // 2, 1),
         )
-
         self.pooling = gnn.AttentionalAggregation(gate_nn=gate_nn, nn=None)
 
     def _embed_ligand(self, ligand: Batch) -> Tensor:
         x, edge_index, batch_idx = ligand.x, ligand.edge_index, ligand.batch
         edge_attr = ligand.edge_attr.float()
 
-        for gnn_layer, bn in zip(self.gnn_layers, self.norms):
+        if x.device != self.deg_histogram.device:
+            self.deg_histogram = self.deg_histogram.to(x.device)
+
+        x = self.node_stem(x)
+
+        for gnn_layer, ln in zip(self.gnn_layers, self.norms):
+            identity = x
             x = gnn_layer(x, edge_index, edge_attr)
-            x = bn(x)
+            x = ln(x)
+            x = x + identity
 
         h_graph = self.pooling(x, batch_idx)
         return h_graph

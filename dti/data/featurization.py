@@ -295,7 +295,11 @@ class MolFingerprint(StrEnum):
             )
         ]
 
-    @functools.lru_cache(maxsize=1_000_000)
+    @property
+    def graph_based(self):
+        return self in (MolFingerprint.ALL, MolFingerprint.GRAPH)
+
+    @functools.lru_cache(maxsize=100_000)
     def compute(
         self,
         smi: str,
