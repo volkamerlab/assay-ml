@@ -398,7 +398,6 @@ class PropertySetDataset(Dataset):
                 "Must be 'none', 'zscore', or 'minmax'."
             )
         self.label_normalization = label_normalization
-        logger.info(f"Creating PropertySetDataset of size {len(data)}")
         self.query_col = query_col
         self.mask_fraction = mask_fraction
         self._prepare_features_and_data(
