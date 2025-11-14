@@ -99,6 +99,7 @@ def prepare_dataset_splits(
         shuffle_within_target=False,
         property_columns=[],
         property_set_ratio=0.0,
+        query_col=INTRA_ASSAY_TEST,
         **common_dataset_kwargs,
     )
 
@@ -133,6 +134,8 @@ def prepare_dataset_splits(
         ],
         cache_dir=cache_dir / "train",
         estimate_deg=mol_feat_instance.graph_based,
+        query_col=None,
+        mask_fraction=0.2,
         **common_dataset_kwargs,
     )
 
@@ -170,6 +173,7 @@ def prepare_dataset_splits(
         collate_fn=collate_fn,
     )
 
+    logger.debug(mol_feat_instance.dim)
     return (
         train_loader,
         val_loader,
@@ -187,7 +191,7 @@ def run_split(
     n_bins: int,
 ):
     num_epochs = 1000
-    info_cols = [INTRA_ASSAY_TEST, IDENT, COMPOUND, ASSAY]
+    info_cols = [IDENT, COMPOUND, ASSAY]
 
     (
         train_loader,
@@ -231,7 +235,7 @@ def run_split(
         fisher_transform=False,
         unmasked_weight=unmasked_weight,
         n_bins=n_bins,
-        deg=train_loader.dataset.deg_histogram,
+        deg=getattr(train_loader.dataset, "deg_histogram", None),
     )
 
     train_and_evaluate_pfn_model(*args, **kwargs)

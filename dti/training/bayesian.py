@@ -152,7 +152,7 @@ def train_with_batched_masked_sets(
                 preds,
                 normed_labels,
                 _,
-                sample_mask,
+                query_mask,
                 real_assay,
                 _,
                 _,
@@ -171,17 +171,17 @@ def train_with_batched_masked_sets(
             if unmasked_weight == 1.0:
                 batch_loss = nll_losses.mean()
             elif unmasked_weight == 0.0:
-                batch_loss = nll_losses[sample_mask].mean()
+                batch_loss = nll_losses[query_mask].mean()
             else:
                 weights = torch.full_like(nll_losses, unmasked_weight)
-                weights[sample_mask] = masked_weight
+                weights[query_mask] = masked_weight
                 batch_loss = (nll_losses * weights).mean()
 
         optimizer.zero_grad(set_to_none=True)
         batch_loss.backward()
         optimizer.step()
 
-        real_samples_mask = sample_mask & real_assay
+        real_samples_mask = query_mask & real_assay
         batch_metrics = _compute_masked_metrics(
             bd,
             preds.detach(),
@@ -242,15 +242,15 @@ def evaluate_with_batched_masked_sets(
             preds,
             normed_labels,
             labels,
-            sample_mask,
+            query_mask,
             _,
             info,
             set_boundaries,
             num_sets,
         ) = _process_batch(batch, model, bd, model_device, is_train=False)
 
-        masked_preds_for_nll = preds[sample_mask]
-        masked_normed_for_nll = normed_labels[sample_mask]
+        masked_preds_for_nll = preds[query_mask]
+        masked_normed_for_nll = normed_labels[query_mask]
 
         nll_losses = -bd.log_prob(masked_normed_for_nll, masked_preds_for_nll)
         total_loss += nll_losses.sum().item()
@@ -259,7 +259,7 @@ def evaluate_with_batched_masked_sets(
             bd,
             preds,
             normed_labels,
-            sample_mask,
+            query_mask,
             calculate_var_explained=True,
             set_boundaries=set_boundaries,
             num_sets=num_sets,
@@ -273,10 +273,10 @@ def evaluate_with_batched_masked_sets(
         total_var_sst += batch_metrics["sst"]
 
         batch_z_rho, batch_num_valid_sets = _step_corr_per_set(
-            spearmanr, bd, preds, normed_labels, sample_mask, set_boundaries, num_sets
+            spearmanr, bd, preds, normed_labels, query_mask, set_boundaries, num_sets
         )
         batch_pearson, valid_sets = _step_corr_per_set(
-            pearsonr, bd, preds, normed_labels, sample_mask, set_boundaries, num_sets
+            pearsonr, bd, preds, normed_labels, query_mask, set_boundaries, num_sets
         )
         assert valid_sets == batch_num_valid_sets
         total_z_rho += batch_z_rho
@@ -286,7 +286,7 @@ def evaluate_with_batched_masked_sets(
             all_info.append(info.cpu())
             all_labels.append(labels.cpu())
             all_normed.append(normed_labels.cpu())
-            all_masks.append(sample_mask.cpu())
+            all_masks.append(query_mask.cpu())
             all_probs.append(torch.softmax(preds, dim=-1).cpu())
 
     avg_loss = total_loss / max(1, n_masked)
@@ -341,9 +341,9 @@ def _process_batch(
         ligand_features,
         labels,
         info,
+        query_mask,
         metadata,
     ) = batch
-
     set_boundaries = metadata["set_boundaries"].squeeze()
     num_sets = metadata["num_sets"]
     if isinstance(num_sets, torch.Tensor):
@@ -362,17 +362,13 @@ def _process_batch(
     else:
         ligand_features = ligand_features.to(device, non_blocking=True)
     labels = labels.squeeze().to(device, non_blocking=True)
-    info = info.squeeze().to(device, non_blocking=True)
+    info = info.squeeze()
+    query_mask = query_mask.squeeze().to(device, non_blocking=True)
     batch_size = labels.size(0)
 
     if is_train:
-        sample_mask = _generate_mask_for_sets(
-            set_boundaries, num_sets, batch_size, mask_fraction
-        )
         real_assay = metadata["real_assay"].squeeze().to(device, non_blocking=True)
     else:
-        assert len(torch.unique(info[:, 0])) == 2
-        sample_mask = info[:, 0].bool()
         real_assay = None
 
     with torch.no_grad():
@@ -381,18 +377,18 @@ def _process_batch(
             labels,
             set_boundaries,
             num_sets,
-            mask=sample_mask,
+            mask=query_mask,
             clip_range=clip_range,
         )
 
     context_labels = normed_labels.clone()
-    context_labels[sample_mask] = 0.0
+    context_labels[query_mask] = 0.0
 
     with torch.set_grad_enabled(is_train):
         preds = model(
             ligand_features,
             context_labels,
-            sample_mask,
+            query_mask,
             set_ids_tensor,
         )
 
@@ -400,7 +396,7 @@ def _process_batch(
         preds,
         normed_labels,
         labels,
-        sample_mask,
+        query_mask,
         real_assay,
         info,
         set_boundaries,
@@ -483,7 +479,7 @@ def _step_var_explained(
     bd: BinDistribution,
     preds: torch.Tensor,
     normed_labels: torch.Tensor,
-    sample_mask: torch.Tensor,
+    query_mask: torch.Tensor,
     set_boundaries: torch.Tensor,
     num_sets: int,
 ) -> (float, float):
@@ -495,7 +491,7 @@ def _step_var_explained(
         start_idx = set_boundaries[i]
         end_idx = set_boundaries[i + 1]
 
-        set_mask = sample_mask[start_idx:end_idx]
+        set_mask = query_mask[start_idx:end_idx]
         n_samples = set_mask.float().sum()
         set_normed_labels = normed_labels[start_idx:end_idx]
         set_pred_means = pred_means[start_idx:end_idx]
@@ -527,7 +523,7 @@ def _step_corr_per_set(
     bd: BinDistribution,
     preds: torch.Tensor,
     normed_labels: torch.Tensor,
-    sample_mask: torch.Tensor,
+    query_mask: torch.Tensor,
     set_boundaries: torch.Tensor,
     num_sets: int,
 ) -> (float, int):
@@ -535,13 +531,13 @@ def _step_corr_per_set(
     num_valid_sets = 0
     pred_means = bd.mean(preds).cpu().numpy()
     normed_labels_np = normed_labels.cpu().numpy()
-    sample_mask_np = sample_mask.cpu().numpy()
+    query_mask_np = query_mask.cpu().numpy()
 
     for i in range(num_sets):
         start_idx = set_boundaries[i]
         end_idx = set_boundaries[i + 1]
 
-        set_mask = sample_mask_np[start_idx:end_idx]
+        set_mask = query_mask_np[start_idx:end_idx]
 
         masked_preds_in_set = pred_means[start_idx:end_idx][set_mask]
         masked_labels_in_set = normed_labels_np[start_idx:end_idx][set_mask]
@@ -616,20 +612,3 @@ def _normalize_sets_minmax(
         normed_labels[start_idx:end_idx] = normed
 
     return normed_labels
-
-
-def _generate_mask_for_sets(set_boundaries, num_sets, total_size, mask_fraction):
-    sample_mask = torch.zeros(total_size, dtype=torch.bool, device=device)
-
-    for i in range(num_sets):
-        start_idx = set_boundaries[i]
-        end_idx = set_boundaries[i + 1]
-        set_size = end_idx - start_idx
-        if set_size < 2:
-            continue
-
-        n_masked = max(1, int(set_size * mask_fraction))
-        mask_idx = torch.randperm(set_size, device=device)[:n_masked]
-        sample_mask[start_idx:end_idx][mask_idx] = True
-
-    return sample_mask

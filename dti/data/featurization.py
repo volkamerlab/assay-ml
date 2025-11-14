@@ -16,7 +16,7 @@ import tqdm.auto as tqdm
 import numpy as np
 from esm import FastaBatchedDataset, pretrained
 from rdkit import Chem
-from rdkit.Chem import rdFingerprintGenerator
+from rdkit.Chem import rdFingerprintGenerator as fpg
 from transformers import AutoTokenizer, AutoModel
 from filelock import FileLock
 
@@ -196,26 +196,17 @@ class MolFingerprint(StrEnum):
 
     def _get_mfpgen(
         self,
-        fpSize: int = FP_DEFAULT_DIM,
     ):
-        key = (self.value, fpSize)
+        key = (self.value, self.dim)
         if key not in _mfpgen_cache:
             if self is MolFingerprint.MORGAN:
-                _mfpgen_cache[key] = rdFingerprintGenerator.GetMorganGenerator(
-                    radius=3, fpSize=fpSize
-                )
+                _mfpgen_cache[key] = fpg.GetMorganGenerator(radius=3, fpSize=self.dim)
             elif self is MolFingerprint.RDKIT:
-                _mfpgen_cache[key] = rdFingerprintGenerator.GetRDKitFPGenerator(
-                    fpSize=fpSize
-                )
+                _mfpgen_cache[key] = fpg.GetRDKitFPGenerator(fpSize=self.dim)
             elif self is MolFingerprint.TOPOTORSION:
-                _mfpgen_cache[key] = (
-                    rdFingerprintGenerator.GetTopologicalTorsionGenerator(fpSize=fpSize)
-                )
+                _mfpgen_cache[key] = fpg.GetTopologicalTorsionGenerator(fpSize=self.dim)
             elif self is MolFingerprint.ATOMPAIR:
-                _mfpgen_cache[key] = rdFingerprintGenerator.GetAtomPairGenerator(
-                    fpSize=fpSize
-                )
+                _mfpgen_cache[key] = fpg.GetAtomPairGenerator(fpSize=self.dim)
             else:
                 raise ValueError(f"{self} does not support RDKit generators")
         return _mfpgen_cache[key]
@@ -291,7 +282,7 @@ class MolFingerprint(StrEnum):
             logger.warning(f"No fp for SMILES={smi}")
             return None
 
-        mfpgen = self._get_mfpgen(fpSize)
+        mfpgen = self._get_mfpgen()
 
         match target:
             case "numpy":

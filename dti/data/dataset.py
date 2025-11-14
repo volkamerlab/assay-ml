@@ -21,6 +21,7 @@ from ..utils.constants import (
     ACT,
     TID,
     ASSAY,
+    INTRA_ASSAY_TEST,
 )
 from ..utils import device
 
@@ -381,12 +382,16 @@ class PropertySetDataset(Dataset):
         target: str = ACT,
         property_columns: list[str] = None,
         info_cols: list[str] = [],
+        query_col: str | None = INTRA_ASSAY_TEST,
+        mask_fraction: float = 0.2,
         model_name: str = "esm2_t33_650M_UR50D",
         cache_dir: Path | None = None,
         **kwargs,
     ):
         super().__init__()
         logger.info(f"Creating PropertySetDataset of size {len(data)}")
+        self.query_col = query_col
+        self.mask_fraction = mask_fraction
         self._prepare_features_and_data(
             data, mol_featurizer, info_cols, target, cache_dir, **kwargs
         )
@@ -394,15 +399,24 @@ class PropertySetDataset(Dataset):
         self.lock = Lock()
 
     def _prepare_features_and_data(
-        self, data, mol_featurizer, info_cols, target, cache_dir=None, **kwargs
+        self,
+        data,
+        mol_featurizer,
+        info_cols,
+        target,
+        cache_dir=None,
+        **kwargs,
     ):
         if cache_dir:
             os.makedirs(cache_dir, exist_ok=True)
             paths = {
-                "ligand_features": os.path.join(cache_dir, "ligand_features.pt"),
+                "ligand_features": os.path.join(
+                    cache_dir, f"ligand_features_{mol_featurizer.dim}.pt"
+                ),
                 "assay_labels": os.path.join(cache_dir, "assay_labels.pt"),
                 "info": os.path.join(cache_dir, "info.pt"),
                 "data": os.path.join(cache_dir, "data.csv"),
+                "query_mask": os.path.join(cache_dir, "query_mask.pt"),
             }
             if all(os.path.exists(p) for p in paths.values()):
                 logger.info(f"Loading cached features from {cache_dir}")
@@ -410,6 +424,7 @@ class PropertySetDataset(Dataset):
                 self.assay_labels = torch.load(paths["assay_labels"])
                 self.info = torch.load(paths["info"])
                 self.data = pd.read_csv(paths["data"])
+                self.query_mask = torch.load(paths["query_mask"])
                 return
 
         logger.info("Computing molecular fingerprints...")
@@ -423,11 +438,17 @@ class PropertySetDataset(Dataset):
         self.ligand_features = torch.tensor(
             np.stack([fp for fp in fps if fp is not None]), dtype=torch.float32
         )
+        assert self.ligand_features.shape[1] == mol_featurizer.dim
         self.assay_labels = torch.tensor(self.data[target].values, dtype=torch.float32)
         self.info = (
             torch.tensor(self.data[info_cols].values.astype(np.int64))
             if info_cols
             else torch.empty((len(self.data), 0), dtype=torch.int64)
+        )
+        self.query_mask = (
+            torch.from_numpy(self.data[mask][self.query_col].values).bool().flatten()
+            if self.query_col is not None
+            else torch.ones(len(self.data))
         )
 
         if cache_dir:
@@ -435,6 +456,7 @@ class PropertySetDataset(Dataset):
             torch.save(self.ligand_features, paths["ligand_features"])
             torch.save(self.assay_labels, paths["assay_labels"])
             torch.save(self.info, paths["info"])
+            torch.save(self.query_mask, paths["query_mask"])
             self.data.to_csv(paths["data"], index=False)
 
     def _setup_sets_and_properties(self, property_columns: list[str] = None, **kwargs):
@@ -493,13 +515,15 @@ class PropertySetDataset(Dataset):
         all_labels_list = []
         set_sizes = []
         real_assay = []
+        query_mask = []
 
         for item in batch_plan:
             set_type = item[0]
             indices = item[1]
-            set_sizes.append(len(indices))
+            set_size = len(indices)
+            set_sizes.append(set_size)
             all_indices_list.append(indices)
-            real_assay.extend([set_type == "assay"] * len(indices))
+            real_assay.extend([set_type == "assay"] * set_size)
 
             if set_type == "assay":
                 all_labels_list.append(self.assay_labels[indices])
@@ -508,10 +532,21 @@ class PropertySetDataset(Dataset):
                 labels = self._compute_property_labels(indices, coeffs_tensor)
                 all_labels_list.append(labels)
 
+            if self.query_col is None:  # random queries
+                sample_mask = torch.zeros(set_size, dtype=torch.bool)
+                n_masked = max(1, int(set_size * self.mask_fraction))
+                mask_idx = torch.randperm(set_size, device=device)[:n_masked]
+                sample_mask[mask_idx] = True
+                query_mask.append(sample_mask)
+
         all_indices = np.concatenate(all_indices_list)
         all_labels = torch.cat(all_labels_list)
 
         info = self.info[all_indices]
+        if self.query_col is not None:
+            query_mask = self.query_mask[all_indices]
+        else:
+            query_mask = torch.concat(query_mask).bool()
 
         lig_feats = self._get_ligand_features(all_indices)
 
@@ -530,7 +565,8 @@ class PropertySetDataset(Dataset):
             "real_assay": torch.tensor(real_assay),
         }
 
-        return lig_feats, all_labels, info, metadata
+        assert len(query_mask) == len(lig_feats), (len(query_mask), len(all_labels))
+        return lig_feats, all_labels, info, query_mask, metadata
 
     def _init_property_coeff_pool(self):
         if not hasattr(self, "n_properties") or self.n_properties == 0:
@@ -721,21 +757,6 @@ class PropertySetDataset(Dataset):
         return len(self.batches_plan)
 
 
-class ResettingBatchSampler(Sampler):
-    def __init__(self, dataset, batch_size):
-        self.dataset = dataset
-
-    def __iter__(self):
-        self.dataset.prepare_epoch()
-        for idx in range(len(self.dataset.batches_plan)):
-            yield [idx]
-
-    def __len__(self):
-        if self.dataset.batches_plan is None:
-            self.dataset._make_batches()
-        return len(self.dataset.batches_plan)
-
-
 class GraphPropertySetDataset(PropertySetDataset):
     def __init__(
         self,
@@ -844,6 +865,7 @@ class GraphAndFingerprintDataset(PropertySetDataset):
         all_labels_list = []
         set_sizes = []
         real_assay = []
+        query_mask = []
 
         for item in batch_plan:
             set_type = item[0]
@@ -859,10 +881,20 @@ class GraphAndFingerprintDataset(PropertySetDataset):
                 labels = self._compute_property_labels(indices, coeffs_tensor)
                 all_labels_list.append(labels)
 
+            if self.query_col is None:  # random queries
+                n_masked = max(1, int(set_size * self.mask_fraction))
+                mask_idx = torch.randperm(set_size, device=device)[:n_masked]
+                sample_mask = torch.zeros(set_size, dtype=torch.bool)[mask_idx]
+                query_mask.append(sample_mask)
+
         all_indices = np.concatenate(all_indices_list)
         all_labels = torch.cat(all_labels_list)
 
         info = self.info[all_indices]
+        if self.query_col is not None:
+            query_mask = self.query_mask[all_indices]
+        else:
+            query_mask = torch.concat(query_mask).bool()
 
         graphs, fingerprints = self._get_ligand_features(all_indices)
 
@@ -881,7 +913,22 @@ class GraphAndFingerprintDataset(PropertySetDataset):
             "real_assay": torch.tensor(real_assay),
         }
 
-        return (graphs, fingerprints), all_labels, info, metadata
+        return (graphs, fingerprints), all_labels, info, query_mask, metadata
+
+
+class ResettingBatchSampler(Sampler):
+    def __init__(self, dataset, batch_size):
+        self.dataset = dataset
+
+    def __iter__(self):
+        self.dataset.prepare_epoch()
+        for idx in range(len(self.dataset.batches_plan)):
+            yield [idx]
+
+    def __len__(self):
+        if self.dataset.batches_plan is None:
+            self.dataset._make_batches()
+        return len(self.dataset.batches_plan)
 
 
 def _estimate_degree_histogram(
