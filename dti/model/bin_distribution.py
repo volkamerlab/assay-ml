@@ -85,8 +85,8 @@ class BinDistribution(nn.Module):
             idx = torch.randperm(all_normed.numel())[:max_samples]
             all_normed = all_normed[idx]
 
-        probabilities = torch.linspace(0, 1, self.n_bins + 1)
-        quantiles = torch.quantile(all_normed, probabilities)
+        probabilities = torch.linspace(0, 1, self.n_bins + 1).to(device)
+        quantiles = torch.quantile(all_normed, probabilities).to(device)
 
         self.edges.copy_(quantiles)
 
