@@ -64,7 +64,7 @@ class BinDistribution(nn.Module):
             real_assay = metadata["real_assay"].squeeze()
 
             labels = labels.squeeze().to(device)
-            labels = labels[read_assay]
+            labels = labels[real_assay]
 
             for i in range(num_sets):
                 start_idx = set_boundaries[i]
