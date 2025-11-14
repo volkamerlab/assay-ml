@@ -34,12 +34,15 @@ class MoleculeBayesianSetRankModel(Module):
         p_dropout: float = 0.05,
         num_heads: int = 8,
         act=GELU,
+        normalization="minmax",
         **kwargs,
     ):
         super().__init__()
         self.n_bins = n_bins
         self.bin_dist = BinDistribution(
-            n_bins=n_bins, exp_tails=False, normalization="minmax"
+            n_bins=n_bins,
+            exp_tails=False,
+            normalization=normalization,
         )
         self.distribution_encoder = Sequential(
             Linear(1, hidden_channels),

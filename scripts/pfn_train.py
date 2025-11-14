@@ -173,7 +173,6 @@ def prepare_dataset_splits(
         collate_fn=collate_fn,
     )
 
-    logger.debug(mol_feat_instance.dim)
     return (
         train_loader,
         val_loader,
@@ -189,6 +188,7 @@ def run_split(
     unmasked_weight: float,
     property_set_ratio: float,
     n_bins: int,
+    normalization: str = "minmax",
 ):
     num_epochs = 1000
     info_cols = [IDENT, COMPOUND, ASSAY]
@@ -236,6 +236,7 @@ def run_split(
         unmasked_weight=unmasked_weight,
         n_bins=n_bins,
         deg=getattr(train_loader.dataset, "deg_histogram", None),
+        normalization=normalization,
     )
 
     train_and_evaluate_pfn_model(*args, **kwargs)
@@ -275,6 +276,12 @@ def main():
         default=100,
         help="Number of bins in bin distribution. (default: 100)",
     )
+    parser.add_argument(
+        "--norm",
+        type=str,
+        default="minmax",
+        help="Normalization mode either 'minmax' or 'zscore'. (default: 'minmax')",
+    )
 
     args = parser.parse_args()
 
@@ -292,6 +299,10 @@ def main():
         f"unmasked-weight={args.unmasked_weight}"
     )
 
+    if args.norm not in ["minmax", "zscore"]:
+        raise ValueError(
+            f"Unknown normalization method: {args.norm}.Should be 'minmax' or 'zscore'"
+        )
     set_random_seeds(args.seed)
 
     run_split(
@@ -301,6 +312,7 @@ def main():
         args.unmasked_weight,
         args.property_set_ratio,
         args.n_bins,
+        normalization=args.norm,
     )
 
 

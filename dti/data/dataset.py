@@ -386,9 +386,18 @@ class PropertySetDataset(Dataset):
         mask_fraction: float = 0.2,
         model_name: str = "esm2_t33_650M_UR50D",
         cache_dir: Path | None = None,
+        label_normalization: str = "none",
         **kwargs,
     ):
         super().__init__()
+        logger.info(f"Creating PropertySetDataset of size {len(data)}")
+
+        if label_normalization not in ["none", "zscore", "minmax"]:
+            raise ValueError(
+                f"Invalid label_normalization mode: {label_normalization}. "
+                "Must be 'none', 'zscore', or 'minmax'."
+            )
+        self.label_normalization = label_normalization
         logger.info(f"Creating PropertySetDataset of size {len(data)}")
         self.query_col = query_col
         self.mask_fraction = mask_fraction
@@ -515,7 +524,7 @@ class PropertySetDataset(Dataset):
         all_labels_list = []
         set_sizes = []
         real_assay = []
-        query_mask = []
+        query_mask_list = []
 
         for item in batch_plan:
             set_type = item[0]
@@ -526,30 +535,30 @@ class PropertySetDataset(Dataset):
             real_assay.extend([set_type == "assay"] * set_size)
 
             if set_type == "assay":
-                all_labels_list.append(self.assay_labels[indices])
+                labels = self.assay_labels[indices].clone()
             else:
                 coeffs_tensor = item[2]
                 labels = self._compute_property_labels(indices, coeffs_tensor)
-                all_labels_list.append(labels)
 
-            if self.query_col is None:  # random queries
-                sample_mask = torch.zeros(set_size, dtype=torch.bool)
+            if self.query_col is not None:
+                set_query_mask = self.query_mask[indices]
+            else:
+                set_query_mask = torch.zeros(set_size, dtype=torch.bool)
                 n_masked = max(1, int(set_size * self.mask_fraction))
-                mask_idx = torch.randperm(set_size, device=device)[:n_masked]
-                sample_mask[mask_idx] = True
-                query_mask.append(sample_mask)
+                mask_idx = torch.randperm(set_size)[:n_masked]
+                set_query_mask[mask_idx] = True
+            query_mask_list.append(set_query_mask)
+            labels = self._normalize_labels(labels, set_query_mask)
+            all_labels_list.append(labels)
 
         all_indices = np.concatenate(all_indices_list)
         all_labels = torch.cat(all_labels_list)
 
         info = self.info[all_indices]
-        if self.query_col is not None:
-            query_mask = self.query_mask[all_indices]
-        else:
-            query_mask = torch.concat(query_mask).bool()
+
+        query_mask = torch.concat(query_mask_list).bool()
 
         lig_feats = self._get_ligand_features(all_indices)
-
         set_sizes_tensor = torch.tensor(set_sizes, dtype=torch.long)
         set_boundaries = torch.cat(
             [torch.tensor([0]), torch.cumsum(set_sizes_tensor, 0)]
@@ -567,6 +576,35 @@ class PropertySetDataset(Dataset):
 
         assert len(query_mask) == len(lig_feats), (len(query_mask), len(all_labels))
         return lig_feats, all_labels, info, query_mask, metadata
+
+    def _normalize_labels(self, labels, set_query_mask):
+        if self.label_normalization != "none":
+            non_query_mask = ~set_query_mask
+            non_query_labels = labels[non_query_mask]
+
+            if non_query_labels.numel() > 0:
+                if self.label_normalization == "zscore":
+                    if non_query_labels.numel() > 1:
+                        mean = non_query_labels.mean()
+                        std = non_query_labels.std()
+                        if std < 1e-6:
+                            labels = labels - mean
+                        else:
+                            labels = (labels - mean) / std
+                    else:
+                        logger.warning("set too small for zscore normalization")
+                        labels = labels - non_query_labels.mean()
+
+                elif self.label_normalization == "minmax":
+                    min_val = non_query_labels.min()
+                    max_val = non_query_labels.max()
+                    data_range = max_val - min_val
+
+                    if data_range > 1e-6:
+                        labels = (labels - min_val) / data_range
+                    else:
+                        labels = labels - min_val
+        return labels
 
     def _init_property_coeff_pool(self):
         if not hasattr(self, "n_properties") or self.n_properties == 0:

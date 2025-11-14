@@ -45,16 +45,9 @@ class BinDistribution(nn.Module):
 
     @torch.no_grad()
     def fit(self, loader, max_samples: int = 1_000_000):
-        """
-        Fit quantile bin edges from z-score normalized training data.
-
-        Args:
-            loader: Training data loader
-            max_samples: Maximum number of samples to use for fitting
-        """
-
         if self.normalization == "minmax":
             return
+        assert self.normalization == "zscore"
 
         all_normed_values = []
 
@@ -63,13 +56,15 @@ class BinDistribution(nn.Module):
             prop_set_ratio = loader.dataset.property_set_ratio
             loader.dataset.property_set_ratio = 0
 
-        for protein_features, ligand_features, labels, _, metadata in tqdm.tqdm(
+        for ligand_features, labels, _, _, metadata in tqdm.tqdm(
             loader, desc="fitting bin distribution"
         ):
             set_boundaries = metadata["set_boundaries"].squeeze()
             num_sets = metadata["num_sets"].squeeze().item()
+            real_assay = metadata["real_assay"].squeeze()
 
             labels = labels.squeeze().to(device)
+            labels = labels[read_assay]
 
             for i in range(num_sets):
                 start_idx = set_boundaries[i]
@@ -77,18 +72,10 @@ class BinDistribution(nn.Module):
                 set_size = end_idx - start_idx
                 set_labels = labels[start_idx:end_idx]
 
-                if self.normalization == "minmax":
-                    min_val = set_labels.min()
-                    max_val = set_labels.max()
-                    range_val = (max_val - min_val).clamp_min(1e-6)
-                    normed_set = (set_labels - min_val) / range_val
-                elif self.normalization == "zscore":
-                    mean_val = set_labels.mean()
-                    std_val = set_labels.std(unbiased=True)
-                    std_val = std_val.clamp_min(1e-6)
-                    normed_set = (set_labels - mean_val) / std_val
-                else:
-                    assert False
+                mean_val = set_labels.mean()
+                std_val = set_labels.std(unbiased=True)
+                std_val = std_val.clamp_min(1e-6)
+                normed_set = (set_labels - mean_val) / std_val
 
                 all_normed_values.append(normed_set)
 
