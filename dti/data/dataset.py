@@ -224,6 +224,155 @@ class SetActivityDataset(ActivityDataset):
         )
 
 
+class MultiSetActivityDataset(ActivityDataset):
+    def __init__(
+        self,
+        data,
+        target=...,
+        info_cols=...,
+        inter_assay: bool = False,
+        shuffle_within_target: bool = True,
+        min_batch_size: int = 3,
+        max_set_size: int = 0,
+        sets_per_batch: int = 20,
+        random_seed: int = 0,
+        **kwargs,
+    ):
+        super().__init__(data, target=target, info_cols=info_cols, **kwargs)
+        self.min_batch_size = min_batch_size
+        self.max_set_size = max_set_size
+        self.sets_per_batch = sets_per_batch
+        self.inter_assay = inter_assay
+        self.shuffle_within_target = shuffle_within_target
+        self.random = np.random.default_rng(random_seed)
+
+        num_groups = self.data[ASSAY].nunique()
+        self.valid_sets = []
+        self.set_ids = []
+        num_unused = 0
+
+        grouped = self.data.groupby(ASSAY, sort=False)
+
+        for assay_id, (_, group) in enumerate(grouped):
+            group_idcs = group.index.values  # Direct numpy array conversion
+            self.random.shuffle(group_idcs)
+
+            group_size = len(group_idcs)
+            if group_size < self.min_batch_size:
+                num_unused += group_size
+                continue
+
+            if self.max_set_size > 0 and group_size > self.max_set_size:
+                num_splits = (group_size + self.max_set_size - 1) // self.max_set_size
+                sub_batches = np.array_split(group_idcs, num_splits)
+
+                for batch in sub_batches:
+                    batch_len = len(batch)
+                    if batch_len >= self.min_batch_size:
+                        self.valid_sets.append(batch)
+                        self.set_ids.append(assay_id)
+                    else:
+                        num_unused += batch_len
+            else:
+                self.valid_sets.append(group_idcs)
+                self.set_ids.append(assay_id)
+
+        self.set_ids = np.array(self.set_ids, dtype=np.int32)
+
+        logger.debug(f"Number of unused examples: {num_unused} / {len(self.data)}")
+
+    def _shuffle_data(self):
+        prot_array = self.data[TID].values.astype(str)
+        _, group_ids = np.unique(prot_array, return_inverse=True)
+
+        num_samples = self.ligand_features.shape[0]
+        all_indices = np.arange(num_samples)
+        new_order = np.empty(num_samples, dtype=np.int64)
+
+        if self.shuffle_within_target:
+            unique_gids = np.unique(group_ids)
+            for gid in unique_gids:
+                mask = group_ids == gid
+                idxs = all_indices[mask]
+                new_order[mask] = self.random.permutation(idxs)
+        else:
+            new_order = self.random.permutation(num_samples)
+
+        self.ligand_features = self.ligand_features[new_order]
+        self.labels = self.labels[new_order]
+        self.info = self.info[new_order]
+
+    def _make_batches(self):
+        if self.inter_assay:
+            self._shuffle_data()
+
+        num_sets = len(self.valid_sets)
+        indices = self.random.permutation(num_sets)
+        self.valid_sets = [self.valid_sets[i] for i in indices]
+        self.set_ids = self.set_ids[indices]
+
+        num_batches = (num_sets + self.sets_per_batch - 1) // self.sets_per_batch
+        self.batches = []
+        self.batch_set_ids = []
+
+        self.batches = [None] * num_batches
+        self.batch_set_ids = [None] * num_batches
+
+        batch_idx = 0
+        for i in range(0, num_sets, self.sets_per_batch):
+            end_idx = min(i + self.sets_per_batch, num_sets)
+            self.batches[batch_idx] = self.valid_sets[i:end_idx]
+            self.batch_set_ids[batch_idx] = self.set_ids[i:end_idx]
+            batch_idx += 1
+
+        self.used = np.zeros(len(self.batches), dtype=bool)
+        logger.debug(
+            f"created {len(self.batches)} batches with up to {self.sets_per_batch} sets each"
+        )
+
+    def _get_next_batch(self, idx: int):
+        if self.used.all():
+            self._make_batches()
+        self.used[idx] = True
+        return self.batches[idx], self.batch_set_ids[idx]
+
+    def __len__(self):
+        if not hasattr(self, "batches"):
+            self._make_batches()
+        return len(self.batches)
+
+    def __getitem__(self, idx):
+        batch_sets, batch_ids = self._get_next_batch(idx)
+
+        set_sizes = np.array([len(s) for s in batch_sets], dtype=np.int32)
+        cumulative_sizes = np.concatenate([[0], np.cumsum(set_sizes)])
+
+        all_indices = np.concatenate(batch_sets)
+
+        set_ids_tensor = torch.from_numpy(
+            np.repeat(np.arange(len(set_sizes), dtype=np.int64), set_sizes)
+        )
+
+        prot_feats = (
+            torch.ones(1, device=device)
+            if self.protein_features is None
+            else self.protein_features[all_indices]
+        )
+
+        return (
+            prot_feats,
+            self.ligand_features[all_indices],
+            self.labels[all_indices],
+            self.info[all_indices],
+            {
+                "set_boundaries": cumulative_sizes,
+                "set_ids": batch_ids,
+                "set_ids_tensor": set_ids_tensor,
+                "num_sets": len(batch_sets),
+            },
+        )
+
+
 class PropertySetDataset(Dataset):
     def __init__(
         self,
@@ -771,152 +920,3 @@ def _estimate_degree_histogram(
         f"Estimated degree histogram (n={sample_size}): {deg_histogram.numpy()}"
     )
     return deg_histogram
-
-
-class MultiSetActivityDataset(ActivityDataset):
-    def __init__(
-        self,
-        data,
-        target=...,
-        info_cols=...,
-        inter_assay: bool = False,
-        shuffle_within_target: bool = True,
-        min_batch_size: int = 3,
-        max_set_size: int = 0,
-        sets_per_batch: int = 20,
-        random_seed: int = 0,
-        **kwargs,
-    ):
-        super().__init__(data, target=target, info_cols=info_cols, **kwargs)
-        self.min_batch_size = min_batch_size
-        self.max_set_size = max_set_size
-        self.sets_per_batch = sets_per_batch
-        self.inter_assay = inter_assay
-        self.shuffle_within_target = shuffle_within_target
-        self.random = np.random.default_rng(random_seed)
-
-        num_groups = self.data[ASSAY].nunique()
-        self.valid_sets = []
-        self.set_ids = []
-        num_unused = 0
-
-        grouped = self.data.groupby(ASSAY, sort=False)
-
-        for assay_id, (_, group) in enumerate(grouped):
-            group_idcs = group.index.values  # Direct numpy array conversion
-            self.random.shuffle(group_idcs)
-
-            group_size = len(group_idcs)
-            if group_size < self.min_batch_size:
-                num_unused += group_size
-                continue
-
-            if self.max_set_size > 0 and group_size > self.max_set_size:
-                num_splits = (group_size + self.max_set_size - 1) // self.max_set_size
-                sub_batches = np.array_split(group_idcs, num_splits)
-
-                for batch in sub_batches:
-                    batch_len = len(batch)
-                    if batch_len >= self.min_batch_size:
-                        self.valid_sets.append(batch)
-                        self.set_ids.append(assay_id)
-                    else:
-                        num_unused += batch_len
-            else:
-                self.valid_sets.append(group_idcs)
-                self.set_ids.append(assay_id)
-
-        self.set_ids = np.array(self.set_ids, dtype=np.int32)
-
-        logger.debug(f"Number of unused examples: {num_unused} / {len(self.data)}")
-
-    def _shuffle_data(self):
-        prot_array = self.data[TID].values.astype(str)
-        _, group_ids = np.unique(prot_array, return_inverse=True)
-
-        num_samples = self.ligand_features.shape[0]
-        all_indices = np.arange(num_samples)
-        new_order = np.empty(num_samples, dtype=np.int64)
-
-        if self.shuffle_within_target:
-            unique_gids = np.unique(group_ids)
-            for gid in unique_gids:
-                mask = group_ids == gid
-                idxs = all_indices[mask]
-                new_order[mask] = self.random.permutation(idxs)
-        else:
-            new_order = self.random.permutation(num_samples)
-
-        self.ligand_features = self.ligand_features[new_order]
-        self.labels = self.labels[new_order]
-        self.info = self.info[new_order]
-
-    def _make_batches(self):
-        if self.inter_assay:
-            self._shuffle_data()
-
-        num_sets = len(self.valid_sets)
-        indices = self.random.permutation(num_sets)
-        self.valid_sets = [self.valid_sets[i] for i in indices]
-        self.set_ids = self.set_ids[indices]
-
-        num_batches = (num_sets + self.sets_per_batch - 1) // self.sets_per_batch
-        self.batches = []
-        self.batch_set_ids = []
-
-        self.batches = [None] * num_batches
-        self.batch_set_ids = [None] * num_batches
-
-        batch_idx = 0
-        for i in range(0, num_sets, self.sets_per_batch):
-            end_idx = min(i + self.sets_per_batch, num_sets)
-            self.batches[batch_idx] = self.valid_sets[i:end_idx]
-            self.batch_set_ids[batch_idx] = self.set_ids[i:end_idx]
-            batch_idx += 1
-
-        self.used = np.zeros(len(self.batches), dtype=bool)
-        logger.debug(
-            f"created {len(self.batches)} batches with up to {self.sets_per_batch} sets each"
-        )
-
-    def _get_next_batch(self, idx: int):
-        if self.used.all():
-            self._make_batches()
-        self.used[idx] = True
-        return self.batches[idx], self.batch_set_ids[idx]
-
-    def __len__(self):
-        if not hasattr(self, "batches"):
-            self._make_batches()
-        return len(self.batches)
-
-    def __getitem__(self, idx):
-        batch_sets, batch_ids = self._get_next_batch(idx)
-
-        set_sizes = np.array([len(s) for s in batch_sets], dtype=np.int32)
-        cumulative_sizes = np.concatenate([[0], np.cumsum(set_sizes)])
-
-        all_indices = np.concatenate(batch_sets)
-
-        set_ids_tensor = torch.from_numpy(
-            np.repeat(np.arange(len(set_sizes), dtype=np.int64), set_sizes)
-        )
-
-        prot_feats = (
-            torch.ones(1, device=device)
-            if self.protein_features is None
-            else self.protein_features[all_indices]
-        )
-
-        return (
-            prot_feats,
-            self.ligand_features[all_indices],
-            self.labels[all_indices],
-            self.info[all_indices],
-            {
-                "set_boundaries": cumulative_sizes,
-                "set_ids": batch_ids,
-                "set_ids_tensor": set_ids_tensor,
-                "num_sets": len(batch_sets),
-            },
-        )
