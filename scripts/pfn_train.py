@@ -237,6 +237,7 @@ def run_split(
         n_bins=n_bins,
         deg=getattr(train_loader.dataset, "deg_histogram", None),
         normalization=normalization,
+        lr=(1e-5 if MolFingerprint(mol_feat).graph_based else 5e-5),
     )
 
     train_and_evaluate_pfn_model(*args, **kwargs)
