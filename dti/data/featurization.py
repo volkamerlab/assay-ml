@@ -354,13 +354,13 @@ class MolFingerprint(StrEnum):
             )
             with Pool(n_jobs) as p:
                 return p.map(
-                    functools.partial(self.compute, fp_size=_fp_size, **kwargs),
+                    functools.partial(self.compute, fp_size=_fp_size),
                     tqdm.tqdm(smiles, desc=f"{self.value}({_fp_size})"),
                 )
         elif self == MolFingerprint.ALLFP:
             embeddings = [
                 np.array(
-                    m.compute_parallel(smiles, fp_size=FP_SMALL_DIM, n_jobs=n_jobs)
+                    m.compute_parallel(smiles, _fp_size=FP_SMALL_DIM, n_jobs=n_jobs)
                 )
                 for m in self.members_all
             ]
@@ -385,7 +385,7 @@ class MolFingerprint(StrEnum):
             logger.warning(
                 f"No parallel logic defined for {self.value}. Falling back to sequential."
             )
-            return [self.compute(s, **kwargs) for s in tqdm.tqdm(smiles)]
+            return [self.compute(s, fp_size=_fp_size) for s in tqdm.tqdm(smiles)]
 
 
 @functools.cache
