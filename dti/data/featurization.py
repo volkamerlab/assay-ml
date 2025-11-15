@@ -196,17 +196,18 @@ class MolFingerprint(StrEnum):
 
     def _get_mfpgen(
         self,
+        fp_size: int = FP_DEFAULT_DIM,
     ):
-        key = (self.value, self.dim)
+        key = (self.value, fp_size)
         if key not in _mfpgen_cache:
             if self is MolFingerprint.MORGAN:
-                _mfpgen_cache[key] = fpg.GetMorganGenerator(radius=3, fpSize=self.dim)
+                _mfpgen_cache[key] = fpg.GetMorganGenerator(radius=3, fpSize=fp_size)
             elif self is MolFingerprint.RDKIT:
-                _mfpgen_cache[key] = fpg.GetRDKitFPGenerator(fpSize=self.dim)
+                _mfpgen_cache[key] = fpg.GetRDKitFPGenerator(fpSize=fp_size)
             elif self is MolFingerprint.TOPOTORSION:
-                _mfpgen_cache[key] = fpg.GetTopologicalTorsionGenerator(fpSize=self.dim)
+                _mfpgen_cache[key] = fpg.GetTopologicalTorsionGenerator(fpSize=fp_size)
             elif self is MolFingerprint.ATOMPAIR:
-                _mfpgen_cache[key] = fpg.GetAtomPairGenerator(fpSize=self.dim)
+                _mfpgen_cache[key] = fpg.GetAtomPairGenerator(fpSize=fp_size)
             else:
                 raise ValueError(f"{self} does not support RDKit generators")
         return _mfpgen_cache[key]
@@ -245,7 +246,7 @@ class MolFingerprint(StrEnum):
     def compute(
         self,
         smi: str,
-        fpSize: int = FP_DEFAULT_DIM,
+        fp_size: int = FP_DEFAULT_DIM,
         target: str = "numpy",
         cache_dir: Path = None,
     ):
@@ -258,7 +259,7 @@ class MolFingerprint(StrEnum):
                 if feat is MolFingerprint.CHEMBERTA:
                     fp = feat.compute(smi)
                 else:
-                    fp = feat.compute(smi, fpSize=FP_SMALL_DIM, target="numpy")
+                    fp = feat.compute(smi, fp_size=FP_SMALL_DIM, target="numpy")
 
                 if fp is None:
                     logger.warning(
@@ -282,7 +283,7 @@ class MolFingerprint(StrEnum):
             logger.warning(f"No fp for SMILES={smi}")
             return None
 
-        mfpgen = self._get_mfpgen()
+        mfpgen = self._get_mfpgen(fp_size)
 
         match target:
             case "numpy":
@@ -332,7 +333,13 @@ class MolFingerprint(StrEnum):
             logger.warning(f"Computation failed for SMILES={smi}: {e}")
             return None
 
-    def compute_parallel(self, smiles: Iterable[str], n_jobs: int = 16, **kwargs):
+    def compute_parallel(
+        self,
+        smiles: Iterable[str],
+        n_jobs: int = 16,
+        _fp_size: int = FP_DEFAULT_DIM,
+        **kwargs,
+    ):
         if self == MolFingerprint.ALL:
             raise ValueError("combined manually")
         elif self in {
@@ -347,19 +354,22 @@ class MolFingerprint(StrEnum):
             )
             with Pool(n_jobs) as p:
                 return p.map(
-                    functools.partial(self.compute, fpSize=FP_SMALL_DIM, **kwargs),
-                    tqdm.tqdm(smiles, desc=f"featurizing {self.value}"),
+                    functools.partial(self.compute, fp_size=_fp_size, **kwargs),
+                    tqdm.tqdm(smiles, desc=f"{self.value}({_fp_size})"),
                 )
         elif self == MolFingerprint.ALLFP:
             embeddings = [
-                np.array(m.compute_parallel(smiles)) for m in self.members_all
+                np.array(
+                    m.compute_parallel(smiles, fp_size=FP_SMALL_DIM, n_jobs=n_jobs)
+                )
+                for m in self.members_all
             ]
             return np.concatenate(embeddings, axis=1)
         elif self == MolFingerprint.CHEMBERTA:
             _batch_size = 4096
             embeddings = list()
             for batch in tqdm.tqdm(
-                range(0, len(smiles), _batch_size), desc=f"featurizing {self.value}"
+                range(0, len(smiles), _batch_size), desc=f"{self.value}"
             ):
                 smi_batch = list(smiles[batch : min(len(smiles), batch + _batch_size)])
                 batch_embds = smiles_to_dl_embedding(

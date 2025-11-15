@@ -446,7 +446,11 @@ class PropertySetDataset(Dataset):
         self.ligand_features = torch.tensor(
             np.stack([fp for fp in fps if fp is not None]), dtype=torch.float32
         )
-        assert self.ligand_features.shape[1] == mol_featurizer.dim
+        assert self.ligand_features.shape[1] == mol_featurizer.dim, (
+            self.ligand_features.shape,
+            mol_featurizer.dim,
+            mol_featurizer,
+        )
         self.assay_labels = torch.tensor(self.data[target].values, dtype=torch.float32)
         self.info = (
             torch.tensor(self.data[info_cols].values.astype(np.int64))
