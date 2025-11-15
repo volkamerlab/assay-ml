@@ -71,24 +71,35 @@ class BinDistribution(nn.Module):
             loader, desc="fitting bin distribution"
         ):
             set_boundaries = metadata["set_boundaries"].squeeze()
-            num_sets = metadata["num_sets"].squeeze().item()
+            num_sets = metadata["num_sets"]
+            if isinstance(num_sets, torch.Tensor):
+                num_sets = metadata["num_sets"].squeeze().item()
             real_assay = metadata["real_assay"].squeeze()
 
-            labels = labels.squeeze().to(device)
-            labels = labels[real_assay]
+            labels = labels.squeeze()
+            labels = labels[real_assay].to(device)
 
-            for i in range(num_sets):
-                start_idx = set_boundaries[i]
-                end_idx = set_boundaries[i + 1]
-                set_size = end_idx - start_idx
-                set_labels = labels[start_idx:end_idx]
+            set_ids = metadata["set_ids_tensor"].to(device)
+            set_ids = set_ids.squeeze()[real_assay]
 
-                mean_val = set_labels.mean()
-                std_val = set_labels.std(unbiased=True)
-                std_val = std_val.clamp_min(1e-6)
-                normed_set = (set_labels - mean_val) / std_val
+            num_sets = set_ids.max().item() + 1
 
-                all_normed_values.append(normed_set)
+            sum_per_set = torch.zeros(num_sets, device=device).scatter_add_(
+                0, set_ids, labels
+            )
+            count_per_set = torch.bincount(set_ids, minlength=num_sets).to(device)
+            mean_per_set = sum_per_set / count_per_set.clamp_min(1)
+
+            var_per_set = torch.zeros(num_sets, device=device).scatter_add_(
+                0, set_ids, (labels - mean_per_set[set_ids]) ** 2
+            )
+            std_per_set = (
+                (var_per_set / count_per_set.clamp_min(1).sub(1)).sqrt().clamp_min(1e-6)
+            )
+
+            normed_labels = (labels - mean_per_set[set_ids]) / std_per_set[set_ids]
+
+            all_normed_values.append(normed_labels)
 
         all_normed = torch.cat(all_normed_values)
         all_normed = all_normed[torch.isfinite(all_normed)]
