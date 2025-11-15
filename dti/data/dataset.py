@@ -911,9 +911,10 @@ class GraphAndFingerprintDataset(PropertySetDataset):
         for item in batch_plan:
             set_type = item[0]
             indices = item[1]
-            set_sizes.append(len(indices))
+            set_size = len(indices)
+            set_sizes.append(set_size)
             all_indices_list.append(indices)
-            real_assay.extend([set_type == "assay"] * len(indices))
+            real_assay.extend([set_type == "assay"] * set_size)
 
             if set_type == "assay":
                 all_labels_list.append(self.assay_labels[indices])
