@@ -925,7 +925,7 @@ class GraphAndFingerprintDataset(PropertySetDataset):
 
             if self.query_col is None:  # random queries
                 n_masked = max(1, int(set_size * self.mask_fraction))
-                mask_idx = torch.randperm(set_size, device=device)[:n_masked]
+                mask_idx = torch.randperm(set_size, device='cpu')[:n_masked]
                 sample_mask = torch.zeros(set_size, dtype=torch.bool)[mask_idx]
                 query_mask.append(sample_mask)
 
