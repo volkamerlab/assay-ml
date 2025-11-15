@@ -926,7 +926,8 @@ class GraphAndFingerprintDataset(PropertySetDataset):
             if self.query_col is None:  # random queries
                 n_masked = max(1, int(set_size * self.mask_fraction))
                 mask_idx = torch.randperm(set_size, device='cpu')[:n_masked]
-                sample_mask = torch.zeros(set_size, dtype=torch.bool)[mask_idx]
+                sample_mask = torch.zeros(set_size, dtype=torch.bool)
+                sample_mask[mask_idx] = True
                 query_mask.append(sample_mask)
 
         all_indices = np.concatenate(all_indices_list)
@@ -954,6 +955,8 @@ class GraphAndFingerprintDataset(PropertySetDataset):
             "set_boundaries": set_boundaries,
             "real_assay": torch.tensor(real_assay),
         }
+
+        assert len(query_mask) == len(all_labels)
 
         return (graphs, fingerprints), all_labels, info, query_mask, metadata
 
