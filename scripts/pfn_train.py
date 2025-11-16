@@ -9,10 +9,11 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from dti.model import (
+from dti.model.bayesian import (
     MoleculeBayesianSetRankModel,
     GraphMoleculeBayesianSetRankModel,
     AllMoleculeBayesianSetRankModel,
+    EarlyFusionAllMoleculeBayesianSetRankModel,
 )
 from dti.data.dataset import (
     PropertySetDataset,
@@ -211,7 +212,7 @@ def run_split(
         case MolFingerprint.GRAPH:
             model_cls = GraphMoleculeBayesianSetRankModel
         case MolFingerprint.ALL:
-            model_cls = AllMoleculeBayesianSetRankModel
+            model_cls = EarlyFusionAllMoleculeBayesianSetRankModel
         case _:
             model_cls = MoleculeBayesianSetRankModel
 

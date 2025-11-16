@@ -221,5 +221,137 @@ class AllMoleculeBayesianSetRankModel(GraphMoleculeBayesianSetRankModel):
         return self.combine_fp_graph(h)
 
 
+class EarlyFusionAllMoleculeBayesianSetRankModel(GraphMoleculeBayesianSetRankModel):
+    """
+    Implements an "early-fusion" hybrid GNN model.
+
+    This model injects the molecular fingerprint (a global property)
+    as a "global node" connected to all atom nodes in the graph.
+    The message passing layers then operate on this augmented graph.
+    The final molecule embedding is the final state of this global node,
+    replacing the need for a separate pooling layer.
+    """
+
+    def __init__(
+        self,
+        ligand_input_size: int,  # Size of the fingerprint input
+        node_input_size: int = NODE_FEATURE_DIM,
+        edge_input_size: int = EDGE_FEATURE_DIM,
+        hidden_channels: int = 512,
+        p_dropout: float = 0.05,
+        act=GELU,
+        **kwargs,
+    ):
+        super().__init__(
+            ligand_input_size=node_input_size,
+            edge_input_size=edge_input_size,
+            hidden_channels=hidden_channels,
+            p_dropout=p_dropout,
+            act=act,
+            **kwargs,
+        )
+
+        self.edge_input_size = edge_input_size
+
+        self.embed_fp_ligand = Sequential(
+            Linear(ligand_input_size, hidden_channels),
+            act(),
+            Linear(hidden_channels, hidden_channels),
+            act(),
+            Dropout(p_dropout),
+            Linear(hidden_channels, hidden_channels),
+        )
+
+        del self.pooling
+
+        if hasattr(self, "ln_graph"):
+            del self.ln_graph
+        if hasattr(self, "ln_fps"):
+            del self.ln_fps
+        if hasattr(self, "combine_fp_graph"):
+            del self.combine_fp_graph
+
+    def _embed_ligand(self, ligand: tuple) -> Tensor:
+        """
+        Embeds a batch of molecules by running the GNN with an
+        integrated global node.
+
+        Args:
+            ligand: A tuple (ligand_graph, ligand_fp)
+                - ligand_graph: A PyG Batch object of molecule graphs
+                - ligand_fp: A Tensor of fingerprints [num_graphs, fp_size]
+        """
+        ligand_graph, ligand_fp = ligand
+        x, edge_index, batch_idx = (
+            ligand_graph.x,
+            ligand_graph.edge_index,
+            ligand_graph.batch,
+        )
+        edge_attr = ligand_graph.edge_attr.float()
+        dev = x.device
+
+        # --- 1. Device check for degree histogram (from parent) ---
+        if self.deg_histogram.device != dev:
+            self.deg_histogram = self.deg_histogram.to(dev)
+
+        # --- 2. Embed initial atom and global nodes ---
+        # h_atoms shape: [N_total_atoms, hidden_channels]
+        h_atoms = self.node_stem(x)
+
+        # h_globals shape: [N_graphs, hidden_channels]
+        h_globals = self.embed_fp_ligand(ligand_fp)
+
+        num_nodes = h_atoms.size(0)
+        num_graphs = h_globals.size(0)
+
+        # Combine node features: [N_total_atoms + N_graphs, hidden_channels]
+        h = torch.cat([h_atoms, h_globals], dim=0)
+
+        # --- 3. Augment edge_index to connect global nodes ---
+
+        # Indices for all atom nodes: [0, 1, ..., N_atoms-1]
+        atom_indices = torch.arange(num_nodes, device=dev)
+
+        # Indices for all global nodes: [N_atoms, ..., N_atoms + N_graphs - 1]
+        global_node_indices = torch.arange(
+            num_nodes, num_nodes + num_graphs, device=dev
+        )
+
+        # Map each atom to its corresponding global node index
+        # global_node_indices[batch_idx] becomes [N_atoms+0, N_atoms+0, N_atoms+1, ...]
+        atom_to_global_map = global_node_indices[batch_idx]
+
+        # Create new bi-directional edges
+        # (atom -> global)
+        edges_atom_to_global = torch.stack([atom_indices, atom_to_global_map], dim=0)
+        # (global -> atom)
+        edges_global_to_atom = torch.stack([atom_to_global_map, atom_indices], dim=0)
+
+        new_edges = torch.cat([edges_atom_to_global, edges_global_to_atom], dim=1)
+        full_edge_index = torch.cat([edge_index, new_edges], dim=1)
+
+        # --- 4. Augment edge_attr with dummy attributes ---
+        num_new_edges = new_edges.size(1)
+
+        # PNAConv requires attributes for all edges if edge_dim is set
+        new_edge_attr = torch.zeros(num_new_edges, self.edge_input_size, device=dev)
+        full_edge_attr = torch.cat([edge_attr, new_edge_attr], dim=0)
+
+        # --- 5. Run GNN layers (logic from parent) ---
+        for gnn_layer, ln in zip(self.gnn_layers, self.norms):
+            identity = h
+            # Pass the augmented graph data to the GNN
+            h = gnn_layer(h, full_edge_index, edge_attr=full_edge_attr)
+            h = ln(h)
+            h = h + identity
+
+        # --- 6. Readout from global nodes ---
+        # The final molecule embedding is the state of the global nodes,
+        # which are the last N_graphs nodes in the tensor 'h'.
+        h_graph = h[num_nodes:]  # Shape: [N_graphs, hidden_channels]
+
+        return h_graph
+
+
 class ComplexBayesianSetRankModel(MoleculeBayesianSetRankModel):
     pass

@@ -925,7 +925,7 @@ class GraphAndFingerprintDataset(PropertySetDataset):
 
             if self.query_col is None:  # random queries
                 n_masked = max(1, int(set_size * self.mask_fraction))
-                mask_idx = torch.randperm(set_size, device='cpu')[:n_masked]
+                mask_idx = torch.randperm(set_size, device="cpu")[:n_masked]
                 sample_mask = torch.zeros(set_size, dtype=torch.bool)
                 sample_mask[mask_idx] = True
                 query_mask.append(sample_mask)
@@ -977,7 +977,7 @@ class ResettingBatchSampler(Sampler):
 
 
 def _estimate_degree_histogram(
-    smiles_list, count_h_atoms=False, sample_size=10_000, max_deg=4
+    smiles_list, count_h_atoms=False, sample_size=100_000, max_deg=4
 ):
     logger.info(f"Estimating degree histogram from a subsample of {sample_size}...")
 
@@ -1001,7 +1001,10 @@ def _estimate_degree_histogram(
     deg_histogram = torch.bincount(all_degrees_tensor, minlength=max_deg + 1)
 
     if len(deg_histogram) > max_deg + 1:
-        logger.warning(f"Found degrees higher than {max_deg}, folding into last bin.")
+        logger.warning(
+            f"Found degrees ({torch.unique(deg_histogram)[max_deg + 1 :]}) "
+            f"higher than {max_deg}, folding into last bin."
+        )
         extra_degrees = deg_histogram[max_deg + 1 :].sum()
         deg_histogram = deg_histogram[: max_deg + 1]
         deg_histogram[max_deg] += extra_degrees
