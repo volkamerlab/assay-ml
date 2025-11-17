@@ -63,6 +63,7 @@ def train_with_batched_sets(
         num_sets = metadata["num_sets"].squeeze().to(device, non_blocking=True)
         labels = labels.squeeze().to(device, non_blocking=True)
         set_ids_tensor = metadata["set_ids_tensor"].to(device, non_blocking=True)
+        ligand_features = ligand_features.to(device, non_blocking=True)
 
         predictions = model(
             protein_features.squeeze(),
