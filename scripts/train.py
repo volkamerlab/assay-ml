@@ -275,7 +275,7 @@ def run_split(
     """Runs a single fold of an experiment."""
     batch_size = 512
     num_epochs = 50_000  # early stopping in place
-    info_cols = [INTRA_ASSAY_TEST, IDENT, COMPOUND, ASSAY]
+    info_cols = [COMPOUND, ASSAY]
 
     match method:
         case Method.HODGE:
