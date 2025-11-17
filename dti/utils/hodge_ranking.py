@@ -63,7 +63,7 @@ def _rank_target(
     if TID in group_data.columns:
         usecols.append(TID)
     target = group_data[TID].iloc[0] if TID in group_data.columns else None
-    logger.debug(f"ranking target {target}")
+    # logger.debug(f"ranking target {target}")
 
     if inter_assay_weight == 0:
         group_data = group_data[group_data.groupby(ASSAY)[ASSAY].transform("count") > 1]

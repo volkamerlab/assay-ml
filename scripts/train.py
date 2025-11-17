@@ -1,9 +1,11 @@
+import os
 import argparse
 import logging
 import traceback
 import sys
 from functools import partial
 from typing import Tuple, Callable
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -21,7 +23,6 @@ from dti.model import (
 )
 from dti.data.dataset import (
     ActivityDataset,
-    SetActivityDataset,
     MultiSetActivityDataset,
     PairDataset,
 )
@@ -102,8 +103,8 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
     """Resolves method and mol_only flag to model and dataset classes."""
     msa = partial(
         MultiSetActivityDataset,
-        max_batch_datapoints=2048,
-        max_set_size=500,
+        max_batch_datapoints=3072,
+        max_set_size=1024,
         shuffle_within_target=(method != Method.PFN),
     )
     shuffled_multiset = partial(msa, inter_assay=True)
@@ -117,10 +118,6 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
             return PairMolecularModel, ActivityDataset, PairDataset
         case Method.ALLPAIRS:
             return PairCombinedModel, ActivityDataset, PairDataset
-        case Method.IC50CORR if mol_only:
-            return MolecularModel, SetActivityDataset, msa
-        case Method.IC50CORR:
-            return CombinedModel, SetActivityDataset, msa
         case Method.HODGE | Method.IC50 if mol_only:
             return MolecularModel, ActivityDataset, msa
         case Method.HODGE | Method.IC50:
@@ -141,7 +138,7 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
 def loss_fn(method: Method, default: Callable) -> Callable:
     """Resolves method to a corresponding loss function."""
     match method:
-        case Method.IC50CORR | Method.SETS | Method.ALLSETS:
+        case Method.SETS | Method.ALLSETS:
             return corr_loss
         case Method.ALLPAIRS:
             return partial(batch_pair_loss, criterion=default)
@@ -154,7 +151,7 @@ def loss_fn(method: Method, default: Callable) -> Callable:
 def train_batch(method: Method, default: int) -> int:
     if method == Method.ALLPAIRS:
         return int(np.sqrt(default))
-    elif method.on_sets or method == Method.IC50CORR:
+    elif method.on_sets:
         return 1
     else:
         return default
@@ -210,9 +207,31 @@ def prepare_dataset_splits(
         info_cols=info_cols,
     )
 
-    val_dataset = val_dataset_cls(val_data, target=test_target, **data_kwargs)
-    test_dataset = val_dataset_cls(test_data, target=test_target, **data_kwargs)
-    train_dataset = dataset_cls(train_data, target=train_target, **data_kwargs)
+    cache_dir = (
+        Path(os.environ.get("CACHE_DIR", data_dir))
+        / dataset_name
+        / str(fold)
+        / MolFingerprint(mol_feat).value
+    )
+    val_dataset = val_dataset_cls(
+        val_data,
+        target=test_target,
+        cache_dir=cache_dir / "val" / test_target,
+        **data_kwargs,
+    )
+    test_dataset = val_dataset_cls(
+        test_data,
+        target=test_target,
+        cache_dir=cache_dir / "test" / test_target,
+        **data_kwargs,
+    )
+    train_dataset = dataset_cls(
+        train_data,
+        target=train_target,
+        cache_dir=cache_dir / "train" / train_target,
+        shuffle=True,
+        **data_kwargs,
+    )
 
     assert len(train_dataset) > 0
 
@@ -295,7 +314,7 @@ def run_split(
     args = [model_cls, run_name, train_loader, val_loader, test_loader, method, fold]
     kwargs = dict(
         ligand_dim=ligand_dim,
-        multi_batch=method in [Method.SETS, Method.IC50CORR],
+        multi_batch=method in [Method.SETS],
         batch_size=batch_size,
         num_epochs=num_epochs,
         training_loss=training_loss,

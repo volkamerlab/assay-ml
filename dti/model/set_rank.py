@@ -1,4 +1,6 @@
+import torch
 from torch import Tensor
+from torch import nn
 from torch.nn import (
     Dropout,
     LayerNorm,
@@ -44,14 +46,15 @@ class MoleculeSetRank(Module):
             dropout=p_dropout,
             act=act,
         )
+        scaled_hidden_dim = hidden_channels // 2
         self.output = Sequential(
-            Linear(hidden_channels, hidden_channels),
+            nn.Dropout(p_dropout),
+            nn.LayerNorm(hidden_channels),
+            nn.Linear(hidden_channels, hidden_channels),
             act(),
-            LayerNorm(hidden_channels),
-            Dropout(p_dropout),
-            Linear(hidden_channels, hidden_channels),
+            nn.Linear(hidden_channels, scaled_hidden_dim),
             act(),
-            Linear(hidden_channels, 1),
+            nn.Linear(scaled_hidden_dim, 1),
         )
 
     def forward(
@@ -84,6 +87,7 @@ class ComplexSetRank(MoleculeSetRank):
         hidden_channels: int = 512,
         p_dropout: float = 0.05,
         act=GELU,
+        cosine_agg: bool = False,
         **kwargs,
     ):
         super().__init__(ligand_input_size, hidden_channels, p_dropout, act=act)
@@ -91,12 +95,18 @@ class ComplexSetRank(MoleculeSetRank):
             input_size=protein_input_size,
             hidden_size=hidden_channels,
             output_size=hidden_channels,
-            hidden_layers=1,
+            hidden_layers=4,
             act=act,
         )
+        self.cosine_agg = cosine_agg
+        if not self.cosine_agg:
+            self.combine = Linear(hidden_channels * 2, hidden_channels)
 
     def combine_with_query(self, x: Tensor, query: Tensor) -> Tensor:
-        return x * query
+        if self.cosine_agg:
+            return x * query
+        else:
+            return self.combine(torch.cat([x, query], dim=1))
 
     def forward(
         self,

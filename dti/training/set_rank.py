@@ -29,7 +29,7 @@ _defaults = dict(
     patience_lr=20,
     rank_corr_fn=None,
     training_loss=nn.MSELoss(),
-    cosine_agg=True,
+    cosine_agg=False,
     normalize_training_batches=False,
     lr=5e-5,
     fisher_transform=True,
@@ -208,7 +208,7 @@ def train_epoch(
 
     total_loss = 0
 
-    for protein_features, ligand_features, labels, _, weights in (
+    for protein_features, ligand_features, labels, _ in (
         pbar := tqdm.tqdm(loader, desc="training")
     ):
         labels = labels.squeeze()
@@ -221,7 +221,7 @@ def train_epoch(
         optimizer.zero_grad()
         predictions = model(protein_features, ligand_features).squeeze()
         try:
-            loss = (criterion(predictions, labels) * weights).sum() / weights.sum()
+            loss = criterion(predictions, labels).mean()
         except ValueError as e:
             logger.warning(f"exception in criterion: '{e}'")
             continue
@@ -249,7 +249,7 @@ def evaluate_epoch(
     total_loss = 0
     all_preds, all_labels, all_info = [], [], []
 
-    for protein_features, ligand_features, labels, info, _ in tqdm.tqdm(
+    for protein_features, ligand_features, labels, info in tqdm.tqdm(
         loader, desc="evaluating"
     ):
         protein_features, ligand_features, labels, info = (
@@ -294,39 +294,6 @@ def train_and_evaluate_model(
     index: int,
     **kwargs: Dict[str, Any],
 ) -> None:
-    """
-    Train and evaluate the model with learning rate adjustment and early stopping.
-
-    This function handles the complete training pipeline including model instantiation,
-    optimization, learning rate scheduling, early stopping, and model persistence.
-
-    Args:
-        model_cls (Type[nn.Module]): Model class to instantiate.
-        run_name (str): Name of the training run for logging and file naming.
-        train_loader (DataLoader): DataLoader for training data.
-        val_loader (DataLoader): DataLoader for validation data.
-        test_loader (DataLoader): DataLoader for test data.
-        target_name (str): Name of the target being predicted.
-        index (int): Index/fold number for cross-validation.
-        **kwargs (Dict[str, Any]): Additional configuration options, including:
-            - protein_dim (int): Dimension of protein features.
-            - ligand_dim (int): Dimension of ligand features.
-            - embedding_size (int): Size of embeddings in the model.
-            - num_epochs (int): Maximum number of training epochs.
-            - patience_termination (int): Number of epochs without improvement before stopping.
-            - patience_lr (int): Number of epochs without improvement before reducing learning rate.
-            - rank_corr_fn (Callable): Function to compute rank correlation.
-            - training_loss (nn.Module): Loss function for training.
-            - cosine_agg (bool): Whether to use cosine similarity for aggregation.
-            - normalize_training_batches (bool): Whether to normalize batches during training.
-            - lr (float): Initial learning rate.
-            - multi_batch (bool): Whether to use multi-batch training.
-            - batch_size (int): Batch size for multi-batch training.
-            - fisher_transform (bool): Fisher transform criterion values in set training before aggregation during training.
-
-    Returns:
-        None: The function saves the model and training statistics but doesn't return a value.
-    """
     logger.info(f"training model for target: {target_name}")
     Epoch = namedtuple(
         "Epoch",

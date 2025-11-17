@@ -64,7 +64,7 @@ class PairMolecularModel(MolecularModel):
         return self.readout(diff) - self.readout(-diff)
 
 
-class CombinedModel(nn.Module):
+class CombinedModel(MolecularModel):
     def __init__(
         self,
         protein_input_size,
@@ -73,13 +73,15 @@ class CombinedModel(nn.Module):
         hidden_layer_size=512,
         cosine_agg=True,
         act=GELU,
+        p_dropout=0.05,
         **kwargs,
     ):
-        super().__init__()
+        super().__init__(
+            ligand_input_size, embedding_size, act=act, dropout=p_dropout, **kwargs
+        )
 
         self.ligand_input_size = ligand_input_size
         self.cosine_agg = cosine_agg
-        self.embedding_size = embedding_size
         self.proteinmlp = mlp(
             input_size=protein_input_size,
             hidden_size=hidden_layer_size,
@@ -87,19 +89,13 @@ class CombinedModel(nn.Module):
             hidden_layers=4,
             act=act,
         )
-        self.ligandmlp = mlp(
-            input_size=ligand_input_size,
-            hidden_size=hidden_layer_size,
-            output_size=embedding_size,
-            hidden_layers=4,
-            act=act,
-        )
 
         scaled_hidden_dim = hidden_layer_size // 2
+        combined_dim = embedding_size if cosine_agg else embedding_size * 2
         self.combinedmlp = nn.Sequential(
-            nn.Dropout(0.05),
-            nn.BatchNorm1d(embedding_size),
-            nn.Linear(embedding_size, hidden_layer_size),
+            nn.Dropout(p_dropout),
+            nn.BatchNorm1d(combined_dim),
+            nn.Linear(combined_dim, hidden_layer_size),
             act(),
             nn.Linear(hidden_layer_size, scaled_hidden_dim),
             act(),
@@ -114,7 +110,7 @@ class CombinedModel(nn.Module):
         assert ligand.shape[1] == self.ligand_input_size, ligand.shape
 
         protein_emb = self.proteinmlp(protein)
-        ligand_emb = self.ligandmlp(ligand)
+        ligand_emb = self.embed(ligand)
 
         if self.cosine_agg:
             combined_emb = protein_emb * ligand_emb

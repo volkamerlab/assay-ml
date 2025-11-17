@@ -38,7 +38,6 @@ logger = logging.getLogger(__name__)
 @unique
 class Method(StrEnum):
     IC50 = auto()
-    IC50CORR = auto()
     HODGE = auto()
     ALLPAIRS = auto()
     PAIRS = auto()
@@ -74,7 +73,7 @@ class Method(StrEnum):
 
     @property
     def point_prediction(self):
-        return self in [Method.IC50, Method.HODGE, Method.IC50CORR]
+        return self in [Method.IC50, Method.HODGE]
 
     def __str__(self):
         match self:
@@ -82,8 +81,6 @@ class Method(StrEnum):
                 return "PFN"
             case Method.IC50:
                 return "IC50"
-            case Method.IC50CORR:
-                return "IC50 corr."
             case Method.HODGE:
                 return "Hodge"
             case Method.PAIRS:
