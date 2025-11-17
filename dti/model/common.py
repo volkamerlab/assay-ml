@@ -64,4 +64,4 @@ def make_block_diag_mask(set_ids: Tensor, num_heads: int = None) -> Tensor:
     if num_heads is not None:
         mask = mask.unsqueeze(0).expand(num_heads, -1, -1)  # (num_heads, N, N)
 
-    return mask
+    return mask.to(device)
