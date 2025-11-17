@@ -57,10 +57,12 @@ def train_with_batched_sets(
     ):
         optimizer.zero_grad()
 
-        set_boundaries = metadata["set_boundaries"].squeeze()
-        num_sets = metadata["num_sets"].squeeze()
-        labels = labels.squeeze()
-        set_ids_tensor = metadata["set_ids_tensor"].to(device)
+        set_boundaries = (
+            metadata["set_boundaries"].squeeze().to(device, non_blocking=True)
+        )
+        num_sets = metadata["num_sets"].squeeze().to(device, non_blocking=True)
+        labels = labels.squeeze().to(device, non_blocking=True)
+        set_ids_tensor = metadata["set_ids_tensor"].to(device, non_blocking=True)
 
         predictions = model(
             protein_features.squeeze(),
@@ -134,10 +136,12 @@ def eval_with_batched_sets(
     for protein_features, ligand_features, labels, info, metadata in tqdm.tqdm(
         loader, desc="evaluate"
     ):
-        set_boundaries = metadata["set_boundaries"].squeeze()
-        num_sets = metadata["num_sets"].squeeze()
-        labels = labels.squeeze()
-        set_ids_tensor = metadata["set_ids_tensor"].to(device)
+        set_boundaries = (
+            metadata["set_boundaries"].squeeze().to(device, non_blocking=True)
+        )
+        num_sets = metadata["num_sets"].squeeze().to(device, non_blocking=True)
+        labels = labels.squeeze().to(device, non_blocking=True)
+        set_ids_tensor = metadata["set_ids_tensor"].to(device, non_blocking=True)
 
         predictions = model(
             protein_features.squeeze(),
@@ -211,7 +215,9 @@ def train_epoch(
     for protein_features, ligand_features, labels, _ in (
         pbar := tqdm.tqdm(loader, desc="training")
     ):
-        labels = labels.squeeze()
+        labels = labels.squeeze().to(device, non_blocking=True)
+        protein_features = protein_features.to(device, non_blocking=True)
+        ligand_features = ligand_features.to(device, non_blocking=True)
         if normalize_training_batches:
             if labels.std() < 1e-10:
                 logger.warning("low label variance - skipping batch")
@@ -253,10 +259,10 @@ def evaluate_epoch(
         loader, desc="evaluating"
     ):
         protein_features, ligand_features, labels, info = (
-            protein_features.squeeze(0),
-            ligand_features.squeeze(0),
-            labels.squeeze(),
-            info.squeeze(0),
+            protein_features.squeeze(0).to(device),
+            ligand_features.squeeze(0).to(device),
+            labels.squeeze().to(device),
+            info.squeeze(0).to(device),
         )
 
         predictions = model(protein_features, ligand_features).squeeze()
