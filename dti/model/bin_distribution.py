@@ -51,17 +51,6 @@ class BinDistribution(nn.Module):
 
         all_normed_values = []
 
-        if loader.num_workers > 0:
-            fit_loader = torch.utils.data.DataLoader(
-                loader.dataset,
-                batch_size=loader.batch_size,
-                shuffle=False,
-                num_workers=0,
-                collate_fn=loader.collate_fn,
-            )
-        else:
-            fit_loader = loader
-
         prop_set_ratio = None
         if hasattr(loader.dataset, "property_set_ratio"):
             prop_set_ratio = loader.dataset.property_set_ratio
@@ -104,11 +93,14 @@ class BinDistribution(nn.Module):
         all_normed = torch.cat(all_normed_values)
         all_normed = all_normed[torch.isfinite(all_normed)]
         if all_normed.numel() > max_samples:
-            idx = torch.randperm(all_normed.numel())[:max_samples]
+            idx = torch.randperm(all_normed.numel(), device=device)[
+                :max_samples
+            ]
             all_normed = all_normed[idx]
 
         probabilities = torch.linspace(0, 1, self.n_bins + 1).to(device)
-        quantiles = torch.quantile(all_normed, probabilities).to(device)
+
+        quantiles = torch.quantile(all_normed, probabilities)
 
         self.edges.copy_(quantiles)
 
