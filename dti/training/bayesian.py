@@ -1,4 +1,5 @@
-from typing import Type, Any, Dict
+from typing import Type, Any, Dict, Optional
+from collections import defaultdict
 
 import tqdm
 import pandas as pd
@@ -27,6 +28,167 @@ _defaults = dict(
     patience_lr=10,
     lr=5e-5,
 )
+
+
+class MetricTracker:
+    def __init__(self, bin_dist: BinDistribution, compute_correlations: bool = False):
+        self.bd = bin_dist
+        self.compute_corr = compute_correlations
+
+        self.sums = defaultdict(float)
+        self.counts = defaultdict(float)
+
+        self.total_sse = 0.0
+        self.total_sst = 0.0
+
+        self.z_rho_sum = 0.0
+        self.z_r_sum = 0.0
+        self.corr_valid_sets = 0
+
+    @torch.no_grad()
+    def update(
+        self,
+        preds: torch.Tensor,
+        normed_labels: torch.Tensor,
+        mask: torch.Tensor,
+        set_boundaries: torch.Tensor,
+        num_sets: int,
+        loss_val: Optional[float] = None,
+    ):
+        masked_preds = preds[mask]
+        masked_normed = normed_labels[mask]
+        n_masked = masked_preds.size(0)
+
+        if n_masked == 0:
+            return
+
+        if loss_val is not None:
+            self.sums["loss"] += loss_val * n_masked
+            self.counts["loss"] += n_masked
+
+        nll = -self.bd.log_prob(masked_normed, masked_preds).sum().item()
+        self.sums["NLL"] += nll
+        self.counts["NLL"] += n_masked
+
+        wass = self.bd.wasserstein(masked_normed, masked_preds).sum().item()
+        self.sums["EMD"] += wass
+        self.counts["EMD"] += n_masked
+
+        pred_mean = self.bd.mean(masked_preds)
+        mae = (pred_mean - masked_normed).abs().sum().item()
+        self.sums["MAE"] += mae
+        self.counts["MAE"] += n_masked
+
+        probs = torch.softmax(masked_preds, dim=-1)
+        true_bins = self.bd.labels(masked_normed)
+        one_hot = self.bd.dist(true_bins)
+        brier = (probs - one_hot).pow(2).sum(dim=-1).sum().item()
+        self.sums["Brier"] += brier
+        self.counts["Brier"] += n_masked
+
+        full_pred_means = self.bd.mean(preds)
+
+        batch_sse, batch_sst = self._compute_batch_variance(
+            full_pred_means, normed_labels, mask, set_boundaries, num_sets
+        )
+        self.total_sse += batch_sse
+        self.total_sst += batch_sst
+
+        if self.compute_corr:
+            z_rho, z_r, valid_sets = self._compute_batch_correlations(
+                full_pred_means, normed_labels, mask, set_boundaries, num_sets
+            )
+            self.z_rho_sum += z_rho
+            self.z_r_sum += z_r
+            self.corr_valid_sets += valid_sets
+
+    def compute(self) -> Dict[str, float]:
+        """Returns the averaged metrics."""
+        results = {}
+
+        for k in self.sums:
+            if self.counts[k] > 0:
+                results[k] = self.sums[k] / self.counts[k]
+            else:
+                results[k] = 0.0
+
+        if self.total_sst > 1e-6:
+            results["R2"] = 1.0 - (self.total_sse / self.total_sst)
+        else:
+            results["R2"] = 0.0
+
+        if self.compute_corr:
+            if self.corr_valid_sets > 0:
+                avg_z_rho = self.z_rho_sum / self.corr_valid_sets
+                avg_z_r = self.z_r_sum / self.corr_valid_sets
+                results["Spearman"] = tanh(avg_z_rho)
+                results["Pearson"] = tanh(avg_z_r)
+            else:
+                results["Spearman"] = 0.0
+                results["Pearson"] = 0.0
+
+        return results
+
+    def _compute_batch_variance(
+        self, pred_means, normed_labels, mask, boundaries, num_sets
+    ):
+        batch_sse = 0.0
+        batch_sst = 0.0
+
+        for i in range(num_sets):
+            start, end = boundaries[i], boundaries[i + 1]
+            set_mask = mask[start:end]
+
+            masked_true = normed_labels[start:end][set_mask]
+            masked_pred = pred_means[start:end][set_mask]
+
+            unmasked_true = normed_labels[start:end][~set_mask]
+
+            if masked_true.numel() == 0 or unmasked_true.numel() == 0:
+                continue
+
+            baseline_mean = unmasked_true.mean()
+
+            batch_sse += ((masked_true - masked_pred) ** 2).sum().item()
+            batch_sst += ((masked_true - baseline_mean) ** 2).sum().item()
+
+        return batch_sse, batch_sst
+
+    def _compute_batch_correlations(
+        self, pred_means, normed_labels, mask, boundaries, num_sets
+    ):
+        total_z_rho = 0.0
+        total_z_r = 0.0
+        valid_sets = 0
+
+        pred_np = pred_means.cpu().numpy()
+        true_np = normed_labels.cpu().numpy()
+        mask_np = mask.cpu().numpy()
+
+        for i in range(num_sets):
+            start, end = boundaries[i], boundaries[i + 1]
+            set_mask = mask_np[start:end]
+
+            p = pred_np[start:end][set_mask]
+            t = true_np[start:end][set_mask]
+
+            n = p.size
+            if n < 4:
+                continue
+
+            rho, _ = spearmanr(p, t)
+            if np.isfinite(rho):
+                rho = np.clip(rho, -1 + 1e-6, 1 - 1e-6)
+                total_z_rho += arctanh(rho) * (n - 3)
+
+            r, _ = pearsonr(p, t)
+            if np.isfinite(r):
+                r = np.clip(r, -1 + 1e-6, 1 - 1e-6)
+                total_z_r += arctanh(r) * (n - 3)
+
+            valid_sets += n - 3
+
+        return total_z_rho, total_z_r, valid_sets
 
 
 def train_and_evaluate_pfn_model(
@@ -72,21 +234,22 @@ def train_and_evaluate_pfn_model(
     optimization = []
 
     for epoch in range(opts["num_epochs"]):
-        train_results = train_with_batched_masked_sets(
+        training_loss = train_with_batched_masked_sets(
             model,
             train_loader,
             optimizer,
             unmasked_weight=opts.get("unmasked_weight", 1.0),
         )
+
         val_results = evaluate_with_batched_masked_sets(model, val_loader)
+        val_loss = val_results["NLL"]
 
         results = (
-            {f"train {k}": v for k, v in train_results.items()}
+            {f"training loss": training_loss}
             | {f"val {k}": v for k, v in val_results.items()}
             | {"lr": scheduler.get_last_lr()[0]}
         )
 
-        val_loss = val_results["NLL"]
         scheduler.step(val_loss)
 
         logger.info(f"epoch: {epoch + 1}")
@@ -128,6 +291,7 @@ def train_with_batched_masked_sets(
     optimizer,
     mask_fraction: float = 0.2,
     unmasked_weight: float = 0.0,
+    loss_fn: str = "crps",
     **kwargs,
 ):
     model.train()
@@ -135,16 +299,14 @@ def train_with_batched_masked_sets(
     logger.info(f"training with unmasked_weight={unmasked_weight}")
 
     bd = model.bin_dist
-    logger.debug(f"clipping labels to [{bd.edges[0].item()}, {bd.edges[-1].item()}]")
 
-    total_loss = 0.0
-    steps = 0
+    if not hasattr(bd, loss_fn):
+        raise ValueError(f"invalid loss function '{loss_fn}'")
+    logger.info(f"loss function: {loss_fn}")
+    calc_loss = getattr(bd, loss_fn)
+
+    tracker = MetricTracker(bd, compute_correlations=False)
     masked_weight = 1.0
-
-    n_masked = 0
-    total_mae = 0
-    total_brier = 0
-    total_wass = 0
 
     for batch in (pbar := tqdm.tqdm(loader, desc="train")):
         with torch.set_grad_enabled(True):
@@ -153,10 +315,10 @@ def train_with_batched_masked_sets(
                 normed_labels,
                 _,
                 query_mask,
-                real_assay,
                 _,
                 _,
-                _,
+                set_boundaries,
+                num_sets,
             ) = _process_batch(
                 batch,
                 model,
@@ -166,46 +328,34 @@ def train_with_batched_masked_sets(
                 mask_fraction=mask_fraction,
             )
 
-            nll_losses = -bd.log_prob(normed_labels, preds)
+            losses = calc_loss(normed_labels, preds)
 
             if unmasked_weight == 1.0:
-                batch_loss = nll_losses.mean()
+                batch_loss = losses.mean()
             elif unmasked_weight == 0.0:
-                batch_loss = nll_losses[query_mask].mean()
+                batch_loss = losses[query_mask].mean()
             else:
-                weights = torch.full_like(nll_losses, unmasked_weight)
+                weights = torch.full_like(losses, unmasked_weight)
                 weights[query_mask] = masked_weight
-                batch_loss = (nll_losses * weights).mean()
+                batch_loss = (losses * weights).mean()
 
-        optimizer.zero_grad(set_to_none=True)
-        batch_loss.backward()
-        optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            batch_loss.backward()
+            optimizer.step()
 
-        real_samples_mask = query_mask & real_assay
-        batch_metrics = _compute_masked_metrics(
-            bd,
-            preds.detach(),
-            normed_labels,
-            real_samples_mask,
-            calculate_var_explained=False,
-        )
+            loss_value = batch_loss.detach().item()
+            pbar.set_description(f"batch loss={loss_value:.4e}")
 
-        n_masked += batch_metrics["n_masked"]
-        total_wass += batch_metrics["wass"]
-        total_mae += batch_metrics["mae"]
-        total_brier += batch_metrics["brier"]
+            tracker.update(
+                preds.detach(),
+                normed_labels.detach(),
+                query_mask,
+                set_boundaries,
+                num_sets,
+                loss_val=loss_value,
+            )
 
-        loss_value = batch_loss.detach().item()
-        total_loss += loss_value
-        steps += 1
-        pbar.set_description(f"batch loss={loss_value:.4e}")
-
-    return {
-        "NLL": total_loss / max(1, steps),
-        "EMD": total_wass / max(1, n_masked),
-        "Brier": total_brier / max(1, n_masked),
-        "MAE": total_mae / max(1, n_masked),
-    }
+    return tracker.compute().get("loss", 0.0)
 
 
 @torch.no_grad()
@@ -216,26 +366,12 @@ def evaluate_with_batched_masked_sets(
 ):
     model.eval()
     model_device = next(model.parameters()).device
-
-    total_loss = 0.0
-    total_wass = 0.0
-    total_mae = 0.0
-    total_brier = 0.0
-    total_var_sse = 0.0
-    total_var_sst = 0.0
-    total_z_rho = 0.0
-    total_pearson = 0.0
-    num_valid_sets = 0
-    n_masked = 0
-
-    all_info = []
-    all_labels = []
-    all_normed = []
-    all_masks = []
-    all_probs = []
-    save_preds = predictions_file is not None
-
     bd = model.bin_dist
+
+    tracker = MetricTracker(bd, compute_correlations=True)
+
+    all_info, all_labels, all_normed, all_masks, all_probs = [], [], [], [], []
+    save_preds = predictions_file is not None
 
     for batch in tqdm.tqdm(loader, desc="testing" if save_preds else "eval"):
         (
@@ -249,60 +385,14 @@ def evaluate_with_batched_masked_sets(
             num_sets,
         ) = _process_batch(batch, model, bd, model_device, is_train=False)
 
-        masked_preds_for_nll = preds[query_mask]
-        masked_normed_for_nll = normed_labels[query_mask]
+        tracker.update(preds, normed_labels, query_mask, set_boundaries, num_sets)
 
-        nll_losses = -bd.log_prob(masked_normed_for_nll, masked_preds_for_nll)
-        total_loss += nll_losses.sum().item()
-
-        batch_metrics = _compute_masked_metrics(
-            bd,
-            preds,
-            normed_labels,
-            query_mask,
-            calculate_var_explained=True,
-            set_boundaries=set_boundaries,
-            num_sets=num_sets,
-        )
-
-        n_masked += batch_metrics["n_masked"]
-        total_wass += batch_metrics["wass"]
-        total_brier += batch_metrics["brier"]
-        total_mae += batch_metrics["mae"]
-        total_var_sse += batch_metrics["sse"]
-        total_var_sst += batch_metrics["sst"]
-
-        batch_z_rho, batch_num_valid_sets = _step_corr_per_set(
-            spearmanr, bd, preds, normed_labels, query_mask, set_boundaries, num_sets
-        )
-        batch_pearson, valid_sets = _step_corr_per_set(
-            pearsonr, bd, preds, normed_labels, query_mask, set_boundaries, num_sets
-        )
-        assert valid_sets == batch_num_valid_sets
-        total_z_rho += batch_z_rho
-        total_pearson += batch_pearson
-        num_valid_sets += batch_num_valid_sets
         if save_preds:
             all_info.append(info.cpu())
             all_labels.append(labels.cpu())
             all_normed.append(normed_labels.cpu())
             all_masks.append(query_mask.cpu())
             all_probs.append(torch.softmax(preds, dim=-1).cpu())
-
-    avg_loss = total_loss / max(1, n_masked)
-    avg_wass = total_wass / max(1, n_masked)
-    avg_mae = total_mae / max(1, n_masked)
-    avg_brier = total_brier / max(1, n_masked)
-    avg_var_explained = 1.0 - (total_var_sse / (total_var_sst + 1e-6))
-    if num_valid_sets > 0:
-        avg_z_rho = total_z_rho / num_valid_sets
-        avg_pearson_r = total_pearson / num_valid_sets
-        avg_spearman_rho = tanh(avg_z_rho)
-        avg_pearson_r = tanh(avg_pearson_r)
-    else:
-        logger.warning("no valid sets for correlation metrics")
-        avg_spearman_rho = 0.0
-        avg_pearson_r = 0.0
 
     if save_preds and all_info:
         predictions_file = predictions_file.with_suffix(".npz")
@@ -315,18 +405,9 @@ def evaluate_with_batched_masked_sets(
             "is_masked": torch.cat(all_masks).numpy(),
             "probs": torch.cat(all_probs).numpy(),
         }
-
         np.savez_compressed(predictions_file, **data_to_save)
 
-    return {
-        "NLL": avg_loss,
-        "EMD": avg_wass,
-        "MAE": avg_mae,
-        "Brier": avg_brier,
-        "R2": avg_var_explained,
-        "Spearman": avg_spearman_rho,
-        "Pearson": avg_pearson_r,
-    }
+    return tracker.compute()
 
 
 def _process_batch(
@@ -364,7 +445,6 @@ def _process_batch(
     labels = labels.squeeze().to(device, non_blocking=True)
     info = info.squeeze()
     query_mask = query_mask.squeeze().to(device, non_blocking=True)
-    batch_size = labels.size(0)
 
     if is_train:
         real_assay = metadata["real_assay"].squeeze().to(device, non_blocking=True)
@@ -402,181 +482,6 @@ def _process_batch(
         set_boundaries,
         num_sets,
     )
-
-
-def _compute_masked_metrics(
-    bd: BinDistribution,
-    preds: torch.Tensor,
-    normed_labels: torch.Tensor,
-    mask: torch.Tensor,
-    calculate_var_explained: bool = False,
-    set_boundaries: torch.Tensor = None,
-    num_sets: int = 0,
-) -> dict:
-    """
-    Computes all metrics for a given set of masked predictions and labels.
-    """
-    masked_preds = preds[mask]
-    masked_normed = normed_labels[mask]
-
-    n_masked = float(masked_preds.size(0))
-
-    mae = _step_mae(bd, masked_preds, masked_normed)
-    wass = _step_wass(bd, masked_preds, masked_normed)
-    brier = _step_brier(bd, masked_preds, masked_normed)
-
-    metrics = {
-        "mae": mae,
-        "wass": wass,
-        "brier": brier,
-        "n_masked": n_masked,
-    }
-
-    if calculate_var_explained:
-        assert set_boundaries is not None, "set_boundaries must be provided for R2"
-        assert num_sets > 0, "num_sets must be > 0 for R2"
-
-        sse, sst = _step_var_explained(
-            bd, preds, normed_labels, mask, set_boundaries, num_sets
-        )
-        metrics["sse"] = sse
-        metrics["sst"] = sst
-
-    return metrics
-
-
-def _step_mae(
-    bd: BinDistribution,
-    masked_preds: torch.Tensor,
-    masked_normed: torch.Tensor,
-) -> float:
-    pred_mean = bd.mean(masked_preds)
-    assert pred_mean.size() == masked_normed.size()
-    return (pred_mean - masked_normed).abs().sum().item()
-
-
-def _step_wass(
-    bd: BinDistribution,
-    masked_preds: torch.Tensor,
-    masked_normed: torch.Tensor,
-) -> float:
-    bin_edges = bd.edges.to(device)
-    bin_widths = torch.diff(bin_edges)
-    total_width = (bin_edges[-1] - bin_edges[0]).clamp_min(1e-6)
-
-    probs = torch.softmax(masked_preds, dim=-1)
-    true_bins = bd.labels(masked_normed)
-    one_hot = bd.dist(true_bins)
-
-    cdf_pred = torch.cumsum(probs, dim=-1)
-    cdf_true = torch.cumsum(one_hot, dim=-1)
-    wass_dists = (torch.abs(cdf_pred - cdf_true) * bin_widths).sum(dim=-1) / total_width
-
-    return wass_dists.sum().item()
-
-
-def _step_var_explained(
-    bd: BinDistribution,
-    preds: torch.Tensor,
-    normed_labels: torch.Tensor,
-    query_mask: torch.Tensor,
-    set_boundaries: torch.Tensor,
-    num_sets: int,
-) -> (float, float):
-    total_set_sse = 0.0
-    total_set_sst = 0.0
-    pred_means = bd.mean(preds)
-
-    for i in range(num_sets):
-        start_idx = set_boundaries[i]
-        end_idx = set_boundaries[i + 1]
-
-        set_mask = query_mask[start_idx:end_idx]
-        n_samples = set_mask.float().sum()
-        set_normed_labels = normed_labels[start_idx:end_idx]
-        set_pred_means = pred_means[start_idx:end_idx]
-
-        masked_true_in_set = set_normed_labels[set_mask]
-        masked_preds_in_set = set_pred_means[set_mask]
-
-        if masked_true_in_set.numel() == 0:
-            continue
-
-        unmasked_true_in_set = set_normed_labels[~set_mask]
-
-        if unmasked_true_in_set.numel() == 0:
-            continue
-
-        baseline_mean = unmasked_true_in_set.mean()
-
-        set_sse = ((masked_true_in_set - masked_preds_in_set) ** 2).sum()
-        set_sst = ((masked_true_in_set - baseline_mean) ** 2).sum()
-
-        total_set_sse += set_sse.item()
-        total_set_sst += set_sst.item()
-
-    return total_set_sse, total_set_sst
-
-
-def _step_corr_per_set(
-    corr_fn: spearmanr,
-    bd: BinDistribution,
-    preds: torch.Tensor,
-    normed_labels: torch.Tensor,
-    query_mask: torch.Tensor,
-    set_boundaries: torch.Tensor,
-    num_sets: int,
-) -> (float, int):
-    total_z_transformed_rho = 0.0
-    num_valid_sets = 0
-    pred_means = bd.mean(preds).cpu().numpy()
-    normed_labels_np = normed_labels.cpu().numpy()
-    query_mask_np = query_mask.cpu().numpy()
-
-    for i in range(num_sets):
-        start_idx = set_boundaries[i]
-        end_idx = set_boundaries[i + 1]
-
-        set_mask = query_mask_np[start_idx:end_idx]
-
-        masked_preds_in_set = pred_means[start_idx:end_idx][set_mask]
-        masked_labels_in_set = normed_labels_np[start_idx:end_idx][set_mask]
-
-        n_samples = masked_preds_in_set.size
-
-        if n_samples < 4:
-            continue
-
-        try:
-            rho, _ = corr_fn(masked_preds_in_set, masked_labels_in_set)
-
-            if not np.isfinite(rho):
-                rho = 0.0
-            rho = np.clip(rho, -1 + 1e-6, 1 - 1e-6)
-
-            z_transformed_rho = arctanh(rho)
-
-            total_z_transformed_rho += z_transformed_rho * (n_samples - 3)
-            num_valid_sets += n_samples - 3
-
-        except ValueError:
-            continue
-
-    return total_z_transformed_rho, num_valid_sets
-
-
-def _step_brier(
-    bd: BinDistribution,
-    masked_preds: torch.Tensor,
-    masked_normed: torch.Tensor,
-) -> float:
-    probs = torch.softmax(masked_preds, dim=-1)
-    true_bins = bd.labels(masked_normed)
-    one_hot = bd.dist(true_bins)
-
-    brier_scores = (probs - one_hot).pow(2).sum(dim=-1)
-
-    return brier_scores.sum().item()
 
 
 def _normalize_sets_minmax(

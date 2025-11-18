@@ -174,6 +174,38 @@ class BinDistribution(nn.Module):
     def dist(self, class_labels: torch.Tensor) -> torch.Tensor:
         return F.one_hot(class_labels, num_classes=self.n_bins).float()
 
+    def wasserstein(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
+        probs = F.softmax(logits, dim=-1)
+
+        true_bins = self.labels(y)
+        one_hot = F.one_hot(true_bins, num_classes=self.n_bins).float()
+
+        cdf_pred = torch.cumsum(probs, dim=-1)
+        cdf_true = torch.cumsum(one_hot, dim=-1)
+
+        wass = torch.sum(torch.abs(cdf_pred - cdf_true) * self.widths, dim=-1)
+
+        total_width = (self.edges[-1] - self.edges[0]).clamp_min(1e-6)
+        wass = wass / total_width
+
+        return wass
+
+    def crps(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
+        probs = F.softmax(logits, dim=-1)
+
+        true_bins = self.labels(y)
+        one_hot = F.one_hot(true_bins, num_classes=self.n_bins).float()
+
+        cdf_pred = torch.cumsum(probs, dim=-1)
+        cdf_true = torch.cumsum(one_hot, dim=-1)
+
+        crps = torch.sum((cdf_pred - cdf_true).pow(2) * self.widths, dim=-1)
+
+        return crps
+
+    def nll(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
+        return -self.log_prob(y, logits)
+
     def log_prob(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
         bucket_idcs = self.labels(y)
         bucket_log_ps = F.log_softmax(logits, dim=-1)
