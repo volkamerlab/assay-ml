@@ -153,7 +153,7 @@ def run_split(
     seed: int,
 ):
     batch_size = 512
-    num_epochs = 50_000  # early stopping in place
+    num_epochs = 2000  # early stopping in place
     info_cols = [COMPOUND, ASSAY]
     data_dir = DATA / "processed" / dataset_name
     train_tgt = tgt_name = "scaled_ic50"
@@ -213,7 +213,7 @@ def run_split(
     assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
     multi_batch = method in [Method.SETS, Method.IC50CORR]
     training_loss = loss_fn(method, nn.SmoothL1Loss(reduction="none"))
-    train_short = method.on_sets or method.on_pairs
+    train_short = True  # method.on_sets or method.on_pairs
     train_and_evaluate_model(
         model_cls,
         run_name,
@@ -230,8 +230,8 @@ def run_split(
         num_epochs=num_epochs,
         cosine_agg=True,
         training_loss=training_loss,
-        patience_termination=100 if train_short else 1000,
-        patience_lr=10 if train_short else 100,
+        patience_termination=100,
+        patience_lr=20,
         normalize_training_batches=False,  # method.on_sets,
         lr=1e-4,
         fisher_transform=method not in [Method.IC50SETS, Method.IC50ALLSETS],

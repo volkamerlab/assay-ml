@@ -1,6 +1,6 @@
 import torch
 from torch import nn, Tensor
-from torch.nn import Dropout, Linear, Module, SiLU, Sequential, BatchNorm1d
+from torch.nn import Dropout, Linear, Module, SiLU, Sequential, BatchNorm1d, LayerNorm
 
 from .set_rank.set_transformer import SetTransformer, _mlp
 
@@ -190,7 +190,7 @@ class MoleculeSetRank(Module):
         self.ouput = Sequential(
             Linear(hidden_channels, hidden_channels),
             SiLU(),
-            BatchNorm1d(hidden_channels),
+            LayerNorm(hidden_channels),
             Dropout(p_dropout),
             Linear(hidden_channels, hidden_channels),
             SiLU(),

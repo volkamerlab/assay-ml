@@ -230,8 +230,8 @@ def train_with_batched_sets(
     total_loss = 0
     steps = 0
 
-    for protein_features, ligand_features, labels, info, metadata in tqdm.tqdm(
-        loader, desc="training"
+    for protein_features, ligand_features, labels, info, metadata in (
+        pbar := tqdm.tqdm(loader, desc="training")
     ):
         set_boundaries = metadata["set_boundaries"].squeeze()
         num_sets = metadata["num_sets"].squeeze()
@@ -279,6 +279,8 @@ def train_with_batched_sets(
             optimizer.step()
             total_loss += batch_loss.item()
             steps += 1
+
+            pbar.set_description(f"loss={batch_loss.item():.2e}")
 
     return total_loss / max(1, steps)
 
@@ -398,8 +400,8 @@ def train_epoch(
 
     total_loss = 0
 
-    for protein_features, ligand_features, labels, _, weights in tqdm.tqdm(
-        loader, desc="training"
+    for protein_features, ligand_features, labels, _, weights in (
+        pbar := tqdm.tqdm(loader, desc="training")
     ):
         labels = labels.squeeze()
         if normalize_training_batches:
@@ -417,6 +419,8 @@ def train_epoch(
             continue
         loss.backward()
         optimizer.step()
+
+        pbar.set_description(f"loss={loss.item():.2e}")
 
         total_loss += loss.item()
 
@@ -624,22 +628,9 @@ def train_and_evaluate_model(
         )
 
         if val_rank_corr > best_corr:
-            logger.info(f"[{run_name}] updating test set predictions")
             best_corr = val_rank_corr
             epochs_without_improvement = 0
             torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")
-            pred_file = OUTPUT / run_name / "predictions.csv"
-            _, test_rank_corr = eval_fn(
-                model,
-                test_loader,
-                rank_corr_fn=opts["rank_corr_fn"],
-                prediction_file=pred_file,
-            )
-            logger.info(
-                f"[{run_name}] Epoch: {epoch + 1} "
-                f"Fold: {index} "
-                f"Test Rank Corr: {test_rank_corr:.4f}"
-            )
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= opts["patience_termination"]:
@@ -647,3 +638,14 @@ def train_and_evaluate_model(
                     f"[{run_name}] Early stopping triggered after {epoch + 1} epochs."
                 )
                 break
+
+    logger.info(f"[{run_name}] Loading best model for final test evaluation")
+    model.load_state_dict(torch.load(OUTPUT / run_name / f"model{index}.pt"))
+    pred_file = OUTPUT / run_name / "predictions.csv"
+    _, test_rank_corr = eval_fn(
+        model,
+        test_loader,
+        rank_corr_fn=opts["rank_corr_fn"],
+        prediction_file=pred_file,
+    )
+    logger.info(f"[{run_name}] Final Test Rank Corr: {test_rank_corr:.4f}")
