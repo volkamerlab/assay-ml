@@ -17,4 +17,5 @@ mkdir -p "$GRAPH_CACHE_DIR"
 mkdir -p "$CACHE_DIR"
 # rm -rf /scratch/chair_volkamer/michael.backenkoehler/cache/chembl/0/{all,allfp}/{train,val,test}
 
-uv run $1 --fold $2 --seed 0 --n-bins $3 --mol-feat $4 --unmasked-weight $5 --property-set-ratio $6
+# arguments = $(script) $(fold) $(n_bins) $(mol_feat) $(unmasked_weight) $(physcem) $(dropout) $(lr)
+uv run $1 --fold $2 --seed 0 --n-bins $3 --mol-feat $4 --unmasked-weight $5 --property-set-ratio $6 --dropout $7 --lr $8

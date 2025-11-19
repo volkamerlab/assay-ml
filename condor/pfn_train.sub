@@ -1,7 +1,7 @@
 universe = docker
 docker_image = astral/uv:debian
 executable = run_pfn_training.sh
-arguments = $(script) $(fold) $(n_bins) $(mol_feat) $(unmasked_weight) $(physcem)
+arguments = $(script) $(fold) $(n_bins) $(mol_feat) $(unmasked_weight) $(physcem) $(dropout) $(lr)
 output = logs/pfn_train.$(ClusterId).$(ProcId).out
 error = logs/pfn_train.$(ClusterId).$(ProcId).err
 log = logs/pfn_train.$(ClusterId).$(ProcId).log
@@ -13,6 +13,23 @@ request_memory = 400GB
 requirements = (GPUs_Capability >= 7.0) && (GPUs_GlobalMemoryMb >= 16000)
 +WantGPUHomeMounted = true
 +WantScratchMounted = true
-queue fold, script, n_bins, mol_feat, unmasked_weight, physcem from (
-    0, scripts/pfn_train.py, 100,    all, 0.0, 0.25
+queue fold, script, n_bins, mol_feat, unmasked_weight, physcem, dropout, lr from (
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.0, 0.05, 1e-3
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.0, 0.05, 1e-4
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.0, 0.05, 1e-5
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.0, 0.1, 1e-3
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.0, 0.1, 1e-4
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.0, 0.1, 1e-5
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.25, 0.05, 1e-3
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.25, 0.05, 1e-4
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.25, 0.05, 1e-5
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.25, 0.1, 1e-3
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.25, 0.1, 1e-4
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.25, 0.1, 1e-5
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.5, 0.05, 1e-3
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.5, 0.05, 1e-4
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.5, 0.05, 1e-5
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.5, 0.1, 1e-3
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.5, 0.1, 1e-4
+    0, scripts/pfn_train.py, 1000, all, 0.0, 0.5, 0.1, 1e-5
 )
