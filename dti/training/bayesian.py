@@ -2,7 +2,7 @@ from typing import Type, Any, Dict, Optional
 from collections import defaultdict
 
 import tqdm
-import pandas as pd
+import polars as pd
 import numpy as np
 import torch
 from torch import nn
@@ -258,9 +258,7 @@ def train_and_evaluate_pfn_model(
             logger.info(f" {metric}: {value:.4e}")
 
         optimization.append(results)
-        pd.DataFrame(optimization).to_csv(
-            OUTPUT / run_name / "optimization.csv", index=False
-        )
+        pl.DataFrame(optimization).write_csv(OUTPUT / run_name / "optimization.csv")
 
         if val_loss < best_loss:
             logger.info("validation improved, saving model.")

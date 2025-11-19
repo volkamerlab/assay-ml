@@ -4,11 +4,10 @@ import logging
 from pathlib import Path
 from threading import Lock
 
-import pandas as pd
+import polars as pl
 import numpy as np
 from rdkit import Chem
 from tqdm.auto import tqdm
-
 
 import torch
 from torch.utils.data import Dataset, Sampler
@@ -31,7 +30,7 @@ logger = logging.getLogger(__name__)
 class BaseDataModule(Dataset):
     def __init__(
         self,
-        data: pd.DataFrame,
+        data: pl.DataFrame,
         mol_featurizer: MolFingerprint,
         target: str = ACT,
         info_cols: list[str] = None,
@@ -47,7 +46,7 @@ class BaseDataModule(Dataset):
 
         self._load_and_featurize(data, cache_dir, n_jobs)
 
-    def _load_and_featurize(self, data, cache_dir=None, n_jobs=16):
+    def _load_and_featurize(self, data: pl.DataFrame, cache_dir=None, n_jobs=16):
         if cache_dir:
             os.makedirs(cache_dir, exist_ok=True)
             paths = {
@@ -64,16 +63,18 @@ class BaseDataModule(Dataset):
                 self.ligand_features = torch.load(paths["ligand_features"])
                 self.labels = torch.load(paths["labels"])
                 self.info = torch.load(paths["info"])
-                self.data = pd.read_csv(paths["data"])
+                self.data = pl.read_csv(paths["data"])
                 return
 
         logger.info("Computing molecular fingerprints...")
-        fps = self.mol_featurizer.compute_parallel(data[SMILES].values, n_jobs=n_jobs)
+        fps = self.mol_featurizer.compute_parallel(
+            data[SMILES].to_numpy(), n_jobs=n_jobs
+        )
         mask = [fp is not None for fp in fps]
         if (n_invalid := len(mask) - sum(mask)) > 0:
             logger.info(f"Dropping {n_invalid}/{len(mask)} invalid fingerprints.")
 
-        self.data = data[mask].copy().reset_index(drop=True)
+        self.data = data.filter(pl.Series(mask))
         self.ligand_features = torch.tensor(
             np.stack([fp for fp in fps if fp is not None]), dtype=torch.float32
         )
@@ -82,7 +83,9 @@ class BaseDataModule(Dataset):
             self.mol_featurizer.dim,
             self.mol_featurizer,
         )
-        self.labels = torch.tensor(self.data[self.target].values, dtype=torch.float32)
+        self.labels = torch.tensor(
+            self.data[self.target].to_numpy(), dtype=torch.float32
+        )
 
         missing_info_cols = [c for c in self.info_cols if c not in self.data.columns]
         if len(missing_info_cols) > 0:
@@ -90,7 +93,7 @@ class BaseDataModule(Dataset):
             self.info_cols = [c for c in self.info_cols if c not in missing_info_cols]
 
         self.info = (
-            torch.tensor(self.data[self.info_cols].values.astype(np.int64))
+            torch.tensor(self.data.select(self.info_cols).to_numpy().astype(np.int64))
             if self.info_cols
             else torch.empty((len(self.data), 0), dtype=torch.int64)
         )
@@ -100,14 +103,15 @@ class BaseDataModule(Dataset):
             torch.save(self.ligand_features, paths["ligand_features"])
             torch.save(self.labels, paths["labels"])
             torch.save(self.info, paths["info"])
-            self.data.to_csv(paths["data"], index=False)
+            self.data.write_csv(paths["data"])
 
     def _shuffle(self):
         indices = torch.randperm(self.labels.shape[0])
         self.ligand_features = self.ligand_features[indices]
         self.labels = self.labels[indices]
         self.info = self.info[indices]
-        self.data = self.data.iloc[indices]
+        np_indices = indices.numpy()
+        self.data = self.data[np_indices]
         return indices
 
     def __len__(self):
@@ -158,11 +162,24 @@ class AssaySetGroupingMixin:
     def _group_by_assay(self):
         self.assay_sets = []
         self.assay_set_ids = []
-        grouped = self.data.groupby(ASSAY, sort=False)
+
+        # Polars Strategy:
+        # 1. Add a temporary row index to track original positions (since self.data aligns with tensors)
+        # 2. Group by ASSAY and aggregate these indices into lists
+        grouped_indices = (
+            self.data.with_row_index("orig_idx")
+            .group_by(ASSAY, maintain_order=True)
+            .agg(pl.col("orig_idx"))
+        )
+
+        # We also need to extract assay IDs for enumeration or tracking
+        # Assuming ASSAY column contains the IDs or we just enumerate the groups
         num_unused = 0
 
-        for assay_id, (_, group) in enumerate(grouped):
-            group_idcs = group.index.values
+        # Iterate over the grouped data
+        for i in range(len(grouped_indices)):
+            # Get the list of original indices for this group as a numpy array
+            group_idcs = np.array(grouped_indices[i, "orig_idx"])
             group_size = len(group_idcs)
 
             if group_size < self.min_batch_size:
@@ -177,12 +194,12 @@ class AssaySetGroupingMixin:
                 for batch in sub_batches:
                     if len(batch) >= self.min_batch_size:
                         self.assay_sets.append(batch)
-                        self.assay_set_ids.append(assay_id)
+                        self.assay_set_ids.append(i)
                     else:
                         num_unused += len(batch)
             else:
                 self.assay_sets.append(group_idcs)
-                self.assay_set_ids.append(assay_id)
+                self.assay_set_ids.append(i)
 
         self.assay_set_ids = np.array(self.assay_set_ids, dtype=np.int32)
         logger.info(
@@ -194,7 +211,7 @@ class AssaySetGroupingMixin:
 class ActivityDataset(BaseDataModule, ProteinFeaturesMixin):
     def __init__(
         self,
-        data: pd.DataFrame,
+        data: pl.DataFrame,
         mol_featurizer: MolFingerprint,
         target: str = ACT,
         info_cols: list[str] = [],
@@ -233,7 +250,7 @@ class MultiSetActivityDataset(
 ):
     def __init__(
         self,
-        data: pd.DataFrame,
+        data: pl.DataFrame,
         mol_featurizer: MolFingerprint,
         target: str = ACT,
         info_cols: list[str] = [],
@@ -373,7 +390,7 @@ class MultiSetActivityDataset(
 class PropertySetDataset(BaseDataModule, AssaySetGroupingMixin):
     def __init__(
         self,
-        data: pd.DataFrame,
+        data: pl.DataFrame,
         mol_featurizer: MolFingerprint,
         target: str = ACT,
         property_columns: list[str] = None,
@@ -419,7 +436,7 @@ class PropertySetDataset(BaseDataModule, AssaySetGroupingMixin):
         self.lock = Lock()
 
         self.query_mask = (
-            torch.from_numpy(self.data[self.query_col].values).bool().flatten()
+            torch.from_numpy(self.data[self.query_col].to_numpy()).bool().flatten()
             if self.query_col is not None and self.query_col in self.data.columns
             else torch.zeros(len(self.data), dtype=torch.bool)
         )
@@ -572,7 +589,7 @@ class PropertySetDataset(BaseDataModule, AssaySetGroupingMixin):
             if prop_col not in self.data.columns:
                 logger.warning(f"Property column '{prop_col}' not in data. Skipping.")
                 continue
-            values = self.data[prop_col].values.astype(np.float32)
+            values = self.data[prop_col].to_numpy().astype(np.float32)
             valid_mask = ~np.isnan(values)
             if valid_mask.sum() < self.min_batch_size:
                 logger.warning(
@@ -732,7 +749,7 @@ class PropertySetDataset(BaseDataModule, AssaySetGroupingMixin):
 class GraphPropertySetDataset(PropertySetDataset):
     def __init__(
         self,
-        data: pd.DataFrame,
+        data: pl.DataFrame,
         mol_featurizer: MolFingerprint,
         target: str = ACT,
         property_columns: list[str] = None,
@@ -748,7 +765,7 @@ class GraphPropertySetDataset(PropertySetDataset):
             **kwargs,
         )
 
-    def _load_and_featurize(self, data, cache_dir, n_jobs, **kwargs):
+    def _load_and_featurize(self, data: pl.DataFrame, cache_dir, n_jobs, **kwargs):
         logger.info("Initializing GraphPropertySetDataset (on-the-fly featurization).")
 
         cache_dir_str = os.environ.get("GRAPH_CACHE_DIR", "/tmp/graph_cache")
@@ -756,11 +773,13 @@ class GraphPropertySetDataset(PropertySetDataset):
         self.scratch_dir.mkdir(exist_ok=True, parents=True)
         logger.info(f"Using sharded graph cache at: {self.scratch_dir}")
 
-        self.data = data.reset_index(drop=True)
+        self.data = data
 
-        self.smiles_list = self.data[SMILES].values
+        self.smiles_list = self.data[SMILES].to_numpy()
 
-        self.labels = torch.tensor(self.data[self.target].values, dtype=torch.float32)
+        self.labels = torch.tensor(
+            self.data[self.target].to_numpy(), dtype=torch.float32
+        )
 
         missing_info_cols = [c for c in self.info_cols if c not in self.data.columns]
         if len(missing_info_cols) > 0:
@@ -768,7 +787,7 @@ class GraphPropertySetDataset(PropertySetDataset):
             self.info_cols = [c for c in self.info_cols if c not in missing_info_cols]
 
         self.info = (
-            torch.tensor(self.data[self.info_cols].values.astype(np.int64))
+            torch.tensor(self.data.select(self.info_cols).to_numpy().astype(np.int64))
             if self.info_cols
             else torch.empty((len(self.data), 0), dtype=torch.int64)
         )
@@ -791,7 +810,7 @@ class GraphPropertySetDataset(PropertySetDataset):
 class GraphAndFingerprintDataset(PropertySetDataset):
     def __init__(
         self,
-        data: pd.DataFrame,
+        data: pl.DataFrame,
         mol_featurizer: MolFingerprint,
         graph_featurizer: MolFingerprint,
         target: str = ACT,
@@ -812,7 +831,7 @@ class GraphAndFingerprintDataset(PropertySetDataset):
             **kwargs,
         )
 
-        self.smiles_list = self.data[SMILES].values
+        self.smiles_list = self.data[SMILES].to_numpy()
 
         cache_dir_str = os.environ.get("GRAPH_CACHE_DIR", "/tmp/graph_cache")
         self.scratch_dir = Path(cache_dir_str)
@@ -896,18 +915,14 @@ class GraphAndFingerprintDataset(PropertySetDataset):
             "real_assay": torch.tensor(real_assay),
         }
 
-        assert len(query_mask) == len(fingerprints), (
-            len(query_mask),
-            len(fingerprints),
-        )
-
+        assert len(query_mask) == len(graphs), (len(query_mask), len(all_labels))
         return (graphs, fingerprints), all_labels, info, query_mask, metadata
 
 
 class PairDataset(ActivityDataset):
     def __init__(
         self,
-        data: pd.DataFrame,
+        data: pl.DataFrame,
         **kwargs,
     ):
         super().__init__(data, **kwargs)

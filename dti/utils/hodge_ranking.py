@@ -1,14 +1,15 @@
 import os
-from typing import Tuple
+from typing import Tuple, List
 from concurrent.futures import ProcessPoolExecutor
 from collections import namedtuple
 import itertools as itt
 
 import tqdm
 import numpy as np
-import pandas as pd
+import polars as pl  # Changed from pandas
 from sklearn.preprocessing import StandardScaler
 
+# Assuming constants are accessible in the Polars context
 from .constants import ACT, SMILES, TID, ASSAY, COMPOUND, HODGE, PREDICTION
 
 import logging
@@ -25,23 +26,11 @@ def _build_matrices(
     dim: int,
     inter_assay_weight: float,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Optimized construction of y_bar and weights matrices.
-
-    Args:
-        cmpd_indices  (np.ndarray): Array of compound indices
-        assay_ids  (np.ndarray): Array of assay IDs
-        activity  (np.ndarray): Array of activity values
-        dim  (int): Dimension of matrices (number of unique compounds)
-        inter_assay_weight  (float): Weight for inter-assay comparisons
-
-    Returns:
-        Tuple[np.ndarray, np.ndarray]: y_bar and weights matrices
-    """
     y_bar = np.zeros((dim, dim))
     weights = np.zeros((dim, dim))
 
-    for i, j in itt.combinations(range(dim), 2):
+    data_dim = len(cmpd_indices)
+    for i, j in itt.combinations(range(data_dim), 2):
         c_i, c_j = cmpd_indices[i], cmpd_indices[j]
         weight = inter_assay_weight if assay_ids[i] != assay_ids[j] else 1.0
         pref = activity[i] - activity[j]
@@ -57,30 +46,37 @@ def _build_matrices(
 
 
 def _rank_target(
-    group_data: pd.DataFrame, inter_assay_weight: float, scale_scores: bool
-) -> HodgeRank:
-    usecols = [SMILES, ASSAY, ACT]
-    if TID in group_data.columns:
-        usecols.append(TID)
-    target = group_data[TID].iloc[0] if TID in group_data.columns else None
-    # logger.debug(f"ranking target {target}")
+    group_data: pl.DataFrame, inter_assay_weight: float, scale_scores: bool
+) -> List[HodgeRank]:
+    target = group_data[TID][0] if TID in group_data.columns else None
 
     if inter_assay_weight == 0:
-        group_data = group_data[group_data.groupby(ASSAY)[ASSAY].transform("count") > 1]
+        group_counts = group_data.group_by(ASSAY).agg(pl.count().alias("count"))
+        group_data = (
+            group_data.join(group_counts, on=ASSAY, how="left")
+            .filter(pl.col("count") > 1)
+            .drop("count")
+        )
 
     if len(group_data) <= 1:
         return []
 
-    cmpds = group_data[SMILES].unique()
+    cmpds = group_data[SMILES].unique().to_list()
     dim = len(cmpds)
 
     if dim <= 1:
         return []
 
     cmpd_to_idx = {c: i for i, c in enumerate(cmpds)}
-    cmpd_indices = group_data[SMILES].map(cmpd_to_idx).values
-    assay_indices, _ = pd.factorize(group_data[ASSAY])
-    activity = group_data[ACT].values
+
+    cmpd_indices = group_data.with_columns(
+        pl.col(SMILES).map_dict(cmpd_to_idx).alias(COMPOUND)
+    )[COMPOUND].to_numpy()
+
+    assay_series = group_data[ASSAY]
+    assay_indices = assay_series.to_physical().to_numpy()
+
+    activity = group_data[ACT].to_numpy()
 
     y_bar, weights = _build_matrices(
         cmpd_indices, assay_indices, activity, dim, inter_assay_weight
@@ -96,28 +92,16 @@ def _rank_target(
 
 
 def parallel_hodge_rank(
-    data: pd.DataFrame,
+    data: pl.DataFrame,
     inter_assay_weight: float = 0,
     scale_scores: bool = False,
     n_jobs: int = min(os.cpu_count() - 2, 32),
-) -> pd.DataFrame:
-    """
-    Compute Hodge ranking for targets as specified by the `TID` column in parallel.
-
-    Args:
-        data (pd.DataFrame): Affinity data
-        inter_assay_weight (float, optional): Inter-assay preference weights in [0,1]
-        scale_scores (bool, optional): Apply Z-transform to Hodge potentials
-        n_jobs (int, optional): Number of jobs
-
-    Returns:
-        pd.DataFrame: data with Hodge potential in `HODGE` column
-    """
+) -> pl.DataFrame:
     logger.info(
         f"compute Hodge ranking (inter_assay_weight={inter_assay_weight}, scale_scores={scale_scores})"
     )
 
-    groups = [g for _, g in data.groupby(TID)] if TID in data.columns else [data]
+    groups = [g for g in data.group_by(TID).groups] if TID in data.columns else [data]
 
     with ProcessPoolExecutor(max_workers=n_jobs) as executor:
         futures = [
@@ -133,42 +117,42 @@ def parallel_hodge_rank(
         futures = tqdm.tqdm(futures, total=len(futures), desc="Ranking")
         results = [future.result() for future in futures]
 
-    return pd.DataFrame(sum(results, start=[])).rename(columns={"smiles": SMILES})
+    flat_results = sum(results, start=[])
+    result_df = pl.DataFrame(flat_results)
+
+    if "smiles" in result_df.columns:
+        result_df = result_df.rename({"smiles": SMILES})
+
+    return result_df
 
 
 def assay_ranks(
-    preds: pd.DataFrame, suffixes: tuple[str, str] = ("_a", "_b")
-) -> pd.DataFrame:
-    """
-    Compute Hodge ranking for pairwise predictions over the whole dataframe.
-
-    Args:
-        data (pd.DataFrame): Prediction data
-        suffixes (tuple[str, str], optional): Column suffixes for pair predictions.
-
-    Returns:
-        pd.DataFrame: dataframe with compounds and Hodge potentials
-    """
+    preds: pl.DataFrame, suffixes: tuple[str, str] = ("_a", "_b")
+) -> pl.DataFrame:
     cmpd_a = COMPOUND + suffixes[0]
     cmpd_b = COMPOUND + suffixes[1]
-    cmpds = np.unique(
-        np.concat(
+
+    cmpds = (
+        pl.concat(
             [
-                preds[cmpd_a].unique(),
-                preds[cmpd_b].unique(),
+                preds.select(cmpd_a).unique().rename({cmpd_a: COMPOUND}),
+                preds.select(cmpd_b).unique().rename({cmpd_b: COMPOUND}),
             ]
-        )
+        )[COMPOUND]
+        .unique()
+        .to_list()
     )
+
     cmpd_to_idx = {cmpd: idx for idx, cmpd in enumerate(cmpds)}
     dim = len(cmpds)
 
     if dim <= 1:
-        return pd.DataFrame({COMPOUND: cmpds, PREDICTION: np.zeros_like(cmpds)})
+        return pl.DataFrame({COMPOUND: cmpds, PREDICTION: np.zeros_like(cmpds)})
 
     y_bar = np.zeros((dim, dim))
     weights = np.zeros((dim, dim))
 
-    for _, row in preds.iterrows():
+    for row in preds.iter_rows(named=True):
         c_i = cmpd_to_idx[row[cmpd_a]]
         c_j = cmpd_to_idx[row[cmpd_b]]
         y_bar[c_i, c_j] += row[PREDICTION]
@@ -180,7 +164,7 @@ def assay_ranks(
 
     scores = hodge_rank(y_bar, weights)
 
-    return pd.DataFrame({COMPOUND: cmpds, PREDICTION: scores})
+    return pl.DataFrame({COMPOUND: cmpds, PREDICTION: scores})
 
 
 def hodge_rank(
