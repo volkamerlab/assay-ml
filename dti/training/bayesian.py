@@ -451,15 +451,17 @@ def _process_batch(
     else:
         real_assay = None
 
-    with torch.no_grad():
-        clip_range = (bd.edges[0], bd.edges[-1])
-        normed_labels = _normalize_sets_minmax(
-            labels,
-            set_boundaries,
-            num_sets,
-            mask=query_mask,
-            clip_range=clip_range,
-        )
+    if bd.bounded_support:
+        with torch.no_grad():
+            normed_labels = _normalize_sets_minmax(
+                labels,
+                set_boundaries,
+                num_sets,
+                mask=query_mask,
+                clip_range=(bd.edges[0], bd.edges[-1]),
+            )
+    else:
+        normed_labels = labels
 
     context_labels = normed_labels.clone()
     context_labels[query_mask] = 0.0
