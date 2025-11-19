@@ -2,7 +2,7 @@ import os
 import logging
 import hashlib
 import functools
-import pandas as pd
+import polars as pl
 from pathlib import Path
 from typing import Union, Iterable, List, Tuple
 from multiprocessing import Pool
@@ -368,10 +368,13 @@ class MolFingerprint(StrEnum):
         elif self == MolFingerprint.CHEMBERTA:
             _batch_size = 4096
             embeddings = list()
+            smiles_list = list(smiles)
             for batch in tqdm.tqdm(
-                range(0, len(smiles), _batch_size), desc=f"{self.value}"
+                range(0, len(smiles_list), _batch_size), desc=f"{self.value}"
             ):
-                smi_batch = list(smiles[batch : min(len(smiles), batch + _batch_size)])
+                smi_batch = smiles_list[
+                    batch : min(len(smiles_list), batch + _batch_size)
+                ]
                 batch_embds = smiles_to_dl_embedding(
                     smi_batch,
                     model_name="DeepChem/ChemBERTa-77M-MLM",
@@ -379,7 +382,10 @@ class MolFingerprint(StrEnum):
                 )
                 embeddings.extend(list(batch_embds))
 
-            assert len(smiles) == len(embeddings), (len(smiles), len(embeddings))
+            assert len(smiles_list) == len(embeddings), (
+                len(smiles_list),
+                len(embeddings),
+            )
             return embeddings
         else:
             logger.warning(
@@ -422,7 +428,7 @@ def smiles_to_dl_embedding(
 
 
 def esm2_features(
-    data: pd.DataFrame,
+    data: pl.DataFrame,
     model_name: str = "esm2_t33_650M_UR50D",
     layer: int = 33,
     output_dir: Path | None = None,
@@ -430,7 +436,7 @@ def esm2_features(
     """Compute protein embeddings using the specified ESM model. Store results on disk.
 
     Args:
-        data (pd.DataFrame): A dataframe with columns for SEQUENCE and TID.
+        data (pl.DataFrame): A dataframe with columns for SEQUENCE and TID.
         model_name (str), optional: Name of the ESM model to use.
         layer (int), optional: Layer index of the embedding to use.
         output_dir (Path|None), optional: Location to store embeddings.
@@ -438,26 +444,24 @@ def esm2_features(
     Returns:
         torch.Tensor or None: Tensor of protein embeddings or None if no protein targets.
     """
-    if TID not in data.columns or data[TID].isna().any():
+    if TID not in data.columns or data[TID].null_count() > 0:
         logger.info("missing protein target in dataset")
         return None
 
     logger.info(f"computing protein features: {model_name}")
-    done = []
+
     if output_dir is None:
         output_dir = DATA / model_name
     output_dir.mkdir(exist_ok=True)
     emb_dir = lambda uniprot_id: output_dir / f"{uniprot_id}.pt"
     fasta_file = DATA / "data.fasta"
+    unique_proteins = data.select([TID, SEQUENCE]).unique(subset=[TID])
     with open(fasta_file, "w") as f:
-        for _, row in data.iterrows():
+        for row in unique_proteins.iter_rows(named=True):
             uniprot = row[TID]
             if emb_dir(uniprot).exists():
                 continue
-            if uniprot in done:
-                continue
             f.write(f">{uniprot}\n{row[SEQUENCE]}\n")
-            done.append(uniprot)
 
     extract_embeddings(model_name, fasta_file, output_dir)
 
@@ -474,7 +478,7 @@ def esm2_features(
         emb = torch.load(emb_dir(uniprot_id), weights_only=False, map_location=device)
         return emb["representation"][layer].cpu()
 
-    emb = torch.stack([load_esm(uniprot_id) for uniprot_id in data[TID]])
+    emb = torch.stack([load_esm(uniprot_id) for uniprot_id in data[TID].to_list()])
     return emb.to(device)
 
 

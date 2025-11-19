@@ -3,7 +3,7 @@ import re
 import uuid
 import shutil
 import tarfile
-from typing import Union
+from typing import Union, List, Tuple
 import functools
 import subprocess
 import time
@@ -13,8 +13,8 @@ from enum import unique, StrEnum, auto
 import random
 
 import torch
-import pandas as pd
 import numpy as np
+import polars as pl
 from tqdm.auto import tqdm
 from rdkit import Chem
 from rdkit.Chem.Scaffolds import MurckoScaffold
@@ -27,6 +27,7 @@ from rdkit import RDLogger
 
 lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
+
 from .constants import OUTPUT, SMILES
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -106,7 +107,7 @@ class Method(StrEnum):
 
     def __lt__(self, other):
         assert isinstance(other, __class__)
-        return self._value < other._value
+        return self._value() < other._value()
 
 
 def set_random_seeds(seed: int):
@@ -192,9 +193,11 @@ def init_logging(run_name: Union[str, None] = str(time.time())):
 
 
 @functools.cache
-def get_scaffold(smiles: str, generic: bool = True) -> str:
+def get_scaffold(smiles: str, generic: bool = True) -> Union[str, None]:
     try:
         mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return None
         scaffold = MurckoScaffold.GetScaffoldForMol(mol)
         if generic:
             scaffold = MurckoScaffold.MakeScaffoldGeneric(scaffold)
@@ -205,73 +208,178 @@ def get_scaffold(smiles: str, generic: bool = True) -> str:
 
 
 def check_smi_valid(smi: str) -> bool:
+    """Checks if a SMILES string is valid."""
     if smi is None or not isinstance(smi, str):
         return False
     return Chem.MolFromSmiles(smi) is not None
 
 
 def add_scaffold_col(
-    data: pd.DataFrame, name: str = "_scaffold", progress: bool = True
-):
-    smiles_it = tqdm(data[SMILES], desc="scaffold") if progress else data[SMILES]
-    data[name] = [get_scaffold(smi) for smi in smiles_it]
+    data: pl.DataFrame, name: str = "_scaffold", progress: bool = True
+) -> pl.DataFrame:
+    smiles_list = data[SMILES].to_list()
+    if progress:
+        scaffolds = [get_scaffold(smi) for smi in tqdm(smiles_list, desc="scaffold")]
+    else:
+        scaffolds = [get_scaffold(smi) for smi in smiles_list]
+    return data.with_columns(pl.Series(name=name, values=scaffolds))
 
 
 def scaffold_split(
-    data: pd.DataFrame, proportion: float = 0.8, seed: int = 0, progress: bool = True
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+    data: pl.DataFrame, proportion: float = 0.8, seed: int = 0, progress: bool = True
+) -> Tuple[pl.DataFrame, pl.DataFrame]:
+    """Splits a Polars DataFrame based on Murcko scaffolds."""
     np.random.seed(seed)
     _scaffold_key = "_scaffold"
-    add_scaffold_col(data, _scaffold_key, progress=progress)
-    data = data[~data[_scaffold_key].isna()]
 
-    all_scaffolds = data[_scaffold_key].unique()
+    data = add_scaffold_col(data, _scaffold_key, progress=progress)
+
+    data = data.filter(pl.col(_scaffold_key).is_not_null())
+
+    all_scaffolds = data[_scaffold_key].unique().to_list()
     np.random.shuffle(all_scaffolds)
 
-    train_scaffolds = all_scaffolds[: int(len(all_scaffolds) * 0.8)]
-    df_train = data[data[_scaffold_key].isin(train_scaffolds)]
-    df_test = data[~data[_scaffold_key].isin(train_scaffolds)]
+    split_idx = int(len(all_scaffolds) * proportion)
+    train_scaffolds = set(all_scaffolds[:split_idx])
+
+    df_train = data.filter(pl.col(_scaffold_key).is_in(train_scaffolds))
+    df_test = data.filter(~pl.col(_scaffold_key).is_in(train_scaffolds))
 
     return df_train, df_test
 
 
 def butina_clusters(
-    data: pd.DataFrame,
+    data: pl.DataFrame,
     cutoff: float = 0.2,
     label_col: str = "_butina",
-    smiles_col: str = SMILES,  # keeps the old constant/name flexible
-):
-    """
-    Cluster unique SMILES with Butina and annotate the full DataFrame.
+    smiles_col: str = SMILES,
+) -> pl.DataFrame:
+    uniq_smiles = data.select(pl.col(smiles_col)).unique()[smiles_col].to_numpy()
 
-    Parameters
-    ----------
-    data : pd.DataFrame
-        Your full dataset (may contain duplicate SMILES).
-    cutoff : float, default 0.2
-        Tanimoto cut‑off for Butina clustering.
-    label_col : str, default "_butina"
-        Name of the column that will hold cluster IDs.
-    smiles_col : str, default global `SMILES`
-        Column containing canonical SMILES strings.
-
-    Side effects
-    ------------
-    * Adds/overwrites ``data[label_col]`` with int64 cluster IDs
-      (‑1 for anything that failed fingerprinting).
-    """
-    uniq_smiles = data[smiles_col].drop_duplicates().values
     logger.info(f"Butina: compute {len(uniq_smiles)} fingerprints")
-    fp_list = par_compute_fp(uniq_smiles, target="native")
-    clusters = cluster_fingerprints(fp_list, cutoff=cutoff)
 
-    uniq_labels = np.full(len(uniq_smiles), -1, dtype=np.int64)
+    fp_list = par_compute_fp(uniq_smiles, target="native")
+
+    valid_fp_indices = [i for i, fp in enumerate(fp_list) if fp is not None]
+    valid_fps = [fp_list[i] for i in valid_fp_indices]
+    valid_smiles = [uniq_smiles[i] for i in valid_fp_indices]
+
+    clusters = cluster_fingerprints(valid_fps, cutoff=cutoff)
+
+    uniq_labels = np.full(len(valid_smiles), -1, dtype=np.int64)
     for cid, cluster in enumerate(clusters):
         uniq_labels[list(cluster)] = cid
 
-    smiles_to_cluster = pd.Series(uniq_labels, index=uniq_smiles)
+    smiles_to_cluster = pl.DataFrame({smiles_col: valid_smiles, label_col: uniq_labels})
 
-    data[label_col] = data[smiles_col].map(smiles_to_cluster).astype(np.int64)
+    data = data.join(smiles_to_cluster, on=smiles_col, how="left")
+
+    return data.with_columns(pl.col(label_col).fill_null(-1).cast(pl.Int64))
+
+
+def umap_split(
+    data: pl.DataFrame,
+    n_jobs: int = 6,
+    pca_args: dict = dict(n_components=20),
+    umap_args: dict = dict(n_components=2, n_neighbors=15, min_dist=0.1),
+    cluster_args: dict = dict(n_clusters=5),
+) -> Tuple[pl.DataFrame, pl.DataFrame]:
+    import umap
+
+    logger.info("umap split: compute fingerprints")
+
+    smiles_array = data[SMILES].to_numpy()
+    fp_list = par_compute_fp(smiles_array)
+
+    valid_indices = [i for i, fp in enumerate(fp_list) if fp is not None]
+
+    data = data.take(valid_indices)
+
+    fp_list = [fp_list[i] for i in valid_indices]
+
+    logger.info("umap split: PCA dimensionality reduction")
+    pca = PCA(**pca_args)
+    pcs = pca.fit_transform(np.stack(fp_list))
+
+    logger.info("umap split: UMAP dimensionality reduction")
+    reducer = umap.UMAP(**umap_args)
+    embedding = reducer.fit_transform(pcs)
+
+    logger.info("umap split: Agglomerative clustering")
+    ac = AgglomerativeClustering(**cluster_args)
+    ac.fit_predict(embedding)
+
+    data = data.with_columns(pl.Series(name="_umap", values=ac.labels_))
+
+    return data.filter(pl.col("_umap") != 0), data.filter(pl.col("_umap") == 0)
+
+
+def read_predictions(
+    p: Path,
+    datasets: List[str] = ["omnivore", "landrum", "kinodata"],
+    methods: List[Method] = [Method.IC50, Method.ALLSETS, Method.SETS],
+) -> pl.DataFrame:
+    """Reads prediction files from a directory structure into a single Polars DataFrame."""
+    predictions = []
+
+    read_fn = pl.read_csv
+
+    for run in tqdm(p.iterdir()):
+        preds = run / "predictions.csv.gz"
+        if not preds.exists():
+            preds = run / "predictions.csv"
+        if not preds.exists():
+            logger.warn(f"no predictions file in {run}")
+            continue
+
+        parts = run.name.split("_")
+
+        if len(parts) < 3:
+            logger.warn(f"Run name {run.name} has too few parts; skipping.")
+            continue
+
+        dataset, fold, method_str = parts[:3]
+
+        if dataset not in datasets:
+            continue
+
+        try:
+            method = Method.from_string(method_str)
+        except AttributeError:
+            logger.warn(f"Method {method_str} not recognized; skipping.")
+            continue
+
+        if method not in methods:
+            continue
+
+        try:
+            fold = int(fold)
+        except ValueError:
+            logger.warn(f"Fold part {fold} is not an integer; skipping.")
+            continue
+
+        try:
+            df = pl.read_csv(preds)
+
+        except Exception as e:
+            logger.error(f"Error reading prediction file {preds}: {e}")
+            continue
+
+        df = df.with_columns(
+            [
+                pl.lit(method).alias("method"),
+                pl.lit(fold).alias("fold"),
+                pl.lit(dataset).alias("dataset"),
+                pl.lit(parts[-1] == "coldtgt").alias("coldtgt"),
+            ]
+        )
+
+        predictions.append(df)
+
+    if not predictions:
+        return pl.DataFrame({})
+
+    return pl.concat(predictions)
 
 
 def tanimoto_distance_vector(fp_list):
@@ -297,64 +405,3 @@ def cluster_fingerprints(fingerprints, cutoff=0.2):
         distFunc=TanimotoSimilarity,
     )
     return sorted(clusters, key=len, reverse=True)
-
-
-def umap_split(
-    data: pd.DataFrame,
-    n_jobs: int = 6,
-    pca_args: dict = dict(n_components=20),
-    umap_args: dict = dict(n_components=2, n_neighbors=15, min_dist=0.1),
-    cluster_args: dict = dict(n_clusters=5),
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Adapted from Pat Walters' useful rdkit utils."""
-    import umap
-
-    logger.info("umap split: compute fingerprints")
-    fp_list = par_compute_fp(data[SMILES].values)
-
-    data = data[[fp is not None for fp in fp_list]]
-
-    logger.info("umap split: PCA dimensionality reduction")
-    pca = PCA(**pca_args)
-    pcs = pca.fit_transform(np.stack(fp_list))
-
-    logger.info("umap split: UMAP dimensionality reduction")
-    reducer = umap.UMAP(**umap_args)
-    embedding = reducer.fit_transform(pcs)
-
-    logger.info("umap split: Agglomerative clustering")
-    ac = AgglomerativeClustering(**cluster_args)
-    ac.fit_predict(embedding)
-    data["_umap"] = ac.labels_
-
-    return data[data["_umap"] != 0], data[data["_umap"] == 0]
-
-
-def read_predictions(
-    p: Path,
-    datasets: list[str] = ["omnivore", "landrum", "kinodata"],
-    methods: list[str] = [Method.IC50, Method.ALLSETS, Method.SETS],
-) -> pd.DataFrame:
-    predictions = list()
-    for run in tqdm(p.iterdir()):
-        preds = run / "predictions.csv.gz"
-        if not preds.exists():
-            preds = run / "predictions.csv"
-        if not preds.exists():
-            logger.warn(f"no predictions file in {run}")
-            continue
-        parts = run.name.split("_")
-        dataset, fold, method = parts[:3]
-        if dataset not in datasets:
-            continue
-        method = Method.from_string(method)
-        if method not in methods:
-            continue
-        fold = int(fold)
-        df = pd.read_csv(preds, index_col=0)
-        df["method"] = method
-        df["fold"] = fold
-        df["dataset"] = dataset
-        df["coldtgt"] = parts[-1] == "coldtgt"
-        predictions.append(df)
-    return pd.concat(predictions)

@@ -3,7 +3,7 @@ from pathlib import Path
 from functools import partial
 
 import tqdm
-import pandas as pd
+import polars as pl
 import numpy as np
 import torch
 from torch import nn
@@ -190,10 +190,10 @@ def eval_with_batched_sets(
     for i, col in enumerate(loader.dataset.info_cols):
         content[col] = list(all_info[:, i].flatten())
 
-    prediction_data = pd.DataFrame(content)
+    prediction_data = pl.DataFrame(content)
     if prediction_file is not None:
         logger.info(f"writing predictions to {prediction_file}")
-        prediction_data.to_csv(prediction_file)
+        prediction_data.write_csv(prediction_file)
 
     mean_rank_corr = -1 if rank_corr_fn is None else rank_corr_fn(prediction_data)
 
@@ -282,10 +282,10 @@ def evaluate_epoch(
     for i, col in enumerate(loader.dataset.info_cols):
         content[col] = list(all_info[:, i].flatten())
 
-    prediction_data = pd.DataFrame(content)
+    prediction_data = pl.DataFrame(content)
     if prediction_file is not None:
         logger.info(f"writing predictions to {prediction_file}")
-        prediction_data.to_csv(prediction_file)
+        prediction_data.write_csv(prediction_file)
 
     mean_rank_corr = -1 if rank_corr_fn is None else rank_corr_fn(prediction_data)
     return total_loss, mean_rank_corr
@@ -369,9 +369,7 @@ def train_and_evaluate_model(
         )
 
         optimization.append(Epoch(epoch, lr, train_loss, val_loss, val_rank_corr))
-        pd.DataFrame(optimization).to_csv(
-            OUTPUT / run_name / "optimization.csv", index=False
-        )
+        pl.DataFrame(optimization).write_csv(OUTPUT / run_name / "optimization.csv")
 
         if val_rank_corr > best_corr:
             logger.info("updating test set predictions")

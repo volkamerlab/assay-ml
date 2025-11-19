@@ -1,7 +1,7 @@
-from typing import Callable
+from typing import Callable, Tuple, List
 from joblib import Parallel, delayed
 
-import pandas as pd
+import polars as pl
 import numpy as np
 import torch
 from torch import nn, Tensor
@@ -24,88 +24,99 @@ class AssayRankAccuracy:
     Attributes:
         pair_predictions (bool): Whether predictions are made for pairs of compounds.
         rank_statistic (Callable): Function to calculate rank correlation (default: spearmanr).
-        reference_data (pd.Series): Reference activity data grouped by assay and compound.
+        reference_data (pl.DataFrame): Reference activity data grouped by assay and compound.
     """
 
     def __init__(
         self,
-        reference_data: pd.DataFrame,
+        reference_data: pl.DataFrame,  # Changed to pl.DataFrame
         pair_predictions: bool,
         rank_statistic: Callable = spearmanr,
         fisher: bool = True,
     ):
-        """
-        Initialize the AssayRankAccuracy evaluator.
-
-        Args:
-            reference_data (pd.DataFrame): DataFrame containing reference activity data.
-            pair_predictions (bool): Whether predictions are made for pairs of compounds.
-            rank_statistic (Callable, optional): Function to calculate rank correlation.
-                Defaults to spearmanr from scipy.stats.
-            fisher (bool, optional): Perform a Fisher transform before aggregation.
-        """
         self.pair_predictions = pair_predictions
         self.rank_statistic = rank_statistic
-        self.reference_data = reference_data.groupby([ASSAY, COMPOUND])[ACT].mean()
         self.fisher = fisher
 
-    def __call__(self, prediction_data: pd.DataFrame) -> float:
-        """
-        Calculate weighted average rank correlation across assays in parallel.
+        self.reference_data = (
+            reference_data.group_by(ASSAY, COMPOUND)
+            .agg(pl.col(ACT).mean().alias(ACT))
+            .sort(ASSAY, COMPOUND)
+        )
 
-        Args:
-            prediction_data (pd.DataFrame): DataFrame containing model predictions.
-
-        Returns:
-            float: Weighted average rank correlation across all assays.
-        """
+    def __call__(self, prediction_data: pl.DataFrame) -> float:
         key_sffx = "_a" if self.pair_predictions else ""
+        assay_col = ASSAY + key_sffx
 
-        def process_assay(assay, data, reference_data):
-            # if len(data) <= 4 or assay not in self.reference_data:
-            #     return 0, 0  # No valid data for this assay
-
+        def process_assay(
+            assay: str, data: pl.DataFrame, reference_subset: np.ndarray
+        ) -> Tuple[float, float]:
             scores = assay_ranks(data) if self.pair_predictions else data
-            scores = scores.set_index(COMPOUND)
-            reference = reference_data.reindex(scores.index)
 
-            if len(scores) <= 1 or reference.nunique() <= 1:
-                return 0, 0  # Skip invalid assays
+            compound_list = scores[COMPOUND].to_list()
+            reference_df = self.reference_data.filter(
+                (pl.col(ASSAY) == assay) & (pl.col(COMPOUND).is_in(compound_list))
+            ).sort(COMPOUND)
+
+            scores = scores.sort(COMPOUND)
+
+            merged_data = scores.join(
+                reference_df, on=COMPOUND, how="inner", suffixes=("_pred", "_ref")
+            )
+
+            if len(merged_data) <= 1 or merged_data[ACT].n_unique() <= 1:
+                return 0, 0
 
             try:
-                prediction = scores[PREDICTION].values
-                ground_truth = reference.values
+                prediction = merged_data[PREDICTION].to_numpy()
+                ground_truth = merged_data[ACT].to_numpy()
+
                 corr = self.rank_statistic(prediction, ground_truth).statistic
+
                 if np.isnan(corr):
                     logger.warning(f"rank correlation is nan (assay={assay})")
                     return 0, 0
+
                 if self.fisher:
                     corr = fisher_transform_numpy(corr)
-                    n = len(scores) - 3
+                    n = len(merged_data) - 3  # Degrees of freedom for Fisher transform
+                else:
+                    n = len(merged_data)
+
                 return n * corr, n
+
             except ValueError as e:
                 logger.warning(f"rank correlation failed (assay={assay}): {e}")
-                # logger.warning("\n".join(traceback.format_exc().split("\n")))
                 return 0, 0
 
-        results = Parallel(n_jobs=8)(
-            delayed(process_assay)(assay, data, self.reference_data.loc[assay])
-            for assay, data in [
-                (a, d)
-                for a, d in prediction_data.groupby(ASSAY + key_sffx)
-                if a in self.reference_data and len(d) > 4
-            ]
+        valid_assays = self.reference_data[ASSAY].unique().to_list()
+
+        prediction_data = prediction_data.filter(pl.col(assay_col).is_in(valid_assays))
+
+        groups_list = []
+        for assay, data in prediction_data.group_by(assay_col, maintain_order=True):
+            if len(data) > 4:
+                groups_list.append((assay, data))
+
+        results: List[Tuple[float, float]] = Parallel(n_jobs=8)(
+            delayed(process_assay)(assay, data, None) for assay, data in groups_list
         )
 
+        if not results:
+            return np.nan
+
         corr_sum, count = map(sum, zip(*results))
+
         if count <= 0:
             return np.nan
+
         if self.fisher:
             return np.tanh(corr_sum / count)
+
         return corr_sum / count
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({self.rank_statistic})"
+        return f"{self.__class__.__name__}({self.rank_statistic.__name__})"
 
 
 def fisher_transform_numpy(corr: float) -> float:
@@ -164,22 +175,16 @@ def corr_loss(x: Tensor, y: Tensor) -> float:
     """
     Compute negative Pearson correlation as a loss function.
 
-    Higher correlation results in lower loss. The function handles centering
-    and normalization internally.
-
     Args:
         x (Tensor): First tensor, typically predictions.
         y (Tensor): Second tensor, typically ground truth values.
 
     Returns:
         float: Negative Pearson correlation coefficient.
-
-    Raises:
-        ValueError: If either tensor has zero variance.
     """
     vx = x - torch.mean(x)
     vy = y - torch.mean(y)
     denom = torch.sqrt(torch.sum(vx**2)) * torch.sqrt(torch.sum(vy**2))
     if denom <= 0.0:
-        raise ValueError("zero variance in batch")
+        denom = torch.tensor(1e-8, dtype=torch.float32)
     return -torch.sum(vx * vy) / denom

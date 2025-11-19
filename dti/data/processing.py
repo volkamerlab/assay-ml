@@ -2,9 +2,8 @@ from collections.abc import Iterator, Iterable
 import logging
 from pathlib import Path
 
-import pandas as pd
+import polars as pl
 import numpy as np
-
 
 from sklearn.preprocessing import StandardScaler
 
@@ -26,24 +25,24 @@ logger = logging.getLogger(__name__)
 
 
 def aggregate_multi_measurements(
-    data: pd.DataFrame, keys: Iterable[str] = [COMPOUND, ASSAY]
-) -> pd.DataFrame:
+    data: pl.DataFrame, keys: Iterable[str] = [COMPOUND, ASSAY]
+) -> pl.DataFrame:
     """Aggregate multiple measurements for the same compound and assay.
 
     Args:
-        data (pd.DataFrame): DataFrame containing activity measurements.
+        data (pl.DataFrame): DataFrame containing activity measurements.
 
     Returns:
-        pd.DataFrame: DataFrame with aggregated measurements.
+        pl.DataFrame: DataFrame with aggregated measurements.
     """
-    if TID in data.columns:
-        keys += [TID]
-    logger.debug(f"aggregate multiple measurements per {keys}")
-    non_numeric_cols = data.select_dtypes(exclude=["number"]).columns
-    return (
-        data.groupby(keys, as_index=False)
-        .agg({ACT: "mean", **{col: lambda x: x.iloc[0] for col in non_numeric_cols}})
-        .reset_index()
+    group_keys = list(keys)
+    if TID in data.columns and TID not in group_keys:
+        group_keys.append(TID)
+
+    logger.debug(f"Aggregate multiple measurements per {group_keys}")
+
+    return data.group_by(group_keys).agg(
+        pl.col(ACT).mean(), pl.all().exclude(group_keys + [ACT]).first()
     )
 
 
@@ -64,9 +63,9 @@ def get_overlapping_keys(key_set: set[str], all_keys: np.ndarray) -> set[str]:
     return overlapping
 
 
-def split_kfold_by(data: pd.DataFrame, k: int, column: str, seed: int = 1) -> list:
+def split_kfold_by(data: pl.DataFrame, k: int, column: str, seed: int = 1) -> list:
     """Return the k-fold partitioning of `data[column]` as a list of k arrays."""
-    values = data[column].unique()
+    values = data[column].unique().to_numpy()
     np.random.seed(seed)
     np.random.shuffle(values)
 
@@ -86,17 +85,18 @@ def split_kfold_by(data: pd.DataFrame, k: int, column: str, seed: int = 1) -> li
 
 
 def split_data(
-    data: pd.DataFrame,
+    data: pl.DataFrame,
     target_dir: Path = DATA / "processed",
     k: int = 5,
     random_valset: bool = False,
-    columns: str = [ASSAY],
+    columns: list[str] = [ASSAY],
     random_seed: int = 1,
 ):
     if len(columns) != 1:
         logger.error("split along multiple columns not implemented")
         raise NotImplementedError("split along multiple columns not implemented")
     col = columns[0]
+
     logger.info(f"computing split along {col} and saving to {target_dir}")
     if (target_dir / "0").exists():
         return target_dir
@@ -106,48 +106,55 @@ def split_data(
     for index in range(k):
         split_dir = target_dir / f"{index}"
         split_dir.mkdir()
-        test_data = data[data[col].isin(partition[index])]
-        test_data.to_csv(split_dir / "test.csv")
-        rest = data[~data[col].isin(partition[index])]
 
-        assert set(test_data[col]) & set(rest[col]) == set(), (
+        test_mask = pl.col(col).is_in(partition[index])
+        test_data = data.filter(test_mask)
+        test_data.write_csv(split_dir / "test.csv")
+
+        rest = data.filter(~test_mask)
+
+        test_keys = set(test_data[col].unique().to_list())
+        rest_keys = set(rest[col].unique().to_list())
+        assert test_keys & rest_keys == set(), (
             f"Overlap found between test and rest data in fold {index}"
         )
 
         if random_valset:
             logger.info(f"random validation set for split {index}")
-            idcs = np.arange(len(rest))
-            np.random.shuffle(idcs)
-            split = len(rest) // 8
-            val_data = rest.iloc[idcs[:split]]
-            train_data = rest.iloc[idcs[split:]]
+            rest_shuffled = rest.sample(fraction=1.0, seed=random_seed, shuffle=True)
 
-            val_data.to_csv(split_dir / "val.csv")
-            train_data.to_csv(split_dir / "train.csv")
+            split_point = len(rest_shuffled) // 8
+            val_data = rest_shuffled.slice(0, split_point)
+            train_data = rest_shuffled.slice(split_point, len(rest_shuffled))
 
-            assert set(val_data.index) & set(train_data.index) == set(), (
-                f"Overlap found between train and val indices in fold {index}"
-            )
-
+            val_data.write_csv(split_dir / "val.csv")
+            train_data.write_csv(split_dir / "train.csv")
         else:
             logger.info(f"col-split validation set for split {index}")
             val_fold_idx = (index + 1) % k
             val_assays = partition[val_fold_idx][: len(partition[val_fold_idx]) // 2]
 
-            val_data = rest[rest[col].isin(val_assays)]
-            train_data = rest[~rest[col].isin(val_assays)]
+            val_mask = pl.col(col).is_in(val_assays)
+            val_data = rest.filter(val_mask)
+            train_data = rest.filter(~val_mask)
 
-            val_data.to_csv(split_dir / "val.csv")
-            train_data.to_csv(split_dir / "train.csv")
+            val_data.write_csv(split_dir / "val.csv")
+            train_data.write_csv(split_dir / "train.csv")
 
-            assert set(val_data[col]) & set(train_data[col]) == set(), (
+            val_keys = set(val_data[col].unique().to_list())
+            train_keys = set(train_data[col].unique().to_list())
+
+            assert val_keys & train_keys == set(), (
                 f"Overlap found between train and val data in fold {index}"
             )
 
-        assert set(test_data[col]) & set(val_data[col]) == set(), (
+        val_keys_check = set(val_data[col].unique().to_list())
+        train_keys_check = set(train_data[col].unique().to_list())
+
+        assert test_keys & val_keys_check == set(), (
             f"Overlap found between test and val data in fold {index}"
         )
-        assert set(test_data[col]) & set(train_data[col]) == set(), (
+        assert test_keys & train_keys_check == set(), (
             f"Overlap found between test and train data in fold {index}"
         )
 
@@ -161,25 +168,34 @@ def load_split(
     inter_assay_weight: float | None = None,
     scale_scores: bool = False,
     scale_targets: bool = True,
-) -> tuple[pd.DataFrame, pd.DataFrame | None, pd.DataFrame, pd.DataFrame]:
+) -> tuple[pl.DataFrame, pl.DataFrame | None, pl.DataFrame, pl.DataFrame]:
     split_dir = data_dir / f"{index}"
     logger.info(f"reading dataset from {split_dir}")
+    val_data = pl.read_csv(split_dir / "val.csv")
+    train_data = pl.read_csv(split_dir / "train.csv")
+    test_data = pl.read_csv(split_dir / "test.csv")
 
-    val_data = pd.read_csv(split_dir / "val.csv", index_col=0, low_memory=False)
-    train_data = pd.read_csv(split_dir / "train.csv", index_col=0, low_memory=False)
-    test_data = pd.read_csv(split_dir / "test.csv", index_col=0, low_memory=False)
+    for df in [val_data, train_data, test_data]:
+        if "Unnamed: 0" in df.columns:
+            df.drop_in_place("Unnamed: 0")
 
     if scale_targets:
         scaler = StandardScaler()
-        train_data[tgt_name] = scaler.fit_transform(
-            train_data[ACT].values.reshape(-1, 1)
-        )
-        test_data[tgt_name] = scaler.transform(test_data[ACT].values.reshape(-1, 1))
-        val_data[tgt_name] = scaler.transform(val_data[ACT].values.reshape(-1, 1))
+        train_vals = train_data[ACT].to_numpy().reshape(-1, 1)
+        scaler.fit(train_vals)
+
+        def transform_and_attach(df, col_name):
+            vals = df[ACT].to_numpy().reshape(-1, 1)
+            scaled = scaler.transform(vals).flatten()
+            return df.with_columns(pl.Series(col_name, scaled))
+
+        train_data = transform_and_attach(train_data, tgt_name)
+        test_data = transform_and_attach(test_data, tgt_name)
+        val_data = transform_and_attach(val_data, tgt_name)
     else:
-        train_data[tgt_name] = train_data[ACT]
-        test_data[tgt_name] = test_data[ACT]
-        val_data[tgt_name] = val_data[ACT]
+        train_data = train_data.with_columns(pl.col(ACT).alias(tgt_name))
+        test_data = test_data.with_columns(pl.col(ACT).alias(tgt_name))
+        val_data = val_data.with_columns(pl.col(ACT).alias(tgt_name))
 
     if inter_assay_weight is not None:
         train_data = _load_hodge_ranking(
@@ -192,38 +208,48 @@ def load_split(
 def _load_hodge_ranking(
     split_dir: Path,
     inter_assay_weight: float,
-    train_data: pd.DataFrame,
+    train_data: pl.DataFrame,
     scale_scores: bool,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     logger.info("reading Hodge rank data")
+
     hodge_file = split_dir / f"train_hodge_lam{inter_assay_weight:.2f}.csv"
     if not hodge_file.exists():
         logger.info("no cached Hodge ranking")
-        hodge_df = parallel_hodge_rank(
-            train_data, inter_assay_weight, scale_scores=False
+
+        train_pd = train_data.to_pandas()
+        hodge_df_pd = parallel_hodge_rank(
+            train_pd, inter_assay_weight, scale_scores=False
         )
+        hodge_df = pl.from_pandas(hodge_df_pd)
+
         merge_keys = [SMILES]
-        if TID in train_data:
+        if TID in train_data.columns:
             merge_keys.append(TID)
-        train_data = train_data.merge(
+
+        train_data = train_data.join(
             hodge_df,
             on=merge_keys,
             how="inner",
         )
-        train_data.to_csv(hodge_file)
+        train_data.write_csv(hodge_file)
     else:
         logger.info(f"cached Hodge ranking data at {hodge_file}")
-        train_data = pd.read_csv(hodge_file, index_col=0)
+        cached_hodge = pl.read_csv(hodge_file)
+        if "Unnamed: 0" in cached_hodge.columns:
+            cached_hodge = cached_hodge.drop("Unnamed: 0")
+        train_data = cached_hodge
 
     if scale_scores:
-        scores = StandardScaler().fit_transform(train_data[HODGE].values.reshape(-1, 1))
-        train_data[HODGE] = scores.flatten()
+        scores_np = train_data[HODGE].to_numpy().reshape(-1, 1)
+        scores = StandardScaler().fit_transform(scores_np).flatten()
+        train_data = train_data.with_columns(pl.Series(HODGE, scores))
 
     return train_data
 
 
 def prepare_datasets(
-    data: pd.DataFrame,
+    data: pl.DataFrame,
     data_dir: Path,
     k: int,
     inter_assay_weight: float | None = None,
@@ -231,7 +257,7 @@ def prepare_datasets(
     aggregate: bool = True,
     columns: list[str] = [ASSAY],
 ) -> Iterator[
-    tuple[int, pd.DataFrame, pd.DataFrame | None, pd.DataFrame, pd.DataFrame]
+    tuple[int, pl.DataFrame, pl.DataFrame | None, pl.DataFrame, pl.DataFrame]
 ]:
     """Prepare train, validation, and test datasets."""
     logger.info(f"split along {columns}")
@@ -240,30 +266,55 @@ def prepare_datasets(
     split_data(data, data_dir, columns=columns, k=k, random_valset=random_valset)
 
 
-def _process(data, col_map):
-    assert all(k in data.columns for k in col_map.keys()), data.columns
-    backup_cols = {v: v + "_orig" for k, v in col_map.items() if k != v}
-    col_map.update(backup_cols)
-    data = data.rename(columns=col_map)
-    data = data[~data[SMILES].isna()]
-    data = data[~data[ACT].isna()]
+def _process(data: pl.DataFrame, col_map: dict) -> pl.DataFrame:
+    existing_cols = set(data.columns)
+    assert all(k in existing_cols for k in col_map.keys()), (
+        f"{data.columns} missing keys from {col_map.keys()}"
+    )
+
+    expressions = []
+    for k, v in col_map.items():
+        if k != v:
+            expressions.append(
+                pl.col(v).alias(v + "_orig") if v in existing_cols else None
+            )
+
+    # Filter out Nones from expressions list
+    expressions = [e for e in expressions if e is not None]
+    if expressions:
+        data = data.with_columns(expressions)
+
+    data = data.rename(col_map)
+
+    data = data.filter(pl.col(SMILES).is_not_null())
+    data = data.filter(pl.col(ACT).is_not_null())
+
     if SEQUENCE in data.columns:
-        data = data[~data[SEQUENCE].isna()]
+        data = data.filter(pl.col(SEQUENCE).is_not_null())
+
     return data
 
 
 def load_kinodata(
     kinodata_path: Path = DATA / "raw" / "activities-chembl33_v0.5.csv",
     activity_types: list[str] = ["pIC50"],
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     logger.info(f"loading kinodata activities from {kinodata_path}")
-    data = pd.read_csv(kinodata_path, index_col=0)
-    data = data[data["activities.standard_type"].isin(activity_types)]
-    data = data[~data["compound_structures.canonical_smiles"].isna()]
+    data = pl.read_csv(kinodata_path)
 
-    # strip CHEMBL prefixes
-    data[ASSAY] = data["assays.chembl_id"].str[6:].astype(int)
-    data[COMPOUND] = data["molecule_dictionary.chembl_id"].str[6:].astype(int)
+    data = data.filter(pl.col("activities.standard_type").is_in(activity_types))
+    data = data.filter(pl.col("compound_structures.canonical_smiles").is_not_null())
+
+    data = data.with_columns(
+        [
+            pl.col("assays.chembl_id").str.slice(6).cast(pl.Int64).alias(ASSAY),
+            pl.col("molecule_dictionary.chembl_id")
+            .str.slice(6)
+            .cast(pl.Int64)
+            .alias(COMPOUND),
+        ]
+    )
+
     return _process(
         data,
         {
@@ -276,9 +327,9 @@ def load_kinodata(
     )
 
 
-def load_landrum(landrum_path: Path = DATA / "raw" / "landrum.csv") -> pd.DataFrame:
+def load_landrum(landrum_path: Path = DATA / "raw" / "landrum.csv") -> pl.DataFrame:
     logger.info(f"loading data from {landrum_path}")
-    data = pd.read_csv(landrum_path, index_col=0)
+    data = pl.read_csv(landrum_path)
     return _process(
         data,
         {
@@ -292,9 +343,9 @@ def load_landrum(landrum_path: Path = DATA / "raw" / "landrum.csv") -> pd.DataFr
     )
 
 
-def load_activities(path: Path = DATA / "raw" / "activities.csv") -> pd.DataFrame:
+def load_activities(path: Path = DATA / "raw" / "activities.csv") -> pl.DataFrame:
     logger.info(f"loading activities from {path}")
-    data = pd.read_csv(path)
+    data = pl.read_csv(path)
     return _process(
         data,
         {
@@ -308,11 +359,15 @@ def load_activities(path: Path = DATA / "raw" / "activities.csv") -> pd.DataFram
     )
 
 
-def load_nci(path: Path = DATA / "raw" / "atcc.csv") -> pd.DataFrame:
+def load_nci(path: Path = DATA / "raw" / "atcc.csv") -> pl.DataFrame:
     logger.info(f"loading NCI ATCC data from {path}")
-    data = pd.read_csv(path, index_col=0)
-    assay_ids = {exp: i for i, exp in enumerate(data["EXPID"].unique())}
-    data[ASSAY] = data["EXPID"].map(assay_ids.get)
+    data = pl.read_csv(path)
+
+    unique_exp = data["EXPID"].unique()
+    mapping_df = pl.DataFrame({"EXPID": unique_exp, ASSAY: np.arange(len(unique_exp))})
+
+    data = data.join(mapping_df, on="EXPID", how="left")
+
     return _process(
         data,
         {
@@ -323,9 +378,9 @@ def load_nci(path: Path = DATA / "raw" / "atcc.csv") -> pd.DataFrame:
     )
 
 
-def load_solubility(path: Path = DATA / "raw" / "solubility.csv") -> pd.DataFrame:
+def load_solubility(path: Path = DATA / "raw" / "solubility.csv") -> pl.DataFrame:
     logger.info("loading ChEMBL solubility data")
-    data = pd.read_csv(path)
+    data = pl.read_csv(path)
     return _process(
         data,
         {
@@ -337,9 +392,9 @@ def load_solubility(path: Path = DATA / "raw" / "solubility.csv") -> pd.DataFram
     )
 
 
-def load_lipo(path: Path = DATA / "raw" / "lipo.csv") -> pd.DataFrame:
+def load_lipo(path: Path = DATA / "raw" / "lipo.csv") -> pl.DataFrame:
     logger.info(f"loading ChEMBL data from {path}")
-    data = pd.read_csv(path)
+    data = pl.read_csv(path)
     return _process(
         data,
         {
@@ -351,9 +406,9 @@ def load_lipo(path: Path = DATA / "raw" / "lipo.csv") -> pd.DataFrame:
     )
 
 
-def load_clearance(path: Path = DATA / "raw" / "clearance.csv") -> pd.DataFrame:
+def load_clearance(path: Path = DATA / "raw" / "clearance.csv") -> pl.DataFrame:
     logger.info("loading ChEMBL solubility data")
-    data = pd.read_csv(path)
+    data = pl.read_csv(path)
     return _process(
         data,
         {
@@ -367,10 +422,10 @@ def load_clearance(path: Path = DATA / "raw" / "clearance.csv") -> pd.DataFrame:
 
 def load_chembl_endpoints(
     path: Path = DATA / "raw" / "chembl_endpoints_processed.csv.gz",
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     logger.info("loading general ChEMBL endpoints")
-    data = pd.read_csv(path, index_col=False)
-    assert data["compound_id"].dtype == int
+    data = pl.read_csv(path)
+    assert data["compound_id"].dtype == pl.Int64
     return _process(
         data,
         {
@@ -386,10 +441,10 @@ def load_chembl_endpoints(
 
 def load_chembl_endpoints_protein(
     path: Path = DATA / "raw" / "chembl_endpoints_protein_processed.csv.gz",
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     logger.info("loading general ChEMBL protein endpoints")
-    data = pd.read_csv(path, index_col=False)
-    assert data["compound_id"].dtype == int
+    data = pl.read_csv(path)
+    assert data["compound_id"].dtype == pl.Int64
     return _process(
         data,
         {
