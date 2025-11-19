@@ -183,6 +183,9 @@ class BinDistribution(nn.Module):
     def dist(self, class_labels: torch.Tensor) -> torch.Tensor:
         return F.one_hot(class_labels, num_classes=self.n_bins).float()
 
+    def nll(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
+        return -self.log_prob(y, logits)
+
     def log_prob(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
         bucket_idcs = self.labels(y)
         bucket_log_ps = F.log_softmax(logits, dim=-1)
@@ -232,7 +235,7 @@ class BinDistribution(nn.Module):
 
         return log_ps
 
-    def wasserstein(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
+    def emd(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
         probs = F.softmax(logits, dim=-1)
         true_bins = self.labels(y)
         one_hot = F.one_hot(true_bins, num_classes=self.n_bins).float()

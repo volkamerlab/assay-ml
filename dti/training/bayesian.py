@@ -70,7 +70,7 @@ class MetricTracker:
         self.sums["NLL"] += nll
         self.counts["NLL"] += n_masked
 
-        wass = self.bd.wasserstein(masked_normed, masked_preds).sum().item()
+        wass = self.bd.emd(masked_normed, masked_preds).sum().item()
         self.sums["EMD"] += wass
         self.counts["EMD"] += n_masked
 
@@ -230,7 +230,7 @@ def train_and_evaluate_pfn_model(
     )
 
     best_loss = float("inf")
-    epochs_without_improvement = 0
+    no_imprv = 0
     optimization = []
 
     for epoch in range(opts["num_epochs"]):
@@ -239,10 +239,11 @@ def train_and_evaluate_pfn_model(
             train_loader,
             optimizer,
             unmasked_weight=opts.get("unmasked_weight", 1.0),
+            loss_fn=opts["objective"],
         )
 
         val_results = evaluate_with_batched_masked_sets(model, val_loader)
-        val_loss = val_results["NLL"]
+        val_loss = val_results["loss"]
 
         results = (
             {f"training loss": training_loss}
@@ -264,11 +265,13 @@ def train_and_evaluate_pfn_model(
         if val_loss < best_loss:
             logger.info("validation improved, saving model.")
             best_loss = val_loss
-            epochs_without_improvement = 0
+            no_imprv = 0
             torch.save(model.state_dict(), OUTPUT / run_name / "model.pt")
         else:
-            epochs_without_improvement += 1
-            if epochs_without_improvement >= opts["patience_termination"]:
+            no_imprv += 1
+            logger.info(f"{no_imprv} epochs without improvement.")
+            logger.info(f"Best validation loss: {best_loss:.4e}")
+            if no_imprv >= opts["patience_termination"]:
                 logger.info(f"early stopping triggered after {epoch + 1} epochs.")
                 break
 
@@ -301,8 +304,8 @@ def train_with_batched_masked_sets(
     bd = model.bin_dist
 
     if not hasattr(bd, loss_fn):
-        raise ValueError(f"invalid loss function '{loss_fn}'")
-    logger.info(f"loss function: {loss_fn}")
+        raise ValueError(f"Invalid loss function '{loss_fn}'")
+    logger.info(f"Loss function: {loss_fn}")
     calc_loss = getattr(bd, loss_fn)
 
     tracker = MetricTracker(bd, compute_correlations=False)
@@ -360,13 +363,16 @@ def train_with_batched_masked_sets(
 
 @torch.no_grad()
 def evaluate_with_batched_masked_sets(
-    model,
-    loader,
-    predictions_file=None,
+    model, loader, predictions_file=None, loss_fn: str = "nll"
 ):
     model.eval()
     model_device = next(model.parameters()).device
     bd = model.bin_dist
+
+    if not hasattr(bd, loss_fn):
+        raise ValueError(f"invalid loss function '{loss_fn}'")
+    logger.info(f"loss function: {loss_fn}")
+    calc_loss = getattr(bd, loss_fn)
 
     tracker = MetricTracker(bd, compute_correlations=True)
 
@@ -385,7 +391,15 @@ def evaluate_with_batched_masked_sets(
             num_sets,
         ) = _process_batch(batch, model, bd, model_device, is_train=False)
 
-        tracker.update(preds, normed_labels, query_mask, set_boundaries, num_sets)
+        loss_val = calc_loss(normed_labels, preds)[query_mask].mean()
+        tracker.update(
+            preds,
+            normed_labels,
+            query_mask,
+            set_boundaries,
+            num_sets,
+            loss_val=loss_val,
+        )
 
         if save_preds:
             all_info.append(info.cpu())

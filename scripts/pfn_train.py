@@ -190,6 +190,7 @@ def run_split(
     property_set_ratio: float,
     n_bins: int,
     normalization: str = "minmax",
+    objective: str = "nll",
 ):
     num_epochs = 1000
     info_cols = [IDENT, COMPOUND, ASSAY]
@@ -212,7 +213,7 @@ def run_split(
         case MolFingerprint.GRAPH:
             model_cls = GraphMoleculeBayesianSetRankModel
         case MolFingerprint.ALL:
-            model_cls = EarlyFusionAllMoleculeBayesianSetRankModel
+            model_cls = AllMoleculeBayesianSetRankModel
         case _:
             model_cls = MoleculeBayesianSetRankModel
 
@@ -238,7 +239,8 @@ def run_split(
         n_bins=n_bins,
         deg=getattr(train_loader.dataset, "deg_histogram", None),
         normalization=normalization,
-        lr=(1e-5 if MolFingerprint(mol_feat).graph_based else 5e-5),
+        lr=5e-5,
+        objective=objective,
     )
 
     train_and_evaluate_pfn_model(*args, **kwargs)
@@ -284,6 +286,10 @@ def main():
         default="minmax",
         help="Normalization mode either 'minmax' or 'zscore'. (default: 'minmax')",
     )
+    valid_obj = ["nll", "cspr", "wasserstein", "emd"]
+    parser.add_argument(
+        "--obj", type=str, default="nll", help=f"Training objective {valid_obj}"
+    )
 
     args = parser.parse_args()
 
@@ -301,6 +307,14 @@ def main():
         f"unmasked-weight={args.unmasked_weight}"
     )
 
+    objective = args.obj.lower()
+    if objective not in valid_obj:
+        raise ValueError(
+            f"Invalid training objective '{objective}'. Must be one of {valid_obj}"
+        )
+    if objective == "wasserstein":
+        objective = "emd"
+
     if args.norm not in ["minmax", "zscore"]:
         raise ValueError(
             f"Unknown normalization method: {args.norm}.Should be 'minmax' or 'zscore'"
@@ -315,6 +329,7 @@ def main():
         args.property_set_ratio,
         args.n_bins,
         normalization=args.norm,
+        objective=objective,
     )
 
 

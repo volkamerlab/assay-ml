@@ -979,7 +979,7 @@ class ResettingBatchSampler(Sampler):
 
 
 def _estimate_degree_histogram(
-    smiles_list, count_h_atoms=False, sample_size=10_000, max_deg=5
+    smiles_list, count_h_atoms=False, sample_size=1_000_000, max_deg=5
 ):
     logger.info(f"Estimating degree histogram from a subsample of {sample_size}...")
 
