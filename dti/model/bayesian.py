@@ -41,7 +41,7 @@ class MoleculeBayesianSetRankModel(Module):
         self.n_bins = n_bins
         self.bin_dist = BinDistribution(
             n_bins=n_bins,
-            exp_tails=False,
+            tail_type="none",
             normalization=normalization,
         )
         self.distribution_encoder = Sequential(

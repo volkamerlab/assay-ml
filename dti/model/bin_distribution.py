@@ -1,47 +1,54 @@
+from functools import cached_property
+
 import torch
 from torch.nn import functional as F
 from torch import nn
-
 import tqdm.auto as tqdm
-
-
-from ..utils import device
-
+import numpy as np
 import logging
+from ..utils import device
 
 logger = logging.getLogger(__name__)
 
 
 class BinDistribution(nn.Module):
-    """Bin distribution with empirical quantile bins fitted to z-score normalized data."""
-
     def __init__(
         self,
         n_bins: int,
-        exp_tails: bool = True,
-        tail_percentile: float = 0.5,
+        tail_type: str = "exponential",
+        tail_bound_prob: float | None = None,
         normalization: str = "zscore",
     ):
-        """
-        Args:
-            n_bins: Number of bins for discretization
-            exp_tails: Whether to use exponential/half-normal tails
-            tail_percentile: Percentile for fitting tail scale (higher = wider tails)
-            normalization: Which normalization to use (zscore, minmax)
-        """
         super().__init__()
         self.n_bins = n_bins
-        self.exp_tails = exp_tails
-        self.tail_percentile = tail_percentile
+
+        assert tail_type in ["none", "exponential", "half_normal"]
+        self.tail_type = tail_type
+
+        if tail_type != "none":
+            if tail_bound_prob is None:
+                self.tail_bound_prob = 2 / n_bins
+            else:
+                self.tail_bound_prob = tail_bound_prob
+        else:
+            self.tail_bound_prob = 0.0
+
         self.device_str = device
-        self._side_normals = None
         assert normalization in ["zscore", "minmax"]
         self.normalization = normalization
-        logger.info(
-            f"bin distribution {'with' if self.exp_tails else 'without'} exponential tails and '{self.normalization}' normalization"
-        )
 
         self.register_buffer("edges", torch.linspace(0, 1, n_bins + 1, device=device))
+
+        self.register_buffer("tail_scales", torch.tensor([1.0, 1.0], device=device))
+
+        logger.info(
+            f"BinDistribution initialized: {n_bins} bins, "
+            f"tail_type='{self.tail_type}', tail_prob={self.tail_bound_prob}"
+        )
+
+    @cached_property
+    def bounded_support(self) -> bool:
+        return self.tail_type == "none"
 
     @torch.no_grad()
     def fit(self, loader, max_samples: int = 1_000_000):
@@ -62,24 +69,23 @@ class BinDistribution(nn.Module):
             set_boundaries = metadata["set_boundaries"].squeeze()
             num_sets = metadata["num_sets"]
             if isinstance(num_sets, torch.Tensor):
-                num_sets = metadata["num_sets"].squeeze().item()
+                num_sets = num_sets.squeeze().item()
+
             real_assay = metadata["real_assay"].squeeze()
+            labels = labels.squeeze()[real_assay].to(device)
+            set_ids = metadata["set_ids_tensor"].to(device).squeeze()[real_assay]
 
-            labels = labels.squeeze()
-            labels = labels[real_assay].to(device)
+            num_sets_tensor = set_ids.max().item() + 1
 
-            set_ids = metadata["set_ids_tensor"].to(device)
-            set_ids = set_ids.squeeze()[real_assay]
-
-            num_sets = set_ids.max().item() + 1
-
-            sum_per_set = torch.zeros(num_sets, device=device).scatter_add_(
+            sum_per_set = torch.zeros(num_sets_tensor, device=device).scatter_add_(
                 0, set_ids, labels
             )
-            count_per_set = torch.bincount(set_ids, minlength=num_sets).to(device)
+            count_per_set = torch.bincount(set_ids, minlength=num_sets_tensor).to(
+                device
+            )
             mean_per_set = sum_per_set / count_per_set.clamp_min(1)
 
-            var_per_set = torch.zeros(num_sets, device=device).scatter_add_(
+            var_per_set = torch.zeros(num_sets_tensor, device=device).scatter_add_(
                 0, set_ids, (labels - mean_per_set[set_ids]) ** 2
             )
             std_per_set = (
@@ -87,148 +93,193 @@ class BinDistribution(nn.Module):
             )
 
             normed_labels = (labels - mean_per_set[set_ids]) / std_per_set[set_ids]
-
             all_normed_values.append(normed_labels)
 
         all_normed = torch.cat(all_normed_values)
         all_normed = all_normed[torch.isfinite(all_normed)]
+
         if all_normed.numel() > max_samples:
             idx = torch.randperm(all_normed.numel(), device=device)[
                 :max_samples
             ]
             all_normed = all_normed[idx]
 
-        probabilities = torch.linspace(0, 1, self.n_bins + 1).to(device)
+        p_lower = self.tail_bound_prob
+        p_upper = 1.0 - self.tail_bound_prob
 
-        quantiles = torch.quantile(all_normed, probabilities)
-
+        probabilities = torch.linspace(p_lower, p_upper, self.n_bins + 1).to(device)
+        quantiles = torch.quantile(all_normed, probabilities).to(device)
         self.edges.copy_(quantiles)
 
-        if self.exp_tails:
-            self._init_side_normals()
+        if self.tail_type != "none":
+            left_boundary = self.edges[0]
+            right_boundary = self.edges[-1]
+
+            left_tail_data = all_normed[all_normed < left_boundary]
+            right_tail_data = all_normed[all_normed > right_boundary]
+
+            self._fit_single_tail(left_tail_data, left_boundary, is_left=True)
+            self._fit_single_tail(right_tail_data, right_boundary, is_left=False)
 
         logger.info(
             f"Fitted {self.n_bins} bins with edges: "
             f"[{self.edges[0]:.3f}, ..., {self.edges[-1]:.3f}]"
         )
-        logger.info(
-            f"Median bin width: {(self.edges[1:] - self.edges[:-1]).median():.3f}"
-        )
+        if self.tail_type != "none":
+            logger.info(
+                f"Tail Scales ({self.tail_type}): Left={self.tail_scales[0]:.3f}, "
+                f"Right={self.tail_scales[1]:.3f}"
+            )
 
         if prop_set_ratio is not None and hasattr(loader.dataset, "property_set_ratio"):
             loader.dataset.property_set_ratio = prop_set_ratio
+
+    def _fit_single_tail(self, data: torch.Tensor, boundary: float, is_left: bool):
+        idx = 0 if is_left else 1
+
+        if data.numel() < 2:
+            fallback_width = (
+                (self.edges[1] - self.edges[0])
+                if is_left
+                else (self.edges[-1] - self.edges[-2])
+            )
+            self.tail_scales[idx] = fallback_width
+            logger.warning(
+                f"{'Left' if is_left else 'Right'} tail has insufficient data. "
+                f"Using fallback scale: {fallback_width:.3f}"
+            )
+            return
+
+        distances = (boundary - data) if is_left else (data - boundary)
+        distances = distances.clamp_min(1e-6)
+
+        if self.tail_type == "exponential":
+            scale = distances.mean()
+        elif self.tail_type == "half_normal":
+            scale = torch.sqrt(distances.pow(2).mean())
+        else:
+            scale = torch.tensor(1.0, device=device)
+
+        self.tail_scales[idx] = scale
 
     @property
     def widths(self):
         return self.edges[1:] - self.edges[:-1]
 
-    def _init_side_normals(self):
-        """Initialize half-normal distributions for the tails."""
-        self._side_normals = (
-            self._halfnormal(self.widths[0].item(), p=self.tail_percentile),
-            self._halfnormal(self.widths[-1].item(), p=self.tail_percentile),
-        )
-
-        logger.info(
-            f"Initialized tail distributions with scales: "
-            f"left={self._side_normals[0].scale:.3f}, right={self._side_normals[1].scale:.3f}"
-        )
-
-    @staticmethod
-    def _halfnormal(
-        range_max: float, p: float = 0.75
-    ) -> torch.distributions.Distribution:
-        """
-        Create a half-normal distribution scaled so that P(X <= range_max) = p.
-
-        Args:
-            range_max: The value at which CDF should equal p
-            p: Target cumulative probability at range_max
-        """
-        if range_max <= 0:
-            range_max = 1e-8
-
-        standard_half_normal = torch.distributions.HalfNormal(torch.tensor(1.0))
-        scale = range_max / standard_half_normal.icdf(torch.tensor(p))
-
-        return torch.distributions.HalfNormal(scale.item())
+    @property
+    def effective_widths(self):
+        w = self.widths.clone()
+        if self.tail_type != "none":
+            w[0] = self.tail_scales[0]
+            w[-1] = self.tail_scales[1]
+        return w
 
     def labels(self, y: torch.Tensor) -> torch.Tensor:
         bucket_indices = torch.searchsorted(self.edges, y) - 1
-
         bucket_indices[y == self.edges[0]] = 0
         bucket_indices[y == self.edges[-1]] = self.n_bins - 1
-
-        bucket_indices = bucket_indices.clamp(0, self.n_bins - 1)
-
-        return bucket_indices.long()
+        return bucket_indices.clamp(0, self.n_bins - 1).long()
 
     def dist(self, class_labels: torch.Tensor) -> torch.Tensor:
         return F.one_hot(class_labels, num_classes=self.n_bins).float()
-
-    def wasserstein(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
-        probs = F.softmax(logits, dim=-1)
-
-        true_bins = self.labels(y)
-        one_hot = F.one_hot(true_bins, num_classes=self.n_bins).float()
-
-        cdf_pred = torch.cumsum(probs, dim=-1)
-        cdf_true = torch.cumsum(one_hot, dim=-1)
-
-        wass = torch.sum(torch.abs(cdf_pred - cdf_true) * self.widths, dim=-1)
-
-        total_width = (self.edges[-1] - self.edges[0]).clamp_min(1e-6)
-        wass = wass / total_width
-
-        return wass
-
-    def crps(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
-        probs = F.softmax(logits, dim=-1)
-
-        true_bins = self.labels(y)
-        one_hot = F.one_hot(true_bins, num_classes=self.n_bins).float()
-
-        cdf_pred = torch.cumsum(probs, dim=-1)
-        cdf_true = torch.cumsum(one_hot, dim=-1)
-
-        crps = torch.sum((cdf_pred - cdf_true).pow(2) * self.widths, dim=-1)
-
-        return crps
-
-    def nll(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
-        return -self.log_prob(y, logits)
 
     def log_prob(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
         bucket_idcs = self.labels(y)
         bucket_log_ps = F.log_softmax(logits, dim=-1)
 
-        scaled_log_ps = bucket_log_ps - torch.log(self.widths.clamp_min(1e-8))
+        scaled_log_ps = bucket_log_ps - torch.log(self.effective_widths.clamp_min(1e-8))
         log_ps = scaled_log_ps.gather(-1, bucket_idcs.unsqueeze(-1)).squeeze(-1)
 
-        if self.exp_tails and self._side_normals is not None:
-            left_mask = bucket_idcs == 0
-            right_mask = bucket_idcs == self.n_bins - 1
+        if self.tail_type == "none":
+            return log_ps
 
-            if left_mask.any():
-                y_left = y[left_mask]
+        left_mask = bucket_idcs == 0
+        right_mask = bucket_idcs == self.n_bins - 1
 
-                distances = (self.edges[0] - y_left).clamp(min=0.0)
-                tail_log_density = self._side_normals[0].log_prob(distances + 1e-8)
-                log_ps[left_mask] = bucket_log_ps[left_mask, 0] + tail_log_density
+        if left_mask.any():
+            y_sub = y[left_mask]
+            dist = (self.edges[0] - y_sub).clamp(min=0.0)
+            scale = self.tail_scales[0]
 
-            if right_mask.any():
-                y_right = y[right_mask]
-                distances = (y_right - self.edges[-1]).clamp(min=0.0)
-                tail_log_density = self._side_normals[1].log_prob(distances + 1e-8)
-                log_ps[right_mask] = bucket_log_ps[right_mask, -1] + tail_log_density
+            log_p_bin = bucket_log_ps[left_mask, 0]
+
+            if self.tail_type == "exponential":
+                tail_log_pdf = -torch.log(scale + 1e-8) - (dist / scale)
+            elif self.tail_type == "half_normal":
+                const = 0.5 * np.log(2 / np.pi)
+                tail_log_pdf = (
+                    const - torch.log(scale + 1e-8) - 0.5 * (dist / scale).pow(2)
+                )
+
+            log_ps[left_mask] = log_p_bin + tail_log_pdf
+
+        if right_mask.any():
+            y_sub = y[right_mask]
+            dist = (y_sub - self.edges[-1]).clamp(min=0.0)
+            scale = self.tail_scales[1]
+
+            log_p_bin = bucket_log_ps[right_mask, -1]
+
+            if self.tail_type == "exponential":
+                tail_log_pdf = -torch.log(scale + 1e-8) - (dist / scale)
+            elif self.tail_type == "half_normal":
+                const = 0.5 * np.log(2 / np.pi)
+                tail_log_pdf = (
+                    const - torch.log(scale + 1e-8) - 0.5 * (dist / scale).pow(2)
+                )
+
+            log_ps[right_mask] = log_p_bin + tail_log_pdf
 
         return log_ps
 
+    def wasserstein(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
+        probs = F.softmax(logits, dim=-1)
+        true_bins = self.labels(y)
+        one_hot = F.one_hot(true_bins, num_classes=self.n_bins).float()
+
+        cdf_pred = torch.cumsum(probs, dim=-1)
+        cdf_true = torch.cumsum(one_hot, dim=-1)
+
+        wass = torch.sum(torch.abs(cdf_pred - cdf_true) * self.effective_widths, dim=-1)
+
+        total_width = self.edges[-1] - self.edges[0]
+        if self.tail_type != "none":
+            total_width = total_width + self.tail_scales.sum()
+
+        wass = wass / total_width.clamp_min(1e-6)
+        return wass
+
+    def crps(self, y: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
+        probs = F.softmax(logits, dim=-1)
+        true_bins = self.labels(y)
+        one_hot = F.one_hot(true_bins, num_classes=self.n_bins).float()
+
+        cdf_pred = torch.cumsum(probs, dim=-1)
+        cdf_true = torch.cumsum(one_hot, dim=-1)
+
+        crps = torch.sum((cdf_pred - cdf_true).pow(2) * self.effective_widths, dim=-1)
+        return crps
+
     def bucket_centers(self) -> torch.Tensor:
-        return (self.edges[:-1] + self.edges[1:]) / 2
+        centers = (self.edges[:-1] + self.edges[1:]) / 2
+
+        if self.tail_type == "none":
+            return centers
+
+        if self.tail_type == "exponential":
+            left_offset = self.tail_scales[0]
+            right_offset = self.tail_scales[1]
+        elif self.tail_type == "half_normal":
+            factor = np.sqrt(2 / np.pi)
+            left_offset = self.tail_scales[0] * factor
+            right_offset = self.tail_scales[1] * factor
+
+        centers[0] = self.edges[0] - left_offset
+        centers[-1] = self.edges[-1] + right_offset
+
+        return centers
 
     def moment(self, logits: torch.Tensor, n: float = 1.0):
-        """Compute the n-th moment of the distribution."""
         loc = self.bucket_centers()
         probs = F.softmax(logits, dim=-1)
         return (probs * (loc.pow(n))).sum(dim=-1)
@@ -248,8 +299,8 @@ class BinDistribution(nn.Module):
         if isinstance(q, float):
             q = torch.tensor([q])
         q = q.clamp(1e-6, 1 - 1e-6)
-        assert q.dim() == 1, "Expected 1D tensor of quantiles"
-        assert logits.dim() == 2, "Expected 2D tensor of logits"
+        assert q.dim() == 1
+        assert logits.dim() == 2
         q = q.to(logits.device)
 
         probs = F.softmax(logits, dim=-1)
@@ -264,8 +315,10 @@ class BinDistribution(nn.Module):
         )
         P_left = zero_padded_cumprobs.gather(-1, left_index)
         P_right = zero_padded_cumprobs.gather(-1, right_index)
-        loc_left = self.edges[left_index]
-        loc_right = self.edges[right_index]
+
+        loc_left = self.edges[left_index.clamp(max=self.n_bins - 1)]
+        loc_right = self.edges[right_index.clamp(max=self.n_bins)]
+
         slope = (q - P_left) / (P_right - P_left).clamp(min=1e-8)
         xq = loc_left + slope * (loc_right - loc_left)
         return xq
