@@ -305,13 +305,7 @@ def main():
     run_name = f"chembl_{mol_feat}_{args.fold}_pfn_{job_id}"
     init_logging(run_name)
     logger = logging.getLogger(run_name)
-    logger.info(
-        f"seed={args.seed} "
-        f"fold={args.fold} "
-        f"n_bins={args.n_bins} "
-        f"prop-set-ratio={args.property_set_ratio} "
-        f"unmasked-weight={args.unmasked_weight}"
-    )
+    logger.info(f"CLI arguments: {' '.join(f'{k}={v}' for k, v in vars(args).items())}")
 
     objective = args.obj.lower()
     if objective not in valid_obj:
