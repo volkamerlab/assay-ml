@@ -189,8 +189,7 @@ def run_split(
     unmasked_weight: float,
     property_set_ratio: float,
     n_bins: int,
-    normalization: str = "minmax",
-    objective: str = "nll",
+    **kwargs,
 ):
     num_epochs = 1000
     info_cols = [IDENT, COMPOUND, ASSAY]
@@ -238,9 +237,7 @@ def run_split(
         unmasked_weight=unmasked_weight,
         n_bins=n_bins,
         deg=getattr(train_loader.dataset, "deg_histogram", None),
-        normalization=normalization,
-        lr=5e-5,
-        objective=objective,
+        **kwargs,
     )
 
     train_and_evaluate_pfn_model(*args, **kwargs)
@@ -286,9 +283,18 @@ def main():
         default="minmax",
         help="Normalization mode either 'minmax' or 'zscore'. (default: 'minmax')",
     )
+    parser.add_argument(
+        "--lr", type=float, default="1e-5", help="Initial learning rate. (default=1e-5)"
+    )
     valid_obj = ["nll", "cspr", "wasserstein", "emd"]
     parser.add_argument(
         "--obj", type=str, default="nll", help=f"Training objective {valid_obj}"
+    )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=0.05,
+        help="Dropout probability. (default: 0.05)",
     )
 
     args = parser.parse_args()
@@ -319,6 +325,9 @@ def main():
         raise ValueError(
             f"Unknown normalization method: {args.norm}.Should be 'minmax' or 'zscore'"
         )
+
+    if args.dropout < 0 or args.dropout > 1:
+        raise ValueError(f"Invalid dropout probability {args.dropout}")
     set_random_seeds(args.seed)
 
     run_split(
@@ -330,6 +339,8 @@ def main():
         args.n_bins,
         normalization=args.norm,
         objective=objective,
+        lr=args.lr,
+        p_dropout=args.dropout,
     )
 
 
