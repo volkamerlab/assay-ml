@@ -7,6 +7,7 @@ import os
 
 import numpy as np
 import torch
+from torch import nn
 from torch.utils.data import DataLoader
 
 from dti.model.bayesian import (
@@ -296,6 +297,9 @@ def main():
         default=0.05,
         help="Dropout probability. (default: 0.05)",
     )
+    parser.add_argument(
+        "--act", type=str, default="GELU", help="Activation function. (default: 'GELU')"
+    )
 
     args = parser.parse_args()
 
@@ -324,6 +328,11 @@ def main():
         raise ValueError(f"Invalid dropout probability {args.dropout}")
     set_random_seeds(args.seed)
 
+    if not hasattr(nn, args.act):
+        raise ValueError(f"Activation function '{args.act}' not found in `torch.nn`.")
+    else:
+        act = getattr(nn, args.act)
+
     run_split(
         run_name,
         mol_feat,
@@ -335,6 +344,7 @@ def main():
         objective=objective,
         lr=args.lr,
         p_dropout=args.dropout,
+        act=act,
     )
 
 
