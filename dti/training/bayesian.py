@@ -2,7 +2,7 @@ from typing import Type, Any, Dict, Optional
 from collections import defaultdict
 
 import tqdm
-import polars as pd
+import polars as pl
 import numpy as np
 import torch
 from torch import nn
@@ -243,7 +243,9 @@ def train_and_evaluate_pfn_model(
             loss_fn=opts["objective"],
         )
 
-        val_results = evaluate_with_batched_masked_sets(model, val_loader)
+        val_results = evaluate_with_batched_masked_sets(
+            model, val_loader, loss_fn=opts["objective"]
+        )
         val_loss = val_results["loss"]
 
         scheduler.step(val_loss)
@@ -283,6 +285,7 @@ def train_and_evaluate_pfn_model(
     test_results = evaluate_with_batched_masked_sets(
         model,
         test_loader,
+        loss_fn=opts["objective"],
         predictions_file=OUTPUT / run_name / "predictions.npz",
     )
     logger.info("Final test set performance:")
@@ -305,7 +308,7 @@ def train_with_batched_masked_sets(
 ):
     model.train()
     model_device = next(model.parameters()).device
-    logger.info(f"training with unmasked_weight={unmasked_weight}")
+    logger.info(f"Training with unmasked_weight={unmasked_weight}")
 
     bd = model.bin_dist
 

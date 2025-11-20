@@ -286,7 +286,7 @@ def main():
     parser.add_argument(
         "--lr", type=float, default="1e-5", help="Initial learning rate. (default=1e-5)"
     )
-    valid_obj = ["nll", "cspr", "wasserstein", "emd"]
+    valid_obj = ["nll", "crps", "wasserstein", "emd"]
     parser.add_argument(
         "--obj", type=str, default="nll", help=f"Training objective {valid_obj}"
     )
