@@ -74,6 +74,10 @@ class MetricTracker:
         self.sums["EMD"] += wass
         self.counts["EMD"] += n_masked
 
+        crps = self.bd.crps(masked_normed, masked_preds).sum().item()
+        self.sums["CRPS"] += crps
+        self.counts["CRPS"] += n_masked
+
         pred_mean = self.bd.mean(masked_preds)
         mae = (pred_mean - masked_normed).abs().sum().item()
         self.sums["MAE"] += mae
