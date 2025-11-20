@@ -201,11 +201,11 @@ def train_and_evaluate_pfn_model(
     index: int,
     **kwargs: Dict[str, Any],
 ) -> None:
-    logger.info(f"training model for target: {target_name}")
+    logger.info(f"Training model for target: {target_name}")
 
     opts: Dict[str, Any] = _defaults | kwargs
 
-    logger.info("training options:")
+    logger.info("Training options:")
     for k, v in opts.items():
         logger.info(f" - {k}={v}")
 
@@ -231,6 +231,7 @@ def train_and_evaluate_pfn_model(
 
     best_loss = float("inf")
     no_imprv = 0
+    best_epoch = 0
     optimization = []
 
     for epoch in range(opts["num_epochs"]):
@@ -245,35 +246,38 @@ def train_and_evaluate_pfn_model(
         val_results = evaluate_with_batched_masked_sets(model, val_loader)
         val_loss = val_results["loss"]
 
+        scheduler.step(val_loss)
+
+        logger.info(f"epoch: {epoch + 1}")
+
         results = (
             {f"training loss": training_loss}
             | {f"val {k}": v for k, v in val_results.items()}
             | {"lr": scheduler.get_last_lr()[0]}
         )
-
-        scheduler.step(val_loss)
-
-        logger.info(f"epoch: {epoch + 1}")
-        for metric, value in results.items():
-            logger.info(f" {metric}: {value:.4e}")
-
         optimization.append(results)
         pl.DataFrame(optimization).write_csv(OUTPUT / run_name / "optimization.csv")
 
         if val_loss < best_loss:
-            logger.info("validation improved, saving model.")
+            logger.info(f"Validation improved, saving model. (epoch: {epoch + 1})")
             best_loss = val_loss
+            best_epoch = epoch + 1
             no_imprv = 0
             torch.save(model.state_dict(), OUTPUT / run_name / "model.pt")
+            results = {k.replace("val", "best val"): v for k, v in results.items()}
         else:
             no_imprv += 1
-            logger.info(f"{no_imprv} epochs without improvement.")
-            logger.info(f"Best validation loss: {best_loss:.4e}")
-            if no_imprv >= opts["patience_termination"]:
-                logger.info(f"early stopping triggered after {epoch + 1} epochs.")
+            pat_term = opts["patience_termination"]
+            logger.info(
+                f"{no_imprv} epochs without improvement. Remaining patience: {pat_term - no_imprv}"
+            )
+            if no_imprv >= pat_term:
+                logger.info(f"Early stopping triggered after {epoch + 1} epochs.")
                 break
+        _log_results(results, "")
+        logger.info(f"Best validation loss: {best_loss:.4e} in epoch {best_epoch}.")
 
-    logger.info("loading best model for final test evaluation...")
+    logger.info("Loading best model for final test evaluation...")
     model.load_state_dict(torch.load(OUTPUT / run_name / "model.pt"))
 
     test_results = evaluate_with_batched_masked_sets(
@@ -281,9 +285,13 @@ def train_and_evaluate_pfn_model(
         test_loader,
         predictions_file=OUTPUT / run_name / "predictions.npz",
     )
-    logger.info("final test set performance:")
-    for metric, value in test_results.items():
-        logger.info(f" test {metric}: {value:.4e}")
+    logger.info("Final test set performance:")
+    _log_results(test_results, test)
+
+
+def _log_results(results: dict[str, float], name: str):
+    for metric, value in results.items():
+        logger.info(f" {name} {metric}: {value:.4e}")
 
 
 def train_with_batched_masked_sets(
