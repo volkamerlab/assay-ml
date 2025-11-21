@@ -27,6 +27,7 @@ _defaults = dict(
     patience_termination=30,
     patience_lr=10,
     lr=5e-5,
+    test=True,
 )
 
 
@@ -283,6 +284,8 @@ def train_and_evaluate_pfn_model(
         _log_results(results, "")
         logger.info(f"Best validation loss: {best_loss:.4e} in epoch {best_epoch}.")
 
+    if not opts["test"]:
+        return
     logger.info("Loading best model for final test evaluation...")
     model.load_state_dict(torch.load(OUTPUT / run_name / "model.pt"))
 

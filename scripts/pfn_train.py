@@ -187,12 +187,10 @@ def run_split(
     run_name: str,
     mol_feat: str,
     fold: int,
-    unmasked_weight: float,
     property_set_ratio: float,
     n_bins: int,
     **kwargs,
 ):
-    num_epochs = 1000
     info_cols = [IDENT, COMPOUND, ASSAY]
 
     (
@@ -231,11 +229,9 @@ def run_split(
     kwargs = dict(
         ligand_dim=ligand_dim,
         multi_batch=False,
-        num_epochs=num_epochs,
         patience_termination=patience * 2,
         patience_lr=patience,
         fisher_transform=False,
-        unmasked_weight=unmasked_weight,
         n_bins=n_bins,
         deg=getattr(train_loader.dataset, "deg_histogram", None),
         **kwargs,
@@ -285,7 +281,10 @@ def main():
         help="Normalization mode either 'minmax' or 'zscore'. (default: 'minmax')",
     )
     parser.add_argument(
-        "--lr", type=float, default="1e-5", help="Initial learning rate. (default=1e-5)"
+        "--lr",
+        type=float,
+        default="1e-5",
+        help="Initial learning rate. (default: 1e-5)",
     )
     valid_obj = ["nll", "crps", "wasserstein", "emd"]
     parser.add_argument(
@@ -299,6 +298,18 @@ def main():
     )
     parser.add_argument(
         "--act", type=str, default="GELU", help="Activation function. (default: 'GELU')"
+    )
+    parser.add_argument(
+        "--num-epochs",
+        type=int,
+        default=10_000,
+        help="Maximum number of training epochs. (default: 10000)",
+    )
+    parser.add_argument(
+        "--test",
+        type=bool,
+        default=True,
+        help="Apply the best model by validation to the test set after optimization. (default: True)",
     )
 
     args = parser.parse_args()
@@ -333,18 +344,25 @@ def main():
     else:
         act = getattr(nn, args.act)
 
+    if args.num_epochs < 1:
+        raise ValueError(
+            f"The number of training epochs ({args.num_epochs}) has to be greater than 1."
+        )
+
     run_split(
         run_name,
         mol_feat,
         args.fold,
-        args.unmasked_weight,
         args.property_set_ratio,
         args.n_bins,
+        unmasked_weight=args.unmasked_weight,
         normalization=args.norm,
         objective=objective,
         lr=args.lr,
         p_dropout=args.dropout,
         act=act,
+        num_epochs=args.num_epochs,
+        test=args.test,
     )
 
 
