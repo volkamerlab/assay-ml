@@ -12,4 +12,17 @@ export GRAPH_CACHE_DIR=/tmp/graph_cache
 mkdir -p "$GRAPH_CACHE_DIR"
 mkdir -p "$CACHE_DIR"
 
-uv run $1 --num-epochs 100 --test False --fold $2 --seed 0 --n-bins $3 --mol-feat $4 --unmasked-weight $5 --property-set-ratio $6 --norm $7 --dropout $8 --lr $9 --obj ${10} --act ${11}
+uv run $1 \
+  --seed 0 \
+  --no-test \
+  --num-epochs 100 \
+  --fold $2 \
+  --n-bins $3 \
+  --mol-feat $4 \
+  --unmasked-weight $5 \
+  --property-set-ratio $6 \
+  --norm $7 \
+  --dropout $8 \
+  --lr $9 \
+  --obj ${10} \
+  --act ${11}

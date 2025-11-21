@@ -306,10 +306,9 @@ def main():
         help="Maximum number of training epochs. (default: 10000)",
     )
     parser.add_argument(
-        "--test",
-        type=bool,
-        default=True,
-        help="Apply the best model by validation to the test set after optimization. (default: True)",
+        "--no-test",
+        action="store_true",
+        help="Do not apply the best model to the test set after optimization.",
     )
 
     args = parser.parse_args()
@@ -362,7 +361,7 @@ def main():
         p_dropout=args.dropout,
         act=act,
         num_epochs=args.num_epochs,
-        test=args.test,
+        test=not args.no_test,
     )
 
 
