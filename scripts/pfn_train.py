@@ -5,7 +5,6 @@ import traceback
 from pathlib import Path
 import os
 
-import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
@@ -14,7 +13,6 @@ from dti.model.bayesian import (
     MoleculeBayesianSetRankModel,
     GraphMoleculeBayesianSetRankModel,
     AllMoleculeBayesianSetRankModel,
-    EarlyFusionAllMoleculeBayesianSetRankModel,
 )
 from dti.data.dataset import (
     PropertySetDataset,

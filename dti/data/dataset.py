@@ -18,7 +18,6 @@ from .featurization import MolFingerprint, esm2_features
 from ..utils.constants import (
     SMILES,
     ACT,
-    TID,
     ASSAY,
     INTRA_ASSAY_TEST,
 )

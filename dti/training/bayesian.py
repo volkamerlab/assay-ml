@@ -6,6 +6,7 @@ import polars as pl
 import numpy as np
 import torch
 from torch import nn
+from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 import logging
@@ -229,7 +230,7 @@ def train_and_evaluate_pfn_model(
     with open(OUTPUT / run_name / "bin_dist", "w") as f_bins:
         f_bins.write(f"{','.join([str(x.item()) for x in model.bin_dist.edges])}")
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=opts["lr"], weight_decay=1e-2)
+    optimizer = AdamW(model.parameters(), lr=opts["lr"], weight_decay=1e-2)
     scheduler = CosineAnnealingLR(
         optimizer,
         T_max=opts["num_epochs"],
@@ -257,7 +258,7 @@ def train_and_evaluate_pfn_model(
             model, val_loader, loss_fn=opts["objective"]
         )
         results = (
-            {f"training loss": training_loss}
+            {"training loss": training_loss}
             | {f"val {k}": v for k, v in val_results.items()}
             | {"lr": scheduler.get_last_lr()[0]}
         )
@@ -293,7 +294,7 @@ def train_and_evaluate_pfn_model(
     if not opts.get("test"):
         return
 
-    logger.info("\n=== Starting Comprehensive Test Evaluation ===")
+    logger.info("=== Starting Comprehensive Test Evaluation ===")
 
     for metric_name in metrics_to_monitor:
         model_path = OUTPUT / run_name / f"model_best_{metric_name}.pt"
@@ -403,7 +404,6 @@ def evaluate_with_batched_masked_sets(
 
     if not hasattr(bd, loss_fn):
         raise ValueError(f"invalid loss function '{loss_fn}'")
-    logger.info(f"loss function: {loss_fn}")
     calc_loss = getattr(bd, loss_fn)
 
     tracker = MetricTracker(bd, compute_correlations=True)
