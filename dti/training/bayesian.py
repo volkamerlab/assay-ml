@@ -6,7 +6,7 @@ import polars as pl
 import numpy as np
 import torch
 from torch import nn
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 import logging
 from scipy.stats import spearmanr, pearsonr
@@ -24,8 +24,6 @@ _defaults = dict(
     embedding_size=512,
     hidden_channels=512,
     num_epochs=500,
-    patience_termination=30,
-    patience_lr=10,
     lr=5e-5,
     test=True,
 )
@@ -204,6 +202,12 @@ def train_and_evaluate_pfn_model(
     test_loader: DataLoader,
     target_name: str,
     index: int,
+    metrics_to_monitor: dict = {
+        "MAE": "min",
+        "Pearson": "max",
+        "NLL": "min",
+        "CRPS": "min",
+    },
     **kwargs: Dict[str, Any],
 ) -> None:
     logger.info(f"Training model for target: {target_name}")
@@ -225,21 +229,22 @@ def train_and_evaluate_pfn_model(
     with open(OUTPUT / run_name / "bin_dist", "w") as f_bins:
         f_bins.write(f"{','.join([str(x.item()) for x in model.bin_dist.edges])}")
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=opts["lr"])
-    scheduler = ReduceLROnPlateau(
+    optimizer = torch.optim.AdamW(model.parameters(), lr=opts["lr"], weight_decay=1e-2)
+    scheduler = CosineAnnealingLR(
         optimizer,
-        mode="min",
-        factor=0.5,
-        patience=opts["patience_lr"],
-        cooldown=opts["patience_lr"],
+        T_max=opts["num_epochs"],
+        eta_min=opts.get("min_lr", 1e-6),
     )
 
-    best_loss = float("inf")
-    no_imprv = 0
-    best_epoch = 0
+    best_metrics = {
+        k: (float("inf") if v == "min" else float("-inf"))
+        for k, v in metrics_to_monitor.items()
+    }
+
     optimization = []
 
     for epoch in range(opts["num_epochs"]):
+        logger.info(f" == Epoch: {epoch + 1} == ")
         training_loss = train_with_batched_masked_sets(
             model,
             train_loader,
@@ -251,12 +256,6 @@ def train_and_evaluate_pfn_model(
         val_results = evaluate_with_batched_masked_sets(
             model, val_loader, loss_fn=opts["objective"]
         )
-        val_loss = val_results["loss"]
-
-        scheduler.step(val_loss)
-
-        logger.info(f"epoch: {epoch + 1}")
-
         results = (
             {f"training loss": training_loss}
             | {f"val {k}": v for k, v in val_results.items()}
@@ -265,43 +264,60 @@ def train_and_evaluate_pfn_model(
         optimization.append(results)
         pl.DataFrame(optimization).write_csv(OUTPUT / run_name / "optimization.csv")
 
-        if val_loss < best_loss:
-            logger.info(f"Validation improved, saving model. (epoch: {epoch + 1})")
-            best_loss = val_loss
-            best_epoch = epoch + 1
-            no_imprv = 0
-            torch.save(model.state_dict(), OUTPUT / run_name / "model.pt")
-            results = {k.replace("val", "best val"): v for k, v in results.items()}
-        else:
-            no_imprv += 1
-            pat_term = opts["patience_termination"]
-            logger.info(
-                f"{no_imprv} epochs without improvement. Remaining patience: {pat_term - no_imprv}"
-            )
-            if no_imprv >= pat_term:
-                logger.info(f"Early stopping triggered after {epoch + 1} epochs.")
-                break
-        _log_results(results, "")
-        logger.info(f"Best validation loss: {best_loss:.4e} in epoch {best_epoch}.")
+        scheduler.step()
 
-    if not opts["test"]:
+        saved_tags = []
+        for metric_name, mode in metrics_to_monitor.items():
+            if metric_name in val_results:
+                current_val = val_results[metric_name]
+                best_val = best_metrics[metric_name]
+
+                is_better = (
+                    (current_val < best_val)
+                    if mode == "min"
+                    else (current_val > best_val)
+                )
+
+                if is_better:
+                    best_metrics[metric_name] = current_val
+                    save_path = OUTPUT / run_name / f"model_best_{metric_name}.pt"
+                    torch.save(model.state_dict(), save_path)
+                    saved_tags.append(f"{metric_name}: {current_val:.4f}")
+
+        if saved_tags:
+            logger.info(f"Checkpoints updated: {', '.join(saved_tags)}")
+
+        for metric, value in results.items():
+            logger.info(f" {metric}: {value:.4e}")
+
+    if not opts.get("test"):
         return
-    logger.info("Loading best model for final test evaluation...")
-    model.load_state_dict(torch.load(OUTPUT / run_name / "model.pt"))
 
-    test_results = evaluate_with_batched_masked_sets(
-        model,
-        test_loader,
-        loss_fn=opts["objective"],
-        predictions_file=OUTPUT / run_name / "predictions.npz",
-    )
-    logger.info("Final test set performance:")
-    _log_results(test_results, test)
+    logger.info("\n=== Starting Comprehensive Test Evaluation ===")
 
+    for metric_name in metrics_to_monitor:
+        model_path = OUTPUT / run_name / f"model_best_{metric_name}.pt"
 
-def _log_results(results: dict[str, float], name: str):
-    for metric, value in results.items():
-        logger.info(f" {name} {metric}: {value:.4e}")
+        if model_path.exists():
+            logger.info(
+                f"Loading Best {metric_name} Model (Val {best_metrics[metric_name]:.4f})..."
+            )
+            model.load_state_dict(torch.load(model_path))
+
+            test_results = evaluate_with_batched_masked_sets(
+                model,
+                test_loader,
+                loss_fn=opts["objective"],
+                predictions_file=OUTPUT
+                / run_name
+                / f"predictions_best_{metric_name}.npz",
+            )
+
+            logger.info(f"Test Results for Model Best {metric_name}:")
+            for metric, value in test_results.items():
+                logger.info(f" test {metric}: {value:.4e}")
+        else:
+            logger.warning(f"No checkpoint found for Best {metric_name}.")
 
 
 def train_with_batched_masked_sets(

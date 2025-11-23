@@ -224,13 +224,9 @@ def run_split(
         METHOD,
         fold,
     ]
-    # patience increases logarithmically with n_bins and linearly with prop set ratio
-    patience = int(np.log10(n_bins) * 10 * (1 + property_set_ratio) + 5)
     kwargs = dict(
         ligand_dim=ligand_dim,
         multi_batch=False,
-        patience_termination=patience * 2,
-        patience_lr=patience,
         fisher_transform=False,
         n_bins=n_bins,
         deg=getattr(train_loader.dataset, "deg_histogram", None),
@@ -310,6 +306,12 @@ def main():
         action="store_true",
         help="Do not apply the best model to the test set after optimization.",
     )
+    parser.add_argument(
+        "--min-lr",
+        type=float,
+        default=1e-6,
+        help="Minimal learning rate at the final epoch. (default: 1e-6)",
+    )
 
     args = parser.parse_args()
 
@@ -348,6 +350,9 @@ def main():
             f"The number of training epochs ({args.num_epochs}) has to be greater than 1."
         )
 
+    if args.min_lr < 0:
+        raise ValueError(f"Minimum learning rate {args.min_lr:.2e} < 0.")
+
     run_split(
         run_name,
         mol_feat,
@@ -362,6 +367,7 @@ def main():
         act=act,
         num_epochs=args.num_epochs,
         test=not args.no_test,
+        min_lr=args.min_lr,
     )
 
 
