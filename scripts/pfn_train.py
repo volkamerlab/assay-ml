@@ -114,7 +114,7 @@ def prepare_dataset_splits(
 
     train_dataset = dataset_cls(
         train_data,
-        max_batch_datapoints=2560,
+        max_batch_datapoints=3072,
         max_set_size=1024,
         shuffle_within_target=False,
         property_set_ratio=property_set_ratio,
