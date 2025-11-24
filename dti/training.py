@@ -458,7 +458,6 @@ def train_and_evaluate_model(
     train_fn, eval_fn, criterion = opts["train_fn"], opts["eval_fn"], opts["criterion"]
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=opts["lr"])
-
     scheduler = ReduceLROnPlateau(
         optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
     )
