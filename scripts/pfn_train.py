@@ -240,63 +240,84 @@ def main():
     torch.cuda.empty_cache()
 
     parser = argparse.ArgumentParser(
-        description="Run PFN (MoleculeBayesianSetRankModel) training on ChEMBL."
+        description="Run PFN (MoleculeBayesianSetRankModel) training on ChEMBL.",
+        # suggest_on_error=True,  # only in 3.14
     )
-    parser.add_argument("--fold", type=int, required=True, help="Fold number")
-    parser.add_argument("--seed", type=int, default=1, help="Random seed (default: 1)")
+    parser.add_argument(
+        "--fold", type=int, required=True, help="Fold number", metavar="int"
+    )
+    parser.add_argument(
+        "--seed", type=int, default=1, help="Random seed (default: 1)", metavar="int"
+    )
     parser.add_argument(
         "--mol-feat",
         type=str,
         default="morgan",
         help="Molecular features (default: morgan)",
+        choices=list(map(str, MolFingerprint)),
     )
     parser.add_argument(
         "--unmasked-weight",
         type=float,
         default=0.0,
+        metavar="float",
         help="Weight of reconstruction on unmasked samples. (default: 0.0)",
     )
     parser.add_argument(
         "--property-set-ratio",
         type=float,
         default=0.5,
+        metavar="float",
         help="Proportion of physiochemical property sets during training. (default: 0.5)",
     )
     parser.add_argument(
         "--n-bins",
         type=int,
         default=100,
+        metavar="int",
         help="Number of bins in bin distribution. (default: 100)",
     )
     parser.add_argument(
         "--norm",
         type=str,
         default="minmax",
-        help="Normalization mode either 'minmax' or 'zscore'. (default: 'minmax')",
+        choices=["minmax", "zscore"],
+        help="Normalization mode. (default: 'minmax')",
     )
     parser.add_argument(
         "--lr",
         type=float,
         default="1e-5",
+        metavar="float",
         help="Initial learning rate. (default: 1e-5)",
     )
     valid_obj = ["nll", "crps", "wasserstein", "emd"]
     parser.add_argument(
-        "--obj", type=str, default="nll", help=f"Training objective {valid_obj}"
+        "--obj",
+        type=str,
+        default="nll",
+        help=f"Training objective. (default: 'nll')",
+        choices=valid_obj,
     )
     parser.add_argument(
         "--dropout",
         type=float,
         default=0.05,
+        metavar="float",
         help="Dropout probability. (default: 0.05)",
     )
     parser.add_argument(
-        "--act", type=str, default="GELU", help="Activation function. (default: 'GELU')"
+        "--act",
+        type=str,
+        metavar="fname",
+        default="GELU",
+        help="Activation function from `torch.nn`. (default: 'GELU')",
     )
     parser.add_argument(
         "--num-epochs",
         type=int,
         default=10_000,
+        metavar="int",
         help="Maximum number of training epochs. (default: 10000)",
     )
     parser.add_argument(
@@ -308,6 +329,7 @@ def main():
         "--min-lr",
         type=float,
         default=1e-6,
+        metavar="float",
         help="Minimal learning rate at the final epoch. (default: 1e-6)",
     )
 
@@ -322,10 +344,6 @@ def main():
     logger.info(f"CLI arguments: {' '.join(f'{k}={v}' for k, v in vars(args).items())}")
 
     objective = args.obj.lower()
-    if objective not in valid_obj:
-        raise ValueError(
-            f"Invalid training objective '{objective}'. Must be one of {valid_obj}"
-        )
     if objective == "wasserstein":
         objective = "emd"
 
