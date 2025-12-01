@@ -65,3 +65,12 @@ def make_block_diag_mask(set_ids: Tensor, num_heads: int = None) -> Tensor:
         mask = mask.unsqueeze(0).expand(num_heads, -1, -1)  # (num_heads, N, N)
 
     return mask.to(device)
+
+
+def unstack_block_diagonal_tensor(x: Tensor, set_ids: Tensor) -> list[Tensor]:
+    end_index = torch.bincount(set_ids).cumsum(0).long()
+    start_index = torch.cat((torch.zeros(1), end_index[:-1]), dim=0).long()
+    return [
+        x[..., slice(i, j), slice(i, j)]
+        for i, j in zip(start_index.tolist(), end_index.tolist())
+    ]

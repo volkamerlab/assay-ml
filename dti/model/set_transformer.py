@@ -42,29 +42,35 @@ class MHABlock(Module):
         )
         self.ln1 = LayerNorm(hidden_channels)
         self.ln2 = LayerNorm(hidden_channels)
+        self.need_weights(False)
+
+    def need_weights(self, mode: bool = True):
+        self._need_weights = mode
 
     def forward(
         self,
         x: Tensor,
         y: Tensor | None = None,
         attn_mask: Tensor | None = None,
-        need_weights: bool = False,
     ) -> Tensor:
         if y is None:
             y = x
-        x_, attn_weights = self.attn(x, y, y, attn_mask=attn_mask, need_weights=True)
+        x_, attn_weights = self.attn(
+            x,
+            y,
+            y,
+            attn_mask=attn_mask,
+            need_weights=self._need_weights,
+            average_attn_weights=False,
+        )
         x = self.ln1(x + x_)
         x = self.ln2(x + self.ffn(x))
-        if need_weights:
-            return x, attn_weights
         return x
 
 
 class SetAttentionBlock(MHABlock):
-    def forward(
-        self, x: Tensor, attn_mask: Tensor | None = None, need_weights: bool = False
-    ) -> Tensor:
-        return super().forward(x, attn_mask=attn_mask, need_weights=need_weights)
+    def forward(self, x: Tensor, attn_mask: Tensor | None = None) -> Tensor:
+        return super().forward(x, attn_mask=attn_mask)
 
 
 class SetTransformer(Module):
@@ -100,6 +106,12 @@ class SetTransformer(Module):
                         for _ in range(num_blocks)
                     ]
                 )
+        self.need_weights(False)
+
+    def need_weights(self, mode: bool = True):
+        self._need_weights = mode
+        for block in self.blocks:
+            block.need_weights(mode)
 
     def forward(
         self,
