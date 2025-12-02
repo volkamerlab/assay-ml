@@ -11,6 +11,7 @@ cd $HOME/assay-ml
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export CACHE_DIR=/scratch/chair_volkamer/michael.backenkoehler/cache
 export GRAPH_CACHE_DIR=/tmp/graph_cache
+export GRAPH_CACHE_DIR=/scratch/chair_volkamer/michael.backenkoehler/molgraphs
 mkdir -p "$GRAPH_CACHE_DIR"
 mkdir -p "$CACHE_DIR"
 
@@ -26,4 +27,5 @@ uv run $1 \
   --lr $9 \
   --obj ${10} \
   --act ${11} \
-  --num-epochs ${12}
+  --num-epochs ${12} \
+  --min-lr 5e-6
