@@ -14,6 +14,10 @@ requirements = (GPUs_Capability >= 7.0) && (GPUs_GlobalMemoryMb >= 16000)
 +WantGPUHomeMounted = true
 +WantScratchMounted = true
 queue fold, script, n_bins, mol_feat, unmasked_weight, physcem, norm, dropout, lr, obj, act, num_epochs from (
-  0, scripts/pfn_train.py, 100, allfp, 0, 0.25, minmax, 0.0, 5e-5, nll, GELU, 150
-  0, scripts/pfn_train.py, 1000, allfp, 0, 0.25, minmax, 0.05, 5e-5, crps, GELU, 120
+  0, scripts/pfn_train.py, 100, allfp, 0, 0.25, minmax, 0.0, 5e-5, nll, GELU, 200
+  1, scripts/pfn_train.py, 100, allfp, 0, 0.25, minmax, 0.0, 5e-5, nll, GELU, 200
+  2, scripts/pfn_train.py, 100, allfp, 0, 0.25, minmax, 0.0, 5e-5, nll, GELU, 200
+  3, scripts/pfn_train.py, 100, allfp, 0, 0.25, minmax, 0.0, 5e-5, nll, GELU, 200
+  4, scripts/pfn_train.py, 100, allfp, 0, 0.25, minmax, 0.0, 5e-5, nll, GELU, 200
+  0, scripts/pfn_train.py, 1000, allfp, 0, 0.25, minmax, 0.05, 5e-5, crps, GELU, 170
 )
