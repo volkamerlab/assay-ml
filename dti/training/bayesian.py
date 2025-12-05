@@ -1,6 +1,7 @@
-from typing import Type, Any, Dict, Optional
+import copy
+import logging
+from typing import Type, Any, Dict, Optional, List, Tuple
 from collections import defaultdict
-
 import tqdm
 import polars as pl
 import numpy as np
@@ -9,13 +10,12 @@ from torch import nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
-import logging
-from scipy.stats import spearmanr, pearsonr
 from numpy import tanh, arctanh
 
 from ..model.bin_distribution import BinDistribution
 from ..utils import device
 from ..utils.constants import OUTPUT
+from .metrics import MetricTracker, EnsembleMetricTracker
 
 logger = logging.getLogger(__name__)
 
@@ -27,172 +27,362 @@ _defaults = dict(
     num_epochs=500,
     lr=5e-5,
     test=True,
+    ensemble_size=3,
+    unlabeled_ratio=2,
+    consistency_weight=1.0,
 )
 
 
-class MetricTracker:
-    def __init__(self, bin_dist: BinDistribution, compute_correlations: bool = False):
-        self.bd = bin_dist
-        self.compute_corr = compute_correlations
+class UnlabeledDatasource:
+    def __init__(self, feature_dim: int):
+        self.feature_dim = feature_dim
 
-        self.sums = defaultdict(float)
-        self.counts = defaultdict(float)
+    def get_batch(self, n_samples: int) -> torch.Tensor:
+        return torch.randn(n_samples, self.feature_dim, device=device)
 
-        self.total_sse = 0.0
-        self.total_sst = 0.0
 
-        self.z_rho_sum = 0.0
-        self.z_r_sum = 0.0
-        self.corr_valid_sets = 0
+def train_ensemble_pfn(
+    model_cls: Type[nn.Module],
+    run_name: str,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    test_loader: DataLoader,
+    target_name: str,
+    **kwargs: Dict[str, Any],
+) -> None:
+    opts: Dict[str, Any] = _defaults | kwargs
+    logger.info(f"Initializing Semi-Supervised Ensemble (N={opts['ensemble_size']})")
 
-    @torch.no_grad()
-    def update(
-        self,
-        preds: torch.Tensor,
-        normed_labels: torch.Tensor,
-        mask: torch.Tensor,
-        set_boundaries: torch.Tensor,
-        num_sets: int,
-        loss_val: Optional[float] = None,
-    ):
-        masked_preds = preds[mask]
-        masked_normed = normed_labels[mask]
-        n_masked = masked_preds.size(0)
+    models = []
+    for i in range(opts["ensemble_size"]):
+        m = model_cls(
+            ligand_input_size=opts["ligand_dim"],
+            protein_input_size=opts["protein_dim"],
+            **opts,
+        ).to(device)
+        models.append(m)
 
-        if n_masked == 0:
-            return
+    logger.info("Fitting BinDistribution on generic training data...")
+    models[0].bin_dist.fit(train_loader)
+    bin_dist_state = models[0].bin_dist.state_dict()
+    for m in models[1:]:
+        m.bin_dist.load_state_dict(bin_dist_state)
+        m.bin_dist.edges.data.copy_(models[0].bin_dist.edges.data)
 
-        if loss_val is not None:
-            self.sums["loss"] += loss_val * n_masked
-            self.counts["loss"] += n_masked
+    all_params = []
+    for m in models:
+        all_params.extend(list(m.parameters()))
 
-        nll = -self.bd.log_prob(masked_normed, masked_preds).sum().item()
-        self.sums["NLL"] += nll
-        self.counts["NLL"] += n_masked
+    optimizer = AdamW(all_params, lr=opts["lr"], weight_decay=1e-2)
+    scheduler = CosineAnnealingLR(
+        optimizer, T_max=opts["num_epochs"], eta_min=opts.get("min_lr", 1e-6)
+    )
 
-        wass = self.bd.emd(masked_normed, masked_preds).sum().item()
-        self.sums["EMD"] += wass
-        self.counts["EMD"] += n_masked
+    unlabeled_source = UnlabeledDatasource(feature_dim=opts["ligand_dim"])
 
-        crps = self.bd.crps(masked_normed, masked_preds).sum().item()
-        self.sums["CRPS"] += crps
-        self.counts["CRPS"] += n_masked
+    best_loss = float("inf")
 
-        pred_mean = self.bd.mean(masked_preds)
-        mae = (pred_mean - masked_normed).abs().sum().item()
-        self.sums["MAE"] += mae
-        self.counts["MAE"] += n_masked
+    for epoch in range(opts["num_epochs"]):
+        logger.info(f" == Epoch: {epoch + 1} == ")
 
-        probs = torch.softmax(masked_preds, dim=-1)
-        true_bins = self.bd.labels(masked_normed)
-        one_hot = self.bd.dist(true_bins)
-        brier = (probs - one_hot).pow(2).sum(dim=-1).sum().item()
-        self.sums["Brier"] += brier
-        self.counts["Brier"] += n_masked
-
-        full_pred_means = self.bd.mean(preds)
-
-        batch_sse, batch_sst = self._compute_batch_variance(
-            full_pred_means, normed_labels, mask, set_boundaries, num_sets
+        train_loss = train_epoch_semi_supervised(
+            models,
+            train_loader,
+            unlabeled_source,
+            optimizer,
+            opts["unlabeled_ratio"],
+            opts["consistency_weight"],
         )
-        self.total_sse += batch_sse
-        self.total_sst += batch_sst
 
-        if self.compute_corr:
-            z_rho, z_r, valid_sets = self._compute_batch_correlations(
-                full_pred_means, normed_labels, mask, set_boundaries, num_sets
-            )
-            self.z_rho_sum += z_rho
-            self.z_r_sum += z_r
-            self.corr_valid_sets += valid_sets
+        val_results = evaluate_ensemble(models, val_loader)
 
-    def compute(self) -> Dict[str, float]:
-        """Returns the averaged metrics."""
-        results = {}
+        current_lr = scheduler.get_last_lr()[0]
+        logger.info(
+            f"Train Loss: {train_loss:.4f} | Val NLL: {val_results['NLL']:.4f} | LR: {current_lr:.2e}"
+        )
 
-        for k in self.sums:
-            if self.counts[k] > 0:
-                results[k] = self.sums[k] / self.counts[k]
-            else:
-                results[k] = 0.0
+        scheduler.step()
 
-        if self.total_sst > 1e-6:
-            results["R2"] = 1.0 - (self.total_sse / self.total_sst)
+        if val_results["NLL"] < best_loss:
+            best_loss = val_results["NLL"]
+            save_path = OUTPUT / run_name / "ensemble_best.pt"
+            (OUTPUT / run_name).mkdir(parents=True, exist_ok=True)
+
+            state = {f"model_{i}": m.state_dict() for i, m in enumerate(models)}
+            torch.save(state, save_path)
+            logger.info(f"Checkpoint saved: Val NLL {best_loss:.4f}")
+
+    if opts.get("test"):
+        load_path = OUTPUT / run_name / "ensemble_best.pt"
+        if load_path.exists():
+            checkpoint = torch.load(load_path)
+            for i, m in enumerate(models):
+                m.load_state_dict(checkpoint[f"model_{i}"])
+
+            test_results = evaluate_ensemble(models, test_loader)
+            logger.info("=== Final Ensemble Test Results ===")
+            for k, v in test_results.items():
+                logger.info(f" {k}: {v:.4f}")
+
+
+def train_epoch_semi_supervised(
+    models: List[nn.Module],
+    loader: DataLoader,
+    unlabeled_source: UnlabeledDatasource,
+    optimizer: torch.optim.Optimizer,
+    unlabeled_ratio: int,
+    consistency_weight: float,
+) -> float:
+    [model.train() for model in models]
+    total_loss = 0.0
+    bd = models[0].bin_dist
+
+    for batch in (pbar := tqdm.tqdm(loader, desc="Semi-Supervised Train")):
+        (ligand_feats, labels, _, query_mask, metadata) = _unpack_batch(batch)
+
+        (
+            aug_feats,
+            aug_labels,
+            aug_mask,
+            unlabeled_mask,
+            aug_boundaries,
+            aug_num_sets,
+            aug_set_ids,
+        ) = augment_batch_with_unlabeled(
+            ligand_feats,
+            labels,
+            query_mask,
+            metadata,
+            unlabeled_source,
+            unlabeled_ratio,
+        )
+
+        if bd.bounded_support:
+            with torch.no_grad():
+                normed_labels = _normalize_sets_minmax(
+                    aug_labels,
+                    aug_boundaries,
+                    aug_num_sets,
+                    mask=aug_mask,
+                    clip_range=(bd.edges[0], bd.edges[-1]),
+                )
         else:
-            results["R2"] = 0.0
+            normed_labels = aug_labels
 
-        if self.compute_corr:
-            if self.corr_valid_sets > 0:
-                avg_z_rho = self.z_rho_sum / self.corr_valid_sets
-                avg_z_r = self.z_r_sum / self.corr_valid_sets
-                results["Spearman"] = tanh(avg_z_rho)
-                results["Pearson"] = tanh(avg_z_r)
-            else:
-                results["Spearman"] = 0.0
-                results["Pearson"] = 0.0
+        context_input = normed_labels.clone()
+        context_input[aug_mask] = 0.0
 
-        return results
+        ensemble_preds = []  # (N_total, n_bins)
+        ensemble_means = []  # (N_total,)
 
-    def _compute_batch_variance(
-        self, pred_means, normed_labels, mask, boundaries, num_sets
-    ):
-        batch_sse = 0.0
-        batch_sst = 0.0
+        optimizer.zero_grad(set_to_none=True)
+        batch_loss = 0.0
 
-        for i in range(num_sets):
-            start, end = boundaries[i], boundaries[i + 1]
-            set_mask = mask[start:end]
+        for model in models:
+            preds = model(aug_feats, context_input, aug_mask, aug_set_ids)
+            ensemble_preds.append(preds)
 
-            masked_true = normed_labels[start:end][set_mask]
-            masked_pred = pred_means[start:end][set_mask]
+            labeled_query_mask = aug_mask & (~unlabeled_mask)
 
-            unmasked_true = normed_labels[start:end][~set_mask]
+            nll = bd.nll(normed_labels[labeled_query_mask], preds[labeled_query_mask])
+            batch_loss += nll.mean()  # Add supervised component
 
-            if masked_true.numel() == 0 or unmasked_true.numel() == 0:
-                continue
+            pred_mean = bd.mean(preds)
+            ensemble_means.append(pred_mean)
 
-            baseline_mean = unmasked_true.mean()
+        if consistency_weight > 0.0:
+            # Stack means: (n_models, N_total)
+            stacked_means = torch.stack(ensemble_means)
+            consensus_mean = stacked_means.mean(dim=0).detach()
 
-            batch_sse += ((masked_true - masked_pred) ** 2).sum().item()
-            batch_sst += ((masked_true - baseline_mean) ** 2).sum().item()
+            consistency_loss_sum = 0.0
 
-        return batch_sse, batch_sst
+            for i, preds in enumerate(ensemble_preds):
+                crps = bd.crps(consensus_mean[unlabeled_mask], preds[unlabeled_mask])
+                consistency_loss_sum += crps.mean()
 
-    def _compute_batch_correlations(
-        self, pred_means, normed_labels, mask, boundaries, num_sets
-    ):
-        total_z_rho = 0.0
-        total_z_r = 0.0
-        valid_sets = 0
+            batch_loss += consistency_weight * (consistency_loss_sum / len(models))
 
-        pred_np = pred_means.cpu().numpy()
-        true_np = normed_labels.cpu().numpy()
-        mask_np = mask.cpu().numpy()
+        pbar.set_description(f"loss={batch_loss.item():.2e}")
+        batch_loss.backward()
+        optimizer.step()
 
-        for i in range(num_sets):
-            start, end = boundaries[i], boundaries[i + 1]
-            set_mask = mask_np[start:end]
+        total_loss += batch_loss.item()
 
-            p = pred_np[start:end][set_mask]
-            t = true_np[start:end][set_mask]
+    return total_loss / len(loader)
 
-            n = p.size
-            if n < 4:
-                continue
 
-            rho, _ = spearmanr(p, t)
-            if np.isfinite(rho):
-                rho = np.clip(rho, -1 + 1e-6, 1 - 1e-6)
-                total_z_rho += arctanh(rho) * (n - 3)
+def augment_batch_with_unlabeled(
+    ligand_feats,
+    labels,
+    query_mask,
+    metadata,
+    unlabeled_source: UnlabeledDatasource,
+    ratio: int,
+):
+    """
+    Injects unlabeled data into the flattened batch structure.
 
-            r, _ = pearsonr(p, t)
-            if np.isfinite(r):
-                r = np.clip(r, -1 + 1e-6, 1 - 1e-6)
-                total_z_r += arctanh(r) * (n - 3)
+    Logic:
+    1. Parse existing set boundaries.
+    2. For each set, identify # of query samples.
+    3. Generate Ratio * QuerySamples of unlabeled data.
+    4. Reconstruct the flattened tensors (feats, labels, masks, set_ids).
+    """
+    boundaries = metadata["set_boundaries"].squeeze().cpu()
+    num_sets = metadata["num_sets"]
+    if isinstance(num_sets, torch.Tensor):
+        num_sets = num_sets.item()
 
-            valid_sets += n - 3
+    new_feats_list = []
+    new_labels_list = []
+    new_query_mask_list = []  # True for Query AND Unlabeled
+    unlabeled_mask_list = []  # True ONLY for Unlabeled
+    new_set_ids_list = []
 
-        return total_z_rho, total_z_r, valid_sets
+    current_idx = 0
+
+    # We process on CPU lists for easy splicing, then move to GPU at end
+    # Assuming inputs are on GPU already
+
+    for i in range(num_sets):
+        start, end = boundaries[i], boundaries[i + 1]
+
+        # Extract current set data
+        set_feats = ligand_feats[start:end]
+        set_labels = labels[start:end]
+        set_mask = query_mask[start:end]
+
+        # Calculate requirements
+        n_query = set_mask.sum().item()
+        n_unlabeled = int(n_query * ratio)
+
+        # Fetch unlabeled
+        if n_unlabeled > 0:
+            unlabeled_feats = unlabeled_source.get_batch(n_unlabeled)
+
+            # Unlabeled Labels (Dummy, will be ignored by mask)
+            unlabeled_labels = torch.zeros(n_unlabeled, device=device)
+
+            # Masks
+            # Query Mask is True for unlabeled (because they are masked input)
+            unlabeled_q_mask = torch.ones(n_unlabeled, dtype=torch.bool, device=device)
+            # Specific mask to identify unlabeled section later
+            unlabeled_specific_mask = torch.ones(
+                n_unlabeled, dtype=torch.bool, device=device
+            )
+
+            # Concatenate: [Original Set | Unlabeled]
+            combined_feats = torch.cat([set_feats, unlabeled_feats], dim=0)
+            combined_labels = torch.cat([set_labels, unlabeled_labels], dim=0)
+            combined_q_mask = torch.cat([set_mask, unlabeled_q_mask], dim=0)
+
+            set_unlabeled_mask = torch.cat(
+                [
+                    torch.zeros(len(set_feats), dtype=torch.bool, device=device),
+                    unlabeled_specific_mask,
+                ],
+                dim=0,
+            )
+
+        else:
+            combined_feats = set_feats
+            combined_labels = set_labels
+            combined_q_mask = set_mask
+            set_unlabeled_mask = torch.zeros(
+                len(set_feats), dtype=torch.bool, device=device
+            )
+
+        # Set IDs
+        set_len = len(combined_feats)
+        combined_ids = torch.full((set_len,), i, device=device)
+
+        new_feats_list.append(combined_feats)
+        new_labels_list.append(combined_labels)
+        new_query_mask_list.append(combined_q_mask)
+        unlabeled_mask_list.append(set_unlabeled_mask)
+        new_set_ids_list.append(combined_ids)
+
+    # Reconstruct Tensors
+    aug_feats = torch.cat(new_feats_list, dim=0)
+    aug_labels = torch.cat(new_labels_list, dim=0)
+    aug_mask = torch.cat(new_query_mask_list, dim=0)
+    unlabeled_mask = torch.cat(unlabeled_mask_list, dim=0)
+    aug_set_ids = torch.cat(new_set_ids_list, dim=0)
+
+    # Reconstruct Boundaries
+    # [0, len1, len1+len2, ...]
+    lengths = [len(f) for f in new_feats_list]
+    aug_boundaries = torch.tensor([0] + list(np.cumsum(lengths)), device=device)
+
+    return (
+        aug_feats,
+        aug_labels,
+        aug_mask,
+        unlabeled_mask,
+        aug_boundaries,
+        num_sets,
+        aug_set_ids,
+    )
+
+
+def _unpack_batch(batch):
+    """Helper to unpack batch consistently."""
+    (ligand_features, labels, info, query_mask, metadata) = batch
+
+    if isinstance(ligand_features, tuple):  # Graph/FP tuple
+        # For simplicity in this example, assuming only vector features (Fingerprints)
+        # If graph, augment_batch_with_unlabeled needs to handle PyG Batch objects
+        _, ligand_features = ligand_features
+        ligand_features = ligand_features.squeeze()
+    else:
+        ligand_features = ligand_features.squeeze()
+
+    ligand_features = ligand_features.to(device)
+    labels = labels.squeeze().to(device)
+    query_mask = query_mask.squeeze().to(device)
+
+    return ligand_features, labels, info, query_mask, metadata
+
+
+@torch.no_grad()
+def evaluate_ensemble(models, loader):
+    [m.eval() for m in models]
+    trackers = [
+        MetricTracker(models[0].bin_dist, compute_correlations=False) for _ in models
+    ]
+
+    for batch in tqdm.tqdm(loader, desc="Ensemble Eval"):
+        (ligand_feats, labels, _, query_mask, metadata) = _unpack_batch(batch)
+
+        set_boundaries = metadata["set_boundaries"].squeeze()
+        num_sets = metadata["num_sets"]
+        if isinstance(num_sets, torch.Tensor):
+            num_sets = num_sets.item()
+
+        if models[0].bin_dist.bounded_support:
+            normed_labels = _normalize_sets_minmax(
+                labels,
+                set_boundaries,
+                num_sets,
+                mask=query_mask,
+                clip_range=(models[0].bin_dist.edges[0], models[0].bin_dist.edges[-1]),
+            )
+        else:
+            normed_labels = labels
+
+        context_input = normed_labels.clone()
+        context_input[query_mask] = 0.0
+        set_ids = metadata["set_ids_tensor"].to(device).squeeze()
+
+        for i, model in enumerate(models):
+            preds = model(ligand_feats, context_input, query_mask, set_ids)
+            trackers[i].update(
+                preds, normed_labels, query_mask, set_boundaries, num_sets
+            )
+
+    ensemble_tracker = EnsembleMetricTracker(trackers)
+    return ensemble_tracker.compute_averaged()
 
 
 def train_and_evaluate_pfn_model(
@@ -294,7 +484,7 @@ def train_and_evaluate_pfn_model(
     if not opts.get("test"):
         return
 
-    logger.info("=== Starting Comprehensive Test Evaluation ===")
+    logger.info("=== Starting Test Evaluation ===")
 
     for metric_name in metrics_to_monitor:
         model_path = OUTPUT / run_name / f"model_best_{metric_name}.pt"

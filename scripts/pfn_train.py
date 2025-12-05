@@ -26,7 +26,7 @@ from dti.data.processing import (
     load_split,
 )
 from dti.data.featurization import MolFingerprint
-from dti.training.bayesian import train_and_evaluate_pfn_model
+from dti.training.bayesian import train_and_evaluate_pfn_model, train_ensemble_pfn
 from dti.utils import (
     Method,
     init_logging,
@@ -219,8 +219,7 @@ def run_split(
         train_loader,
         val_loader,
         test_loader,
-        METHOD,
-        fold,
+        "score",
     ]
     kwargs = dict(
         ligand_dim=ligand_dim,
@@ -231,7 +230,7 @@ def run_split(
         **kwargs,
     )
 
-    train_and_evaluate_pfn_model(*args, **kwargs)
+    train_ensemble_pfn(*args, **kwargs)
 
     logger.info(f"{run_name} finished")
 

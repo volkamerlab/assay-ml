@@ -8,10 +8,196 @@ from torch import nn, Tensor
 from scipy.stats import spearmanr
 import logging
 
+from ..model.bin_distribution import BinDistribution
 from ..utils.constants import ASSAY, ACT, COMPOUND, PREDICTION
 from ..utils.hodge_ranking import assay_ranks
 
 logger = logging.getLogger(__name__)
+
+
+class MetricTracker:
+    def __init__(self, bin_dist: BinDistribution, compute_correlations: bool = False):
+        self.bd = bin_dist
+        self.compute_corr = compute_correlations
+
+        self.sums = defaultdict(float)
+        self.counts = defaultdict(float)
+
+        self.total_sse = 0.0
+        self.total_sst = 0.0
+
+        self.z_rho_sum = 0.0
+        self.z_r_sum = 0.0
+        self.corr_valid_sets = 0
+
+    @torch.no_grad()
+    def update(
+        self,
+        preds: torch.Tensor,
+        normed_labels: torch.Tensor,
+        mask: torch.Tensor,
+        set_boundaries: torch.Tensor,
+        num_sets: int,
+        loss_val: float | None = None,
+    ):
+        masked_preds = preds[mask]
+        masked_normed = normed_labels[mask]
+        n_masked = masked_preds.size(0)
+
+        if n_masked == 0:
+            return
+
+        if loss_val is not None:
+            self.sums["loss"] += loss_val * n_masked
+            self.counts["loss"] += n_masked
+
+        nll = -self.bd.log_prob(masked_normed, masked_preds).sum().item()
+        self.sums["NLL"] += nll
+        self.counts["NLL"] += n_masked
+
+        wass = self.bd.emd(masked_normed, masked_preds).sum().item()
+        self.sums["EMD"] += wass
+        self.counts["EMD"] += n_masked
+
+        crps = self.bd.crps(masked_normed, masked_preds).sum().item()
+        self.sums["CRPS"] += crps
+        self.counts["CRPS"] += n_masked
+
+        pred_mean = self.bd.mean(masked_preds)
+        mae = (pred_mean - masked_normed).abs().sum().item()
+        self.sums["MAE"] += mae
+        self.counts["MAE"] += n_masked
+
+        probs = torch.softmax(masked_preds, dim=-1)
+        true_bins = self.bd.labels(masked_normed)
+        one_hot = self.bd.dist(true_bins)
+        brier = (probs - one_hot).pow(2).sum(dim=-1).sum().item()
+        self.sums["Brier"] += brier
+        self.counts["Brier"] += n_masked
+
+        full_pred_means = self.bd.mean(preds)
+
+        batch_sse, batch_sst = self._compute_batch_variance(
+            full_pred_means, normed_labels, mask, set_boundaries, num_sets
+        )
+        self.total_sse += batch_sse
+        self.total_sst += batch_sst
+
+        if self.compute_corr:
+            z_rho, z_r, valid_sets = self._compute_batch_correlations(
+                full_pred_means, normed_labels, mask, set_boundaries, num_sets
+            )
+            self.z_rho_sum += z_rho
+            self.z_r_sum += z_r
+            self.corr_valid_sets += valid_sets
+
+    def compute(self) -> dict[str, float]:
+        """Returns the averaged metrics."""
+        results = {}
+
+        for k in self.sums:
+            if self.counts[k] > 0:
+                results[k] = self.sums[k] / self.counts[k]
+            else:
+                results[k] = 0.0
+
+        if self.total_sst > 1e-6:
+            results["R2"] = 1.0 - (self.total_sse / self.total_sst)
+        else:
+            results["R2"] = 0.0
+
+        if self.compute_corr:
+            if self.corr_valid_sets > 0:
+                avg_z_rho = self.z_rho_sum / self.corr_valid_sets
+                avg_z_r = self.z_r_sum / self.corr_valid_sets
+                results["Spearman"] = tanh(avg_z_rho)
+                results["Pearson"] = tanh(avg_z_r)
+            else:
+                results["Spearman"] = 0.0
+                results["Pearson"] = 0.0
+
+        return results
+
+    def _compute_batch_variance(
+        self, pred_means, normed_labels, mask, boundaries, num_sets
+    ):
+        batch_sse = 0.0
+        batch_sst = 0.0
+
+        for i in range(num_sets):
+            start, end = boundaries[i], boundaries[i + 1]
+            set_mask = mask[start:end]
+
+            masked_true = normed_labels[start:end][set_mask]
+            masked_pred = pred_means[start:end][set_mask]
+
+            unmasked_true = normed_labels[start:end][~set_mask]
+
+            if masked_true.numel() == 0 or unmasked_true.numel() == 0:
+                continue
+
+            baseline_mean = unmasked_true.mean()
+
+            batch_sse += ((masked_true - masked_pred) ** 2).sum().item()
+            batch_sst += ((masked_true - baseline_mean) ** 2).sum().item()
+
+        return batch_sse, batch_sst
+
+    def _compute_batch_correlations(
+        self, pred_means, normed_labels, mask, boundaries, num_sets
+    ):
+        total_z_rho = 0.0
+        total_z_r = 0.0
+        valid_sets = 0
+
+        pred_np = pred_means.cpu().numpy()
+        true_np = normed_labels.cpu().numpy()
+        mask_np = mask.cpu().numpy()
+
+        for i in range(num_sets):
+            start, end = boundaries[i], boundaries[i + 1]
+            set_mask = mask_np[start:end]
+
+            p = pred_np[start:end][set_mask]
+            t = true_np[start:end][set_mask]
+
+            n = p.size
+            if n < 4:
+                continue
+
+            rho, _ = spearmanr(p, t)
+            if np.isfinite(rho):
+                rho = np.clip(rho, -1 + 1e-6, 1 - 1e-6)
+                total_z_rho += arctanh(rho) * (n - 3)
+
+            r, _ = pearsonr(p, t)
+            if np.isfinite(r):
+                r = np.clip(r, -1 + 1e-6, 1 - 1e-6)
+                total_z_r += arctanh(r) * (n - 3)
+
+            valid_sets += n - 3
+
+        return total_z_rho, total_z_r, valid_sets
+
+
+class EnsembleMetricTracker:
+    """Aggregates metrics across the ensemble for unified logging."""
+
+    def __init__(self, trackers: List[MetricTracker]):
+        self.trackers = trackers
+
+    def update(self, *args, **kwargs):
+        pass
+
+    def compute_averaged(self) -> dict[str, float]:
+        total_results = defaultdict(float)
+        for t in self.trackers:
+            res = t.compute()
+            for k, v in res.items():
+                total_results[k] += v
+
+        n = len(self.trackers)
+        return {k: v / n for k, v in total_results.items()}
 
 
 class AssayRankAccuracy:
