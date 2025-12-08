@@ -97,9 +97,12 @@ def train_ensemble_pfn(
         val_results = evaluate_ensemble(models, val_loader)
 
         current_lr = scheduler.get_last_lr()[0]
-        logger.info(
-            f"Train Loss: {train_loss:.4f} | Val NLL: {val_results['NLL']:.4f} | LR: {current_lr:.2e}"
-        )
+        results = (
+            {"training loss": training_loss}
+            | {f"val {k}": v for k, v in val_results.items()}
+            | {"lr": scheduler.get_last_lr()[0]}
+        for metric, value in results.items():
+            logger.info(f" {metric}: {value:.4e}")
 
         scheduler.step()
 
@@ -122,7 +125,7 @@ def train_ensemble_pfn(
             test_results = evaluate_ensemble(models, test_loader)
             logger.info("=== Final Ensemble Test Results ===")
             for k, v in test_results.items():
-                logger.info(f" {k}: {v:.4f}")
+                logger.info(f" test {k}: {v:.4f}")
 
 
 def train_epoch_semi_supervised(
