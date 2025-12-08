@@ -256,6 +256,7 @@ def augment_batch_with_unlabeled(
         # Fetch unlabeled
         if n_unlabeled > 0:
             unlabeled_feats = unlabeled_source.get_random_unlabeled_batch(n_unlabeled)
+            unlabeled_feats.to(device)
 
             # Unlabeled Labels (Dummy, will be ignored by mask)
             unlabeled_labels = torch.zeros(n_unlabeled, device=device)
