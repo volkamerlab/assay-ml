@@ -120,6 +120,17 @@ class BaseDataModule(Dataset):
         return self.ligand_features[idx], self.labels[idx], self.info[idx]
 
 
+class UnlabeledDatasourceMixin:
+    def __init__(self, random_seed: int = 0):
+        self.random = np.random.default_rng(random_seed)
+        if not hasattr(self, "ligand_features"):
+            raise TypeError("'self.ligand_features' needs to be set by a base class.")
+
+    def get_random_unlabeled_batch(self, n_samples: int) -> torch.Tensor:
+        indices = self.random.integers(low=0, high=len(self), size=n_samples)
+        return self.ligand_features[indices]
+
+
 class ProteinFeaturesMixin:
     def __init__(self, model_name: str = "esm2_t33_650M_UR50D", **kwargs):
         logger.info("Initializing ProteinFeaturesMixin...")
@@ -207,7 +218,7 @@ class AssaySetGroupingMixin:
         )
 
 
-class ActivityDataset(BaseDataModule, ProteinFeaturesMixin):
+class ActivityDataset(BaseDataModule, ProteinFeaturesMixin, UnlabeledDatasourceMixin):
     def __init__(
         self,
         data: pl.DataFrame,
@@ -245,7 +256,10 @@ class ActivityDataset(BaseDataModule, ProteinFeaturesMixin):
 
 
 class MultiSetActivityDataset(
-    BaseDataModule, ProteinFeaturesMixin, AssaySetGroupingMixin
+    BaseDataModule,
+    ProteinFeaturesMixin,
+    AssaySetGroupingMixin,
+    UnlabeledDatasourceMixin,
 ):
     def __init__(
         self,
@@ -386,7 +400,9 @@ class MultiSetActivityDataset(
         )
 
 
-class PropertySetDataset(BaseDataModule, AssaySetGroupingMixin):
+class PropertySetDataset(
+    BaseDataModule, AssaySetGroupingMixin, UnlabeledDatasourceMixin
+):
     def __init__(
         self,
         data: pl.DataFrame,

@@ -12,6 +12,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 from numpy import tanh, arctanh
 
+from ..data.dataset import UnlabeledDatasourceMixin
 from ..model.bin_distribution import BinDistribution
 from ..utils import device
 from ..utils.constants import OUTPUT
@@ -33,18 +34,11 @@ _defaults = dict(
 )
 
 
-class UnlabeledDatasource:
-    def __init__(self, feature_dim: int):
-        self.feature_dim = feature_dim
-
-    def get_batch(self, n_samples: int) -> torch.Tensor:
-        return torch.randn(n_samples, self.feature_dim, device=device)
-
-
 def train_ensemble_pfn(
     model_cls: Type[nn.Module],
     run_name: str,
     train_loader: DataLoader,
+    unlabeled_source: UnlabeledDatasourceMixin,
     val_loader: DataLoader,
     test_loader: DataLoader,
     target_name: str,
@@ -78,8 +72,6 @@ def train_ensemble_pfn(
         optimizer, T_max=opts["num_epochs"], eta_min=opts.get("min_lr", 1e-6)
     )
 
-    unlabeled_source = UnlabeledDatasource(feature_dim=opts["ligand_dim"])
-
     best_loss = float("inf")
 
     for epoch in range(opts["num_epochs"]):
@@ -101,6 +93,7 @@ def train_ensemble_pfn(
             {"training loss": training_loss}
             | {f"val {k}": v for k, v in val_results.items()}
             | {"lr": scheduler.get_last_lr()[0]}
+        )
         for metric, value in results.items():
             logger.info(f" {metric}: {value:.4e}")
 
@@ -131,7 +124,7 @@ def train_ensemble_pfn(
 def train_epoch_semi_supervised(
     models: List[nn.Module],
     loader: DataLoader,
-    unlabeled_source: UnlabeledDatasource,
+    unlabeled_source: UnlabeledDatasourceMixin,
     optimizer: torch.optim.Optimizer,
     unlabeled_ratio: int,
     consistency_weight: float,
@@ -220,7 +213,7 @@ def augment_batch_with_unlabeled(
     labels,
     query_mask,
     metadata,
-    unlabeled_source: UnlabeledDatasource,
+    unlabeled_source: UnlabeledDatasourceMixin,
     ratio: int,
 ):
     """
@@ -262,7 +255,7 @@ def augment_batch_with_unlabeled(
 
         # Fetch unlabeled
         if n_unlabeled > 0:
-            unlabeled_feats = unlabeled_source.get_batch(n_unlabeled)
+            unlabeled_feats = unlabeled_source.get_random_unlabeled_batch(n_unlabeled)
 
             # Unlabeled Labels (Dummy, will be ignored by mask)
             unlabeled_labels = torch.zeros(n_unlabeled, device=device)

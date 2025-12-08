@@ -217,6 +217,7 @@ def run_split(
         model_cls,
         run_name,
         train_loader,
+        train_loader.dataset,
         val_loader,
         test_loader,
         "score",
