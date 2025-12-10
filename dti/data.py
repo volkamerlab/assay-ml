@@ -298,19 +298,14 @@ class SetActivityDataset(ActivityDataset):
 
 
 class MultiSetActivityDataset(ActivityDataset):
-    """Dataset that processes multiple sets in a single batch while preserving set identity.
+    """Dataset that processes labeled sets and injects random unlabeled sets for semi-supervised learning.
 
     Args:
         data (pd.DataFrame): DataFrame containing activity data.
-        target (str): Column name for target values.
-        info_cols (List[str]): Column names to include as information.
-        inter_assay (bool): Compute inter-assay sets (same target).
-        shuffle_within_target (bool): Retain target for inter-assay sets.
-        model_name (str): Name of the protein language model.
-        min_batch_size (int): Minimum size of a set to be included.
-        max_set_size (int): Maximum samples per set (0 for no limit).
-        sets_per_batch (int): Number of sets to process in a single batch.
-        random_seed (int): Random seed for shuffling.
+        random_sets_per_batch (int): Number of random unlabeled sets to inject into every batch.
+        min_batch_size (int): Minimum size of a set.
+        max_set_size (int): Maximum samples per set.
+        sets_per_batch (int): Number of *labeled* sets to process in a single batch.
     """
 
     def __init__(
@@ -318,87 +313,74 @@ class MultiSetActivityDataset(ActivityDataset):
         data,
         target=...,
         info_cols=...,
-        inter_assay: bool = False,
-        shuffle_within_target: bool = True,
         min_batch_size: int = 3,
         max_set_size: int = 0,
-        sets_per_batch: int = 20,
+        sets_per_batch: int = 2,
+        random_sets_per_batch: int = 16,
         random_seed: int = 0,
         **kwargs,
     ):
         super().__init__(data, target=target, info_cols=info_cols, **kwargs)
         self.min_batch_size = min_batch_size
-        self.max_set_size = max_set_size
+        self.max_set_size = max_set_size if max_set_size > 0 else 128
         self.sets_per_batch = sets_per_batch
-        self.inter_assay = inter_assay
-        self.shuffle_within_target = shuffle_within_target
+        self.random_sets_per_batch = random_sets_per_batch
         self.random = np.random.default_rng(random_seed)
 
-        # Process and organize sets
-        self.valid_sets = []
-        self.set_ids = []  # Track which assay each set belongs to
-        num_unused = 0
+        # 1. Organize Labeled Sets (The "Actual" Epoch)
+        self.valid_sets = []  # List of arrays of indices
+        self.set_ids = []  # List of assay/target IDs
 
-        for assay_id, (_, group) in enumerate(self.data.groupby(ASSAY)):
-            assert group is not None
+        # Group by assay/target to form natural labeled sets
+        group_col = ASSAY if ASSAY in self.data.columns else TID
+
+        for group_id, (_, group) in enumerate(self.data.groupby(group_col)):
             group_idcs = np.array(group.index)
+            # Shuffle indices within the set
             self.random.shuffle(group_idcs)
 
             if len(group_idcs) < self.min_batch_size:
-                num_unused += len(group_idcs)
                 continue
 
+            # Split large assays into smaller sets if necessary
             if self.max_set_size > 0 and len(group_idcs) > self.max_set_size:
-                # Split large sets into multiple smaller ones
                 sub_batches = np.array_split(
-                    group_idcs, len(group_idcs) // self.max_set_size
+                    group_idcs, int(np.ceil(len(group_idcs) / self.max_set_size))
                 )
                 for batch in sub_batches:
                     if len(batch) >= self.min_batch_size:
                         self.valid_sets.append(batch)
-                        self.set_ids.append(assay_id)
-                    else:
-                        num_unused += len(batch)
+                        self.set_ids.append(group_id)
             else:
                 self.valid_sets.append(group_idcs)
-                self.set_ids.append(assay_id)
+                self.set_ids.append(group_id)
+
+        # Pre-calculate available indices for random sampling
+        self.all_indices = np.arange(len(self.data))
 
         self._make_batches()
-        logger.debug(f"Number of unused examples: {num_unused} / {len(self.data)}")
-
-    def _shuffle_data(self):
-        """Shuffle data only within groups of identical protein features."""
-        prot_array = self.data[TID].values.astype(str)
-        _, group_ids = np.unique(prot_array, axis=0, return_inverse=True)
-
-        all_indices = np.arange(self.ligand_features.shape[0])
-        new_order = np.empty_like(all_indices)
-
-        if self.shuffle_within_target:
-            for gid in np.unique(group_ids):
-                mask = group_ids == gid
-                idxs = all_indices[mask]
-                shuffled = self.random.permutation(idxs)
-                new_order[mask] = shuffled
-        else:
-            new_order = self.random.permutation(np.arange(len(self.labels)))
-
-        self.ligand_features = self.ligand_features[new_order]
-        self.labels = self.labels[new_order]
-        self.info = self.info[new_order]
+        logger.info(
+            f"Dataset initialized: {len(self.batches)} batches. "
+            f"Each batch: {self.sets_per_batch} labeled sets + {self.random_sets_per_batch} random sets."
+        )
 
     def _make_batches(self):
-        """Create batches of multiple sets for processing."""
-        if self.inter_assay:
-            self._shuffle_data()
+        """
+        Creates the batch schedule for the labeled data.
+        This ensures every labeled set is seen exactly once per epoch.
+        Random sets are generated dynamically in __getitem__.
+        """
         indices = np.arange(len(self.valid_sets))
         self.random.shuffle(indices)
+
+        # Reorder valid_sets based on shuffle
         self.valid_sets = [self.valid_sets[i] for i in indices]
         self.set_ids = [self.set_ids[i] for i in indices]
 
         self.batches = []
         self.batch_set_ids = []
 
+        # Create batches of LABELED sets
         for i in range(0, len(self.valid_sets), self.sets_per_batch):
             end_idx = min(i + self.sets_per_batch, len(self.valid_sets))
             batch_sets = self.valid_sets[i:end_idx]
@@ -408,58 +390,150 @@ class MultiSetActivityDataset(ActivityDataset):
             self.batch_set_ids.append(batch_ids)
 
         self.used = np.full(len(self.batches), False, dtype=bool)
-        logger.debug(
-            f"Created {len(self.batches)} batches with up to {self.sets_per_batch} sets each"
+
+    def _generate_random_set(self) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Constructs a random set:
+        1. Picks 1 random row index to select a Protein.
+        2. Picks N random row indices to select Ligands.
+        Returns:
+            prot_indices: Array of shape (N,) containing the SAME protein index.
+            ligand_indices: Array of shape (N,) containing random ligand indices.
+        """
+        # 1. Pick random set size
+        set_size = self.random.integers(self.min_batch_size, self.max_set_size // 8)
+
+        # 2. Pick one random protein (by picking a random row)
+        prot_source_idx = self.random.choice(self.all_indices)
+
+        # 3. Pick N random ligands
+        ligand_indices = self.random.choice(
+            self.all_indices, size=set_size, replace=False
         )
 
-    def _get_next_batch(self, idx: int):
-        """Get the next available batch and mark it as used."""
-        if np.all(self.used):
-            self._make_batches()
-        self.used[idx] = True
-        return self.batches[idx], self.batch_set_ids[idx]
+        # 4. Create protein index array (broadcasted)
+        # We repeat the source index so the feature lookup works in __getitem__
+        prot_indices = np.full(set_size, prot_source_idx, dtype=int)
 
-    def __len__(self):
-        """Get the number of batches in the dataset."""
-        return len(self.batches)
+        return prot_indices, ligand_indices
 
     def __getitem__(self, idx):
-        """Get a batch of multiple sets from the dataset.
+        # Reset epoch if needed
+        if np.all(self.used):
+            self._make_batches()
+            self.used = np.full(len(self.batches), False, dtype=bool)
 
-        Returns:
-            tuple: Protein features, ligand features, labels, info for each set in the batch,
-                  and metadata to track set boundaries for the loss function.
-        """
-        batch_sets, batch_ids = self._get_next_batch(idx)
+        # 1. Retrieve Labeled Sets for this batch
+        labeled_sets_ligands = self.batches[idx]  # List[np.array] of ligand indices
+        labeled_ids = self.batch_set_ids[idx]
+        self.used[idx] = True
 
-        set_sizes = [len(set_idcs) for set_idcs in batch_sets]
-        cumulative_sizes = np.cumsum([0] + set_sizes).squeeze()
+        # Construct tuples of (prot_idx, ligand_idx, is_labeled) for labeled sets
+        # For labeled sets, prot_idx == ligand_idx (same row in dataframe implies correct pairing)
+        combined_sets = []
+        for l_indices, s_id in zip(labeled_sets_ligands, labeled_ids):
+            combined_sets.append(
+                {
+                    "prot_indices": l_indices,  # Use same indices to fetch paired protein
+                    "ligand_indices": l_indices,
+                    "is_labeled": True,
+                    "set_id": s_id,
+                }
+            )
 
-        all_indices = np.concatenate(batch_sets)
+        # 2. Generate Random Unlabeled Sets
+        for _ in range(self.random_sets_per_batch):
+            r_prot_indices, r_ligand_indices = self._generate_random_set()
+            combined_sets.append(
+                {
+                    "prot_indices": r_prot_indices,
+                    "ligand_indices": r_ligand_indices,
+                    "is_labeled": False,
+                    "set_id": -1,  # Dummy ID
+                }
+            )
 
-        set_ids_tensor = []
-        for set_idx, set_size in enumerate(set_sizes):
-            set_ids_tensor.extend([set_idx] * set_size)
-        set_ids_tensor = torch.tensor(set_ids_tensor, dtype=torch.long)
+        # 3. Mix (Shuffle) the sets within the batch
+        # This ensures the model treats them equally during batch processing
+        self.random.shuffle(combined_sets)
 
-        prot_feats = (
-            torch.ones(1, device=device)
-            if self.protein_features is None
-            else self.protein_features[all_indices]
-        )
+        # 4. Flatten for Tensor Construction
+        final_prot_indices = []
+        final_ligand_indices = []
+        final_labels = []
+        final_info_indices = []  # Just to track which row info to grab
+
+        set_boundaries = [0]
+        set_labeled_flags = []
+        set_ids_list = []
+        batch_set_ids_tensor = []
+
+        cumulative_count = 0
+
+        for i, cset in enumerate(combined_sets):
+            p_idxs = cset["prot_indices"]
+            l_idxs = cset["ligand_indices"]
+            is_labeled = cset["is_labeled"]
+            count = len(l_idxs)
+
+            final_prot_indices.append(p_idxs)
+            final_ligand_indices.append(l_idxs)
+            final_info_indices.append(
+                l_idxs
+            )  # Info usually tracks the ligand meta-data
+
+            # For labels: Real labels if labeled, dummy zeros if unlabeled
+            if is_labeled:
+                final_labels.append(self.labels[l_idxs])
+            else:
+                final_labels.append(torch.zeros(count, dtype=self.labels.dtype))
+
+            cumulative_count += count
+            set_boundaries.append(cumulative_count)
+            set_labeled_flags.append(is_labeled)
+            set_ids_list.append(cset["set_id"])
+            batch_set_ids_tensor.extend([i] * count)
+
+        # Concatenate everything
+        flat_prot_indices = np.concatenate(final_prot_indices)
+        flat_ligand_indices = np.concatenate(final_ligand_indices)
+        flat_labels = torch.cat(final_labels)
+        flat_info_indices = np.concatenate(final_info_indices)
+
+        batch_set_ids_tensor = torch.tensor(batch_set_ids_tensor, dtype=torch.long)
+
+        # 5. Fetch Features
+        # Handle Protein Features
+        if self.protein_features is None:
+            prot_feats = torch.ones(1, device=device)  # Fallback
+        else:
+            # We use the flat_prot_indices.
+            # For labeled sets: index matches the ligand row.
+            # For random sets: index is the randomly chosen protein source row.
+            prot_feats = self.protein_features[flat_prot_indices]
+
+        # Handle Ligand Features
+        lig_feats = self.ligand_features[flat_ligand_indices]
+
+        # Handle Info
+        batch_info = self.info[flat_info_indices]
 
         return (
             prot_feats,
-            self.ligand_features[all_indices],
-            self.labels[all_indices],
-            self.info[all_indices],
+            lig_feats,
+            flat_labels,
+            batch_info,
             {
-                "set_boundaries": cumulative_sizes,
-                "set_ids": batch_ids,
-                "set_ids_tensor": set_ids_tensor,
-                "num_sets": len(batch_sets),
+                "set_boundaries": torch.tensor(set_boundaries, dtype=torch.long),
+                "set_ids": set_ids_list,
+                "set_ids_tensor": batch_set_ids_tensor,
+                "num_sets": len(combined_sets),
+                "set_labeled": set_labeled_flags,  # Used by loss function to gate supervision
             },
         )
+
+    def __len__(self):
+        return len(self.batches)
 
 
 def aggregate_multi_measurements(data: pd.DataFrame) -> pd.DataFrame:

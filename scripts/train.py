@@ -37,6 +37,7 @@ from dti.data import (
 from dti.featurization import MolFingerprint
 from dti.training import (
     AssayRankAccuracy,
+    train_and_evaluate_model_setbased_ensemble,
     train_and_evaluate_model_setbased,
     train_and_evaluate_model_pointwise,
     batch_pair_loss,
@@ -88,7 +89,7 @@ def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
 
 
 def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]:
-    msa = partial(MultiSetActivityDataset, max_set_size=1000)
+    msa = partial(MultiSetActivityDataset, max_set_size=1024)
     shuffled_multiset = partial(msa, inter_assay=True)
     match method:
         case Method.PAIRS if mol_only:
@@ -216,7 +217,8 @@ def run_split(
     training_loss = loss_fn(method, nn.SmoothL1Loss(reduction="none"))
     train_short = True  # method.on_sets or method.on_pairs
     (
-        train_and_evaluate_model_setbased
+        # train_and_evaluate_model_setbased
+        train_and_evaluate_model_setbased_ensemble
         if method.on_sets
         else train_and_evaluate_model_pointwise
     )(

@@ -1,4 +1,5 @@
-from typing import Type, Any, Dict, Callable
+import copy
+from typing import Type, Any, Dict, Callable, List
 from joblib import Parallel, delayed
 from pathlib import Path
 from functools import partial
@@ -587,13 +588,7 @@ def train_and_evaluate_model_setbased_ensemble(
     logger.info(f"training model (set-based) for target: {target_name}")
     Epoch = namedtuple(
         "Epoch",
-        [
-            "epoch",
-            "lr",
-            "train_loss",
-            "val_loss",
-            "val_rank_corr",
-        ],
+        ["epoch", "lr", "train_loss", "val_loss", "val_rank_corr"],
     )
 
     opts: Dict[str, Any] = (
@@ -625,16 +620,14 @@ def train_and_evaluate_model_setbased_ensemble(
         protein_input_size=opts["protein_dim"],
         cosine_agg=opts["cosine_agg"],
     )
+
+    # Fix: Ensure models are on device
     models = [create_model().to(device) for _ in range(ensemble_size)]
-    params, buffers = stack_module_state(models)
 
-    base_model = copy.deepcopy(models[0])
-    base_model = base_model.to("meta")
-
-    def fmodel(params, buffers, x):
-        return functional_call(base_model, (params, buffers), (x,))
-
-    # vmap(fmodel)(params, buffers, minibatches)
+    # Fix: Syntax error in list extension
+    params = []
+    for model in models:
+        params.extend(list(model.parameters()))
 
     optimizer = torch.optim.Adam(params, lr=opts["lr"])
     scheduler = ReduceLROnPlateau(
@@ -645,6 +638,9 @@ def train_and_evaluate_model_setbased_ensemble(
     epochs_without_improvement = 0
     optimization = []
 
+    # Create output directory
+    (OUTPUT / run_name).mkdir(parents=True, exist_ok=True)
+
     for epoch in range(opts["num_epochs"]):
         train_loss = train_with_batched_sets_ensemble(
             models,
@@ -652,18 +648,18 @@ def train_and_evaluate_model_setbased_ensemble(
             optimizer,
             criterion=opts["training_loss"],
             fisher_transform=opts["fisher_transform"],
-            normalize_training_batches=opts["normalize_training_batches"],
         )
+
+        # Pass list of models to evaluation
         val_loss, val_rank_corr = eval_with_batched_sets_ensemble(
             models,
             val_loader,
             rank_corr_fn=opts["rank_corr_fn"],
             fisher_transform=opts["fisher_transform"],
-            normalize_training_batches=opts["normalize_training_batches"],
         )
 
         scheduler.step(val_rank_corr)
-        lr = scheduler.get_last_lr()
+        lr = scheduler.get_last_lr()[0]
         logger.debug(f"Learning rate: {lr}")
 
         logger.info(
@@ -695,9 +691,11 @@ def train_and_evaluate_model_setbased_ensemble(
     logger.info(f"[{run_name}] Loading best model for final test evaluation")
     for i, model in enumerate(models):
         model.load_state_dict(torch.load(OUTPUT / run_name / f"model{i}.pt"))
+
     pred_file = OUTPUT / run_name / "predictions.csv"
+
     _, test_rank_corr = eval_with_batched_sets_ensemble(
-        model,
+        models,
         test_loader,
         rank_corr_fn=opts["rank_corr_fn"],
         prediction_file=pred_file,
@@ -708,83 +706,131 @@ def train_and_evaluate_model_setbased_ensemble(
 
 
 def train_with_batched_sets_ensemble(
-    models,
-    loader,
-    optimizer,
-    criterion,
-    fisher_transform=True,
+    models: List[nn.Module],
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    criterion: nn.Module,
+    fisher_transform: bool = True,
 ):
-    logger.debug("Training model")
+    """
+    Trains an ensemble of models using a standard loop and semi-supervised set-based loss.
+    Gradients are accumulated across all models for a single optimizer step.
+    """
+    logger.debug("Training model (Ensemble - Standard Loop)")
     for model in models:
         model.train()
+
     torch.set_grad_enabled(True)
-    total_loss = 0
+    total_epoch_loss = 0
     steps = 0
+    ensemble_size = len(models)
 
     for protein_features, ligand_features, labels, info, metadata in (
         pbar := tqdm.tqdm(loader, desc="training")
     ):
-        set_boundaries = metadata["set_boundaries"].squeeze()
-        num_sets = metadata["num_sets"].squeeze()
+        p_feat = protein_features.squeeze().to(device)
+        l_feat = ligand_features.squeeze().to(device)
+        labels = labels.squeeze().to(device)
+
+        set_boundaries = metadata["set_boundaries"].squeeze().to(device)
         set_ids_tensor = metadata["set_ids_tensor"].to(device)
+        set_labeled = metadata["set_labeled"]  # list of bools
+        num_sets = metadata["num_sets"]
 
-        model_kwargs = dict()
-        if hasattr(model, "num_heads"):
-            model_kwargs["attn_mask"] = create_set_attention_mask_from_ids(
-                set_ids_tensor, model.num_heads
-            )
+        attn_mask = None
+        if hasattr(models[0], "num_heads"):
+            attn_mask = create_set_attention_mask_from_ids(
+                set_ids_tensor, models[0].num_heads
+            ).to(device)
 
-        predictions = model(
-            protein_features.squeeze(), ligand_features.squeeze(), **model_kwargs
-        ).squeeze()
+        optimizer.zero_grad()
 
-        labels = labels.squeeze()
-        batch_loss = 0
-        total_samples = 0
+        ensemble_batch_loss = 0.0
 
-        for i in range(num_sets):
-            start_idx = set_boundaries[i]
-            end_idx = set_boundaries[i + 1]
-            set_preds = predictions[start_idx:end_idx]
-            set_labels = labels[start_idx:end_idx]
+        all_predictions = []
 
-            if set_labels.std() < 1e-10:
-                continue
+        for model in models:
+            model_kwargs = {"attn_mask": attn_mask} if attn_mask is not None else {}
+            predictions = model(p_feat, l_feat, **model_kwargs).squeeze()
+            all_predictions.append(predictions.unsqueeze(0))
 
-            set_loss = criterion(set_preds, set_labels)
+        predictions_stack = torch.cat(all_predictions, dim=0)
 
-            if fisher_transform:
-                set_loss = fisher_transform_torch(set_loss)
+        ensemble_consensus = predictions_stack.mean(dim=0).detach()
 
-            set_size = end_idx - start_idx
-            batch_loss += set_loss * set_size
-            total_samples += set_size
+        for model_idx, predictions in enumerate(all_predictions):
+            current_model_loss = 0.0
+            total_samples_in_batch = 0.0
 
-        if total_samples > 0:
-            batch_loss /= total_samples
-            optimizer.zero_grad()
-            batch_loss.backward()
-            optimizer.step()
-            total_loss += batch_loss.item()
-            steps += 1
+            for i in range(num_sets):
+                start_idx = set_boundaries[i]
+                end_idx = set_boundaries[i + 1]
+                set_size = end_idx - start_idx
 
-            pbar.set_description(f"loss={batch_loss.item():.2e}")
+                set_preds = predictions[:, start_idx:end_idx]
 
-    return total_loss / max(1, steps)
+                if set_labeled[i]:
+                    # Ground truth labels (shape: (Set_Size))
+                    set_targets = labels[start_idx:end_idx].unsqueeze(0)
+                else:
+                    # Consensus target (shape: (Set_Size))
+                    set_targets = ensemble_consensus[start_idx:end_idx].unsqueeze(0)
+
+                # Skip degenerate sets
+                if set_targets.std() < 1e-8:
+                    continue
+
+                loss_val = criterion(set_preds, set_targets)
+
+                if fisher_transform:
+                    loss_val = fisher_transform_torch(loss_val)
+
+                current_model_loss += loss_val * set_size
+                total_samples_in_batch += set_size
+
+            if total_samples_in_batch > 0:
+                current_model_loss /= total_samples_in_batch
+
+            # Accumulate total loss for logging
+            ensemble_batch_loss += current_model_loss.item()
+
+            # Backpropagate for the current model. Gradients accumulate in optimizer's params.
+            if total_samples_in_batch > 0:
+                current_model_loss.backward()
+            # -----------------------------------------------------------------
+
+        # 4. Optimizer Step (updates parameters of all models based on accumulated gradients)
+        optimizer.step()
+
+        # 5. Logging and bookkeeping
+        avg_batch_loss = ensemble_batch_loss / ensemble_size
+        total_epoch_loss += avg_batch_loss
+        steps += 1
+        pbar.set_description(f"loss={avg_batch_loss:.2e}")
+
+    return total_epoch_loss / max(1, steps)
 
 
 def eval_with_batched_sets_ensemble(
-    model,
-    loader,
+    models: List[nn.Module],
+    loader: DataLoader,
     criterion=nn.L1Loss(),
     rank_corr_fn=None,
     fisher_transform=True,
     normalize_training_batches=True,
     prediction_file: Path | str | None = None,
 ):
-    """Call with batch size one only."""
-    logger.debug("Evaluating model")
-    model.eval()
+    logger.debug("Evaluating model (Ensemble)")
+    for model in models:
+        model.eval()
+
+    # Prepare vmap state for evaluation
+    params, buffers = stack_module_state(models)
+    meta_model = copy.deepcopy(models[0]).to("meta")
+
+    def fmodel(params, buffers, p_feat, l_feat, mask):
+        return functional_call(meta_model, (params, buffers), (p_feat, l_feat, mask))
+
     torch.set_grad_enabled(False)
     total_loss = 0
     steps = 0
@@ -794,24 +840,33 @@ def eval_with_batched_sets_ensemble(
     for protein_features, ligand_features, labels, info, metadata in tqdm.tqdm(
         loader, desc="evaluate"
     ):
-        set_boundaries = metadata["set_boundaries"].squeeze()
+        p_feat = protein_features.squeeze().to(device)
+        l_feat = ligand_features.squeeze().to(device)
+        labels = labels.squeeze().to(device)
+        set_boundaries = metadata["set_boundaries"].squeeze().to(device)
         num_sets = metadata["num_sets"].squeeze()
-        labels = labels.squeeze()
         set_ids_tensor = metadata["set_ids_tensor"].to(device)
 
         model_kwargs = dict()
-        if hasattr(model, "num_heads"):
-            model_kwargs["attn_mask"] = create_set_attention_mask_from_ids(
-                set_ids_tensor, model.num_heads
-            )
+        attn_mask = None
+        if hasattr(models[0], "num_heads"):
+            attn_mask = create_set_attention_mask_from_ids(
+                set_ids_tensor, models[0].num_heads
+            ).to(device)
 
-        predictions = model(
-            protein_features.squeeze(), ligand_features.squeeze(), **model_kwargs
-        ).squeeze()
+        # 1. Vectorized Inference
+        # Output shape: (Ensemble_Size, Batch_Size)
+        raw_preds = vmap(
+            fmodel, in_dims=(0, 0, None, None, None), randomness="different"
+        )(params, buffers, p_feat, l_feat, attn_mask)
 
-        all_preds.extend(predictions.detach().cpu().numpy().flatten())
-        all_labels.extend(labels.detach().cpu().numpy().flatten())
-        all_info.append(info.squeeze().detach().cpu().numpy())
+        # 2. Aggregate Predictions (Mean voting)
+        # Shape: (Batch_Size)
+        predictions = raw_preds.mean(dim=0)
+
+        all_preds.extend(predictions.cpu().numpy().flatten())
+        all_labels.extend(labels.cpu().numpy().flatten())
+        all_info.append(info.squeeze().numpy())
 
         batch_loss = 0
         total_samples = 0
@@ -823,11 +878,13 @@ def eval_with_batched_sets_ensemble(
             set_preds = predictions[start_idx:end_idx]
             set_labels = labels[start_idx:end_idx]
 
-            if set_labels.std() < 1e-10:
+            if set_labels.std() < 1e-8:
                 continue
 
             if normalize_training_batches:
-                set_labels = (set_labels - set_labels.mean()) / set_labels.std()
+                set_labels = (set_labels - set_labels.mean()) / (
+                    set_labels.std() + 1e-8
+                )
 
             set_loss = criterion(set_preds, set_labels)
 
@@ -840,14 +897,16 @@ def eval_with_batched_sets_ensemble(
 
         if total_samples > 0:
             batch_loss /= total_samples
-
             total_loss += batch_loss.item()
             steps += 1
 
     all_info = np.concatenate(all_info)
     content = {PREDICTION: all_preds, TID: all_labels}
-    for i, col in enumerate(loader.dataset.info_cols):
-        content[col] = list(all_info[:, i].flatten())
+
+    # Handle info cols dynamically if possible, or assume indices
+    if hasattr(loader.dataset, "info_cols"):
+        for i, col in enumerate(loader.dataset.info_cols):
+            content[col] = list(all_info[:, i].flatten())
 
     prediction_data = pd.DataFrame(content)
     if prediction_file is not None:
