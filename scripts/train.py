@@ -37,7 +37,8 @@ from dti.data import (
 from dti.featurization import MolFingerprint
 from dti.training import (
     AssayRankAccuracy,
-    train_and_evaluate_model,
+    train_and_evaluate_model_setbased,
+    train_and_evaluate_model_pointwise,
     batch_pair_loss,
     corr_loss,
 )
@@ -214,7 +215,11 @@ def run_split(
     multi_batch = method in [Method.SETS, Method.IC50CORR]
     training_loss = loss_fn(method, nn.SmoothL1Loss(reduction="none"))
     train_short = True  # method.on_sets or method.on_pairs
-    train_and_evaluate_model(
+    (
+        train_and_evaluate_model_setbased
+        if method.on_sets
+        else train_and_evaluate_model_pointwise
+    )(
         model_cls,
         run_name,
         train_loader,
