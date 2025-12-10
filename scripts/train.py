@@ -109,9 +109,9 @@ def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]
         case Method.HODGE | Method.IC50:
             return CombinedModel, ActivityDataset, msa
         case Method.IC50SETS | Method.SETS if mol_only:
-            return MoleculeSetRank, msa, msa
+            return MoleculeSetRank, msa, partial(msa, random_sets_per_batch=0)
         case Method.IC50SETS | Method.SETS:
-            return SetRankModel, msa, msa
+            return SetRankModel, msa, partial(msa, random_sets_per_batch=0)
         case Method.IC50ALLSETS | Method.ALLSETS if mol_only:
             return MoleculeSetRank, shuffled_multiset, msa
         case Method.IC50ALLSETS | Method.ALLSETS:

@@ -846,6 +846,7 @@ def eval_with_batched_sets_ensemble(
         set_boundaries = metadata["set_boundaries"].squeeze().to(device)
         num_sets = metadata["num_sets"].squeeze()
         set_ids_tensor = metadata["set_ids_tensor"].to(device)
+        set_labeled = metadata["set_labeled"]  # list of bools
 
         model_kwargs = dict()
         attn_mask = None
@@ -872,6 +873,8 @@ def eval_with_batched_sets_ensemble(
         total_samples = 0
 
         for i in range(num_sets):
+            if not set_labeled[i]:
+                continue
             start_idx = set_boundaries[i]
             end_idx = set_boundaries[i + 1]
 
