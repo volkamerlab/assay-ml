@@ -315,7 +315,7 @@ class MultiSetActivityDataset(ActivityDataset):
         info_cols=...,
         min_batch_size: int = 3,
         max_set_size: int = 0,
-        sets_per_batch: int = 2,
+        sets_per_batch: int = 4,
         random_sets_per_batch: int = 16,
         random_seed: int = 0,
         **kwargs,
@@ -401,7 +401,7 @@ class MultiSetActivityDataset(ActivityDataset):
             ligand_indices: Array of shape (N,) containing random ligand indices.
         """
         # 1. Pick random set size
-        set_size = self.random.integers(self.min_batch_size, self.max_set_size // 8)
+        set_size = self.random.integers(self.min_batch_size, 128)
 
         # 2. Pick one random protein (by picking a random row)
         prot_source_idx = self.random.choice(self.all_indices)
@@ -486,7 +486,11 @@ class MultiSetActivityDataset(ActivityDataset):
             if is_labeled:
                 final_labels.append(self.labels[l_idxs])
             else:
-                final_labels.append(torch.zeros(count, dtype=self.labels.dtype))
+                final_labels.append(
+                    torch.zeros(
+                        count, dtype=self.labels.dtype, device=self.labels.device
+                    )
+                )
 
             cumulative_count += count
             set_boundaries.append(cumulative_count)
