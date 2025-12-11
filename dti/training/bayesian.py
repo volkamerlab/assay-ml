@@ -7,6 +7,7 @@ import polars as pl
 import numpy as np
 import torch
 from torch import nn
+from torch.func import vmap, stack_module_state, functional_call
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
@@ -45,16 +46,19 @@ def train_ensemble_pfn(
     **kwargs: Dict[str, Any],
 ) -> None:
     opts: Dict[str, Any] = _defaults | kwargs
-    logger.info(f"Initializing Semi-Supervised Ensemble (N={opts['ensemble_size']})")
+    ensemble_size = opts["ensemble_size"]
+    logger.info(
+        f"Initializing Semi-Supervised Ensemble (N={ensemble_size}) for VMAP on {device}"
+    )
 
-    models = []
-    for i in range(opts["ensemble_size"]):
-        m = model_cls(
+    models = [
+        model_cls(
             ligand_input_size=opts["ligand_dim"],
             protein_input_size=opts["protein_dim"],
             **opts,
         ).to(device)
-        models.append(m)
+        for i in range(ensemble_size)
+    ]
 
     logger.info("Fitting BinDistribution on generic training data...")
     models[0].bin_dist.fit(train_loader)
@@ -63,30 +67,45 @@ def train_ensemble_pfn(
         m.bin_dist.load_state_dict(bin_dist_state)
         m.bin_dist.edges.data.copy_(models[0].bin_dist.edges.data)
 
-    all_params = []
-    for m in models:
-        all_params.extend(list(m.parameters()))
+    vmap_model = models[0]
+    params, buffers = stack_module_state(models)
 
-    optimizer = AdamW(all_params, lr=opts["lr"], weight_decay=1e-2)
+    optimizer = AdamW(params.values(), lr=opts["lr"], weight_decay=1e-2)
     scheduler = CosineAnnealingLR(
         optimizer, T_max=opts["num_epochs"], eta_min=opts.get("min_lr", 1e-6)
     )
 
     best_loss = float("inf")
+    (OUTPUT / run_name).mkdir(parents=True, exist_ok=True)
+
+    # Define vmapped forward pass once
+    def single_model_forward(p, b, x, c, m, s):
+        # x, c, m, s are aug_feats, context_input, aug_mask, aug_set_ids
+        return functional_call(vmap_model, (p, b), (x, c, m, s))
+
+    vmap_forward = vmap(
+        single_model_forward,
+        in_dims=(0, 0, None, None, None, None),
+        randomness="different",
+    )
 
     for epoch in range(opts["num_epochs"]):
         logger.info(f" == Epoch: {epoch + 1} == ")
 
-        train_loss = train_epoch_semi_supervised(
-            models,
+        # Training epoch now returns updated parameters and buffers (for batch norm etc.)
+        train_loss, params, buffers = train_epoch_vmap(
+            vmap_model,
+            params,
+            buffers,
             train_loader,
             unlabeled_source,
             optimizer,
             opts["unlabeled_ratio"],
             opts["consistency_weight"],
+            vmap_forward,
         )
 
-        val_results = evaluate_ensemble(models, val_loader)
+        val_results = evaluate_ensemble_vmap(vmap_model, params, buffers, val_loader)
 
         current_lr = scheduler.get_last_lr()[0]
         results = (
@@ -102,9 +121,8 @@ def train_ensemble_pfn(
         if val_results["NLL"] < best_loss:
             best_loss = val_results["NLL"]
             save_path = OUTPUT / run_name / "ensemble_best.pt"
-            (OUTPUT / run_name).mkdir(parents=True, exist_ok=True)
 
-            state = {f"model_{i}": m.state_dict() for i, m in enumerate(models)}
+            state = {"params": params, "buffers": buffers}
             torch.save(state, save_path)
             logger.info(f"Checkpoint saved: Val NLL {best_loss:.4f}")
 
@@ -112,28 +130,32 @@ def train_ensemble_pfn(
         load_path = OUTPUT / run_name / "ensemble_best.pt"
         if load_path.exists():
             checkpoint = torch.load(load_path)
-            for i, m in enumerate(models):
-                m.load_state_dict(checkpoint[f"model_{i}"])
 
-            test_results = evaluate_ensemble(models, test_loader)
+            test_results = evaluate_ensemble_vmap(
+                vmap_model, checkpoint["params"], checkpoint["buffers"], test_loader
+            )
             logger.info("=== Final Ensemble Test Results ===")
             for k, v in test_results.items():
-                logger.info(f" test {k}: {v:.4f}")
+                logger.info(f" {k}: {v:.4f}")
+        else:
+            logger.warning("No best ensemble checkpoint found for final test.")
 
 
-def train_epoch_semi_supervised(
-    models: List[nn.Module],
+def train_epoch_vmap(
+    vmap_model: nn.Module,
+    params: Dict[str, torch.Tensor],
+    buffers: Dict[str, torch.Tensor],
     loader: DataLoader,
     unlabeled_source: UnlabeledDatasourceMixin,
     optimizer: torch.optim.Optimizer,
     unlabeled_ratio: int,
     consistency_weight: float,
-) -> float:
-    [model.train() for model in models]
+    vmap_forward: Any,  # Pre-defined vmapped function
+) -> Tuple[float, Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
     total_loss = 0.0
-    bd = models[0].bin_dist
+    bd = vmap_model.bin_dist  # Shared bin dist logic
 
-    for batch in (pbar := tqdm.tqdm(loader, desc="Semi-Supervised Train")):
+    for batch in tqdm.tqdm(loader, desc="train"):
         (ligand_feats, labels, _, query_mask, metadata) = _unpack_batch(batch)
 
         (
@@ -153,6 +175,7 @@ def train_epoch_semi_supervised(
             unlabeled_ratio,
         )
 
+        # 3. Normalize (MinMax) and Context
         if bd.bounded_support:
             with torch.no_grad():
                 normed_labels = _normalize_sets_minmax(
@@ -168,44 +191,116 @@ def train_epoch_semi_supervised(
         context_input = normed_labels.clone()
         context_input[aug_mask] = 0.0
 
-        ensemble_preds = []  # (N_total, n_bins)
-        ensemble_means = []  # (N_total,)
+        # preds: (N_ensemble, N_total, N_bins)
+        preds = vmap_forward(
+            params, buffers, aug_feats, context_input, aug_mask, aug_set_ids
+        )
 
         optimizer.zero_grad(set_to_none=True)
-        batch_loss = 0.0
 
-        for model in models:
-            preds = model(aug_feats, context_input, aug_mask, aug_set_ids)
-            ensemble_preds.append(preds)
+        labeled_query_mask = aug_mask & (~unlabeled_mask)
 
-            labeled_query_mask = aug_mask & (~unlabeled_mask)
-
-            nll = bd.nll(normed_labels[labeled_query_mask], preds[labeled_query_mask])
-            batch_loss += nll.mean()  # Add supervised component
-
-            pred_mean = bd.mean(preds)
-            ensemble_means.append(pred_mean)
+        nll_per_model = vmap(bd.nll, in_dims=(None, 0))(
+            normed_labels[labeled_query_mask], preds[:, labeled_query_mask, :]
+        )
+        supervised_loss = nll_per_model.mean()
+        batch_loss = supervised_loss
 
         if consistency_weight > 0.0:
-            # Stack means: (n_models, N_total)
-            stacked_means = torch.stack(ensemble_means)
-            consensus_mean = stacked_means.mean(dim=0).detach()
+            ensemble_means = vmap(bd.mean, in_dims=0)(preds)
 
-            consistency_loss_sum = 0.0
+            consensus_mean = ensemble_means.mean(dim=0).detach()
 
-            for i, preds in enumerate(ensemble_preds):
-                crps = bd.crps(consensus_mean[unlabeled_mask], preds[unlabeled_mask])
-                consistency_loss_sum += crps.mean()
+            crps_per_model = vmap(bd.crps, in_dims=(None, 0))(
+                consensus_mean[unlabeled_mask], preds[:, unlabeled_mask, :]
+            )
+            consistency_loss = crps_per_model.mean()
 
-            batch_loss += consistency_weight * (consistency_loss_sum / len(models))
+            batch_loss += consistency_weight * consistency_loss
 
-        pbar.set_description(f"loss={batch_loss.item():.2e}")
         batch_loss.backward()
         optimizer.step()
 
         total_loss += batch_loss.item()
 
-    return total_loss / len(loader)
+    return total_loss / len(loader), params, buffers
+
+
+@torch.no_grad()
+def evaluate_ensemble_vmap(
+    vmap_model: nn.Module,
+    params: Dict[str, torch.Tensor],
+    buffers: Dict[str, torch.Tensor],
+    loader: DataLoader,
+):
+    # Setup trackers and reference BD
+    ensemble_size = params["module.0.weight"].size(0)
+    ref_bd = vmap_model.bin_dist
+
+    ensemble_tracker = MetricTracker(ref_bd, compute_correlations=False)
+    individual_trackers = [
+        MetricTracker(ref_bd, compute_correlations=False) for _ in range(ensemble_size)
+    ]
+
+    # Define vmapped forward pass
+    def single_model_forward(p, b, x, c, m, s):
+        return functional_call(vmap_model, (p, b), (x, c, m, s))
+
+    vmap_forward = vmap(single_model_forward, in_dims=(0, 0, None, None, None, None))
+
+    for batch in tqdm.tqdm(loader, desc="Vmap Ensemble Eval"):
+        (ligand_feats, labels, _, query_mask, metadata) = _unpack_batch(batch)
+
+        # Standard normalization
+        set_boundaries = metadata["set_boundaries"].squeeze()
+        num_sets = metadata["num_sets"]
+        if isinstance(num_sets, torch.Tensor):
+            num_sets = num_sets.item()
+
+        if ref_bd.bounded_support:
+            ref_normed = _normalize_sets_minmax(
+                labels,
+                set_boundaries,
+                num_sets,
+                mask=query_mask,
+                clip_range=(ref_bd.edges[0], ref_bd.edges[-1]),
+            )
+        else:
+            ref_normed = labels
+
+        context_input = ref_normed.clone()
+        context_input[query_mask] = 0.0
+        set_ids = metadata["set_ids_tensor"].to(device).squeeze()
+
+        # Predict: preds (N_ensemble, N_total, N_bins)
+        preds, _ = vmap_forward(
+            params, buffers, ligand_feats, context_input, query_mask, set_ids
+        )
+
+        # 1. Update Individual Trackers (Iterate on ensemble dim)
+        for i in range(ensemble_size):
+            individual_trackers[i].update(
+                preds[i], ref_normed, query_mask, set_boundaries, num_sets
+            )
+
+        # 2. Compute Ensemble Prediction
+        # Average Probabilities (Linear Opinion Pool)
+        ensemble_probs = torch.softmax(preds, dim=-1).mean(dim=0)
+        ensemble_logits = torch.log(ensemble_probs + 1e-9)
+
+        ensemble_tracker.update(
+            ensemble_logits, ref_normed, query_mask, set_boundaries, num_sets
+        )
+
+    # Compile Results (Averaging over individual trackers)
+    ensemble_results = ensemble_tracker.compute()
+    individual_avg_tracker = EnsembleMetricTracker(individual_trackers)
+    individual_avg_results = individual_avg_tracker.compute_averaged()
+
+    # Combine results (return only the ensemble and averaged individual results)
+    results = {"NLL": ensemble_results["NLL"]}  # Keeping simple for now
+
+    return ensemble_results
 
 
 def augment_batch_with_unlabeled(
