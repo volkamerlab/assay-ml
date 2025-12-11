@@ -7,6 +7,7 @@ from torch.nn import (
     Module,
     Parameter,
     ReLU,
+    SiLU,
     Sequential,
     ModuleList,
     init,
@@ -37,6 +38,7 @@ class MHABlock(Module):
         num_heads: int,
         ffn_hidden_layers: int,
         dropout: float = 0.1,
+        act=SiLU,
     ):
         super().__init__()
         self.hidden_channels = hidden_channels
@@ -46,7 +48,7 @@ class MHABlock(Module):
         self.attn = MHA(hidden_channels, num_heads, dropout=dropout)
         self.dropout = Dropout(dropout)
         self.ffn = _mlp(
-            hidden_channels, hidden_channels, hidden_channels, ffn_hidden_layers
+            hidden_channels, hidden_channels, hidden_channels, ffn_hidden_layers, act=act
         )
         self.ln1 = LayerNorm(hidden_channels)
         self.ln2 = LayerNorm(hidden_channels)
@@ -106,6 +108,7 @@ class SetTransformer(Module):
         num_seeds: int = 1,
         dropout: float = 0.1,
         layer_type: Literal["full", "induced"] = "full",
+        act=SiLU,
     ):
         super().__init__()
         self.hidden_channels = hidden_channels
@@ -119,7 +122,7 @@ class SetTransformer(Module):
                 self.blocks = ModuleList(
                     [
                         SetAttentionBlock(
-                            hidden_channels, num_heads, ffn_hidden_layers, dropout
+                            hidden_channels, num_heads, ffn_hidden_layers, dropout, act=act
                         )
                         for _ in range(num_blocks)
                     ]

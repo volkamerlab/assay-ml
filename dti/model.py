@@ -170,6 +170,7 @@ class MoleculeSetRank(Module):
         hidden_channels: int = 512,
         p_dropout: float = 0.05,
         num_heads: int = 8,
+        act=SiLU,
         **kwargs,
     ):
         super().__init__()
@@ -178,6 +179,7 @@ class MoleculeSetRank(Module):
             hidden_size=hidden_channels,
             output_size=hidden_channels,
             hidden_layers=4,
+            act=act,
         )
         self.num_heads = num_heads
         self.set_transformer = SetTransformer(
@@ -186,14 +188,15 @@ class MoleculeSetRank(Module):
             ffn_hidden_layers=2,
             num_blocks=8,
             dropout=0.0,
+            act=act,
         )
         self.ouput = Sequential(
             Linear(hidden_channels, hidden_channels),
-            SiLU(),
+            act(),
             LayerNorm(hidden_channels),
             Dropout(p_dropout),
             Linear(hidden_channels, hidden_channels),
-            SiLU(),
+            act(),
             Linear(hidden_channels, 1),
         )
 
@@ -225,14 +228,16 @@ class SetRankModel(MoleculeSetRank):
         protein_input_size: int,
         hidden_channels: int = 512,
         p_dropout: float = 0.05,
+        act=SiLU,
         **kwargs,
     ):
-        super().__init__(ligand_input_size, hidden_channels, p_dropout)
+        super().__init__(ligand_input_size, hidden_channels, p_dropout, act=act)
         self.embed_protein = _mlp(
             input_size=protein_input_size,
             hidden_size=hidden_channels,
             output_size=hidden_channels,
             hidden_layers=1,
+            act=act,
         )
 
     def combine_with_query(self, x: Tensor, query: Tensor) -> Tensor:
