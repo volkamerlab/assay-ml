@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from torch.func import stack_module_state, functional_call
 from torch import nn, Tensor, vmap
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
 from torch.utils.data import DataLoader
 from scipy.stats import spearmanr
 
@@ -627,10 +627,8 @@ def train_and_evaluate_model_setbased_ensemble(
     for model in models:
         params.extend(list(model.parameters()))
 
-    optimizer = torch.optim.Adam(params, lr=opts["lr"])
-    scheduler = ReduceLROnPlateau(
-        optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
-    )
+    optimizer = torch.optim.AdamW(params, lr=opts["lr"])
+    scheduler = CosineAnnealingLR(optimizer, T_max=opts["num_epochs"], eta_min=1e-6)
 
     best_corr = 0.0
     epochs_without_improvement = 0
@@ -655,15 +653,14 @@ def train_and_evaluate_model_setbased_ensemble(
             fisher_transform=opts["fisher_transform"],
         )
 
-        scheduler.step(val_rank_corr)
-        lr = scheduler.get_last_lr()[0]
+        scheduler.step()
+        lr = optimizer.param_groups[0]["lr"]
         logger.debug(f"Learning rate: {lr}")
 
         logger.info(
             f"[{run_name}] Epoch: {epoch + 1} "
             f"Fold: {index} "
             f"Train Loss: {train_loss:.4f} "
-            f"Val Loss: {val_loss:.4f} "
             f"Val Rank Corr: {val_rank_corr:.4f}"
         )
 

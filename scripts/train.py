@@ -155,7 +155,7 @@ def run_split(
     seed: int,
 ):
     batch_size = 512
-    num_epochs = 2000  # early stopping in place
+    num_epochs = 1000  # early stopping in place
     info_cols = [COMPOUND, ASSAY]
     data_dir = DATA / "processed" / dataset_name
     train_tgt = tgt_name = "scaled_ic50"
