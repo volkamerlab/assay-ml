@@ -645,6 +645,7 @@ def train_and_evaluate_model_setbased_ensemble(
             optimizer,
             criterion=opts["training_loss"],
             fisher_transform=opts["fisher_transform"],
+            unlabeled_weight=min(1, epoch / 100),
         )
 
         val_loss, val_rank_corr = eval_with_batched_sets_ensemble(
