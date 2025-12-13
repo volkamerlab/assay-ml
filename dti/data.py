@@ -315,7 +315,7 @@ class MultiSetActivityDataset(ActivityDataset):
         info_cols=...,
         min_batch_size: int = 3,
         max_set_size: int = 0,
-        sets_per_batch: int = 4,
+        sets_per_batch: int = 16,
         random_sets_per_batch: int = 16,
         random_seed: int = 0,
         **kwargs,

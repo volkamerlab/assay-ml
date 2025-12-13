@@ -621,10 +621,8 @@ def train_and_evaluate_model_setbased_ensemble(
         cosine_agg=opts["cosine_agg"],
     )
 
-    # Fix: Ensure models are on device
     models = [create_model().to(device) for _ in range(ensemble_size)]
 
-    # Fix: Syntax error in list extension
     params = []
     for model in models:
         params.extend(list(model.parameters()))
@@ -638,7 +636,6 @@ def train_and_evaluate_model_setbased_ensemble(
     epochs_without_improvement = 0
     optimization = []
 
-    # Create output directory
     (OUTPUT / run_name).mkdir(parents=True, exist_ok=True)
 
     for epoch in range(opts["num_epochs"]):
@@ -650,7 +647,6 @@ def train_and_evaluate_model_setbased_ensemble(
             fisher_transform=opts["fisher_transform"],
         )
 
-        # Pass list of models to evaluation
         val_loss, val_rank_corr = eval_with_batched_sets_ensemble(
             models,
             val_loader,
@@ -711,6 +707,7 @@ def train_with_batched_sets_ensemble(
     optimizer: torch.optim.Optimizer,
     criterion: nn.Module,
     fisher_transform: bool = True,
+    unlabeled_weight: float = 0.1,
 ):
     """
     Trains an ensemble of models using a standard loop and semi-supervised set-based loss.
@@ -770,13 +767,10 @@ def train_with_batched_sets_ensemble(
                 set_preds = predictions[:, start_idx:end_idx]
 
                 if set_labeled[i]:
-                    # Ground truth labels (shape: (Set_Size))
                     set_targets = labels[start_idx:end_idx].unsqueeze(0)
                 else:
-                    # Consensus target (shape: (Set_Size))
                     set_targets = ensemble_consensus[start_idx:end_idx].unsqueeze(0)
 
-                # Skip degenerate sets
                 if set_targets.std() < 1e-8:
                     continue
 
@@ -785,24 +779,20 @@ def train_with_batched_sets_ensemble(
                 if fisher_transform:
                     loss_val = fisher_transform_torch(loss_val)
 
-                current_model_loss += loss_val * set_size
-                total_samples_in_batch += set_size
+                weight = 1.0 if set_labeled[i] else unlabeled_weight
+                current_model_loss += loss_val * set_size * weight
+                total_samples_in_batch += set_size * weight
 
             if total_samples_in_batch > 0:
                 current_model_loss /= total_samples_in_batch
 
-            # Accumulate total loss for logging
             ensemble_batch_loss += current_model_loss.item()
 
-            # Backpropagate for the current model. Gradients accumulate in optimizer's params.
             if total_samples_in_batch > 0:
                 current_model_loss.backward()
-            # -----------------------------------------------------------------
 
-        # 4. Optimizer Step (updates parameters of all models based on accumulated gradients)
         optimizer.step()
 
-        # 5. Logging and bookkeeping
         avg_batch_loss = ensemble_batch_loss / ensemble_size
         total_epoch_loss += avg_batch_loss
         steps += 1
