@@ -10,7 +10,7 @@ import torch
 from torch import nn, Tensor
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
-from scipy.stats import spearmanr, pearsonr
+from scipy.stats import spearmanr, pearsonr, kendalltau
 
 import logging
 from functools import namedtuple
@@ -117,9 +117,13 @@ def eval_with_batched_sets(
     torch.set_grad_enabled(False)
 
     total_loss = 0.0
-    total_samples = 0
 
-    intra_assay_spearmans = []
+    intra_assay_metrics = {
+        "spearman": [],
+        "pearson": [],
+        "kendall": [],
+        "sizes": [],
+    }
 
     all_preds, all_labels, all_info = [], [], []
 
@@ -161,16 +165,54 @@ def eval_with_batched_sets(
             set_p = preds_np[start_idx:end_idx]
             set_l = labels_np[start_idx:end_idx]
 
-            if len(set_l) < 2 or np.std(set_l) < 1e-9:
+            if len(set_l) < 2:
                 continue
 
-            rho, _ = spearmanr(set_p, set_l)
+            if np.std(set_l) < 1e-9:
+                continue
 
-            if not np.isnan(rho):
-                intra_assay_spearmans.append(rho)
+            s_rho, _ = spearmanr(set_p, set_l)
+            p_r, _ = pearsonr(set_p, set_l)
+            k_tau, _ = kendalltau(set_p, set_l)
 
-    mean_rank_corr = np.mean(intra_assay_spearmans) if intra_assay_spearmans else 0.0
-    avg_loss = total_loss / len(loader)
+            if not np.isnan(s_rho):
+                intra_assay_metrics["spearman"].append(s_rho)
+
+            if not np.isnan(p_r):
+                intra_assay_metrics["pearson"].append(p_r)
+                intra_assay_metrics["sizes"].append(len(set_l))
+
+            if not np.isnan(k_tau):
+                intra_assay_metrics["kendall"].append(k_tau)
+
+    mean_spearman = (
+        np.mean(intra_assay_metrics["spearman"])
+        if intra_assay_metrics["spearman"]
+        else 0.0
+    )
+    mean_kendall = (
+        np.mean(intra_assay_metrics["kendall"])
+        if intra_assay_metrics["kendall"]
+        else 0.0
+    )
+
+    pearsons = np.array(intra_assay_metrics["pearson"])
+    sizes = np.array(intra_assay_metrics["sizes"])
+
+    if len(pearsons) > 0:
+        pearsons = np.clip(pearsons, -1.0 + 1e-6, 1.0 - 1e-6)
+
+        z_values = np.arctanh(pearsons)
+
+        weights = sizes - 3
+        weights = np.maximum(weights, 1)
+        avg_z = np.average(z_values, weights=weights)
+
+        mean_pearson = np.tanh(avg_z)
+    else:
+        mean_pearson = 0.0
+
+    avg_loss = total_loss / max(1, len(loader))
 
     if prediction_file is not None:
         if len(all_info) > 0:
@@ -185,7 +227,14 @@ def eval_with_batched_sets(
 
         pd.DataFrame(content).to_csv(prediction_file, index=False)
 
-    return avg_loss, mean_rank_corr
+    metrics = {
+        "spearman": mean_spearman,
+        "pearson": mean_pearson,
+        "kendall": mean_kendall,
+        "loss": avg_loss,
+    }
+
+    return avg_loss, metrics
 
 
 def train_epoch(
@@ -300,9 +349,10 @@ def train_and_evaluate_model(
     for epoch in range(opts["num_epochs"]):
         train_loss = train_fn(model, train_loader, optimizer)
 
-        val_loss, val_rank_corr = eval_fn(
+        val_loss, val_metrics = eval_fn(
             model, val_loader, criterion=criterion if opts["eval_criterion"] else None
         )
+        val_rank_corr = val_metrics["spearman"]
 
         scheduler.step(val_rank_corr)
 
@@ -311,7 +361,10 @@ def train_and_evaluate_model(
         logger.info(f"Run: {run_name}")
         logger.info(f" Epoch: {epoch + 1}")
         logger.info(f" Train Loss: {train_loss:.4f}")
-        logger.info(f" Val Rank Corr (Spearman): {val_rank_corr:.4f}")
+        logger.info(f" Val Spearman: {val_metrics['spearman']:.4f}")
+        logger.info(f" Val Pearson: {val_metrics['pearson']:.4f}")
+        logger.info(f" Val Kendall: {val_metrics['kendall']:.4f}")
+        logger.info(f" Val Loss: {val_metrics['loss']:.4f}")
         logger.info(f" LR: {current_lr:.2e}")
 
         if val_rank_corr > best_corr:
@@ -328,9 +381,12 @@ def train_and_evaluate_model(
                 break
 
     model.load_state_dict(torch.load(OUTPUT / run_name / f"model{index}.pt"))
-    _, test_rank_corr = eval_fn(
+    _, test_metrics = eval_fn(
         model,
         test_loader,
         prediction_file=OUTPUT / run_name / "predictions.csv",
     )
-    logger.info(f"Final Test Intra-Assay Spearman: {test_rank_corr:.4f}")
+    logger.info(f" Test Spearman: {test_metrics['spearman']:.4f}")
+    logger.info(f" Test Pearson: {test_metrics['pearson']:.4f}")
+    logger.info(f" Test Kendall: {test_metrics['kendall']:.4f}")
+    logger.info(f" Test Loss: {test_metrics['loss']:.4f}")
