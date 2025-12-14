@@ -10,7 +10,7 @@ import torch
 from torch import nn, Tensor
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, pearsonr
 
 import logging
 from functools import namedtuple
@@ -216,71 +216,64 @@ def create_set_attention_mask_from_ids(
     return mask
 
 
-def train_with_batched_sets(
+class BatchPairwiseRankingLoss(nn.Module):
+    def __init__(self, margin=0.1):
+        super().__init__()
+        self.margin = margin
+
+    def forward(self, preds, labels, set_ids):
+        pred_diff = preds.unsqueeze(0) - preds.unsqueeze(1)
+        label_diff = labels.unsqueeze(0) - labels.unsqueeze(1)
+
+        set_mask = set_ids.unsqueeze(0) == set_ids.unsqueeze(1)
+
+        valid_pair_mask = (label_diff > 0) & set_mask
+
+        loss_matrix = torch.relu(self.margin - pred_diff)
+
+        masked_loss = loss_matrix * valid_pair_mask.float()
+
+        num_pairs = valid_pair_mask.sum()
+        return masked_loss.sum() / (num_pairs + 1e-8)
+
+
+def train_with_batched_sets_vectorized(
     model,
     loader,
     optimizer,
-    criterion,
-    fisher_transform=True,
-    normalize_training_batches=False,
 ):
-    logger.debug("Training model")
+    criterion = BatchPairwiseRankingLoss(margin=0.1)
+
     model.train()
     torch.set_grad_enabled(True)
     total_loss = 0
     steps = 0
 
-    for protein_features, ligand_features, labels, info, metadata in (
-        pbar := tqdm.tqdm(loader, desc="training")
-    ):
-        set_boundaries = metadata["set_boundaries"].squeeze()
-        num_sets = metadata["num_sets"].squeeze()
-        set_ids_tensor = metadata["set_ids_tensor"].to(device)
+    pbar = tqdm.tqdm(loader, desc="training")
 
-        model_kwargs = dict()
+    for protein_features, ligand_features, labels, info, metadata in pbar:
+        protein_features = protein_features.squeeze().to(device)
+        ligand_features = ligand_features.squeeze().to(device)
+        labels = labels.squeeze().to(device)
+        set_ids = metadata["set_ids_tensor"].squeeze().to(device)
+
+        model_kwargs = {}
         if hasattr(model, "num_heads"):
             model_kwargs["attn_mask"] = create_set_attention_mask_from_ids(
-                set_ids_tensor, model.num_heads
+                set_ids, model.num_heads
             )
 
-        predictions = model(
-            protein_features.squeeze(), ligand_features.squeeze(), **model_kwargs
-        ).squeeze()
+        predictions = model(protein_features, ligand_features, **model_kwargs).squeeze()
 
-        labels = labels.squeeze()
-        batch_loss = 0
-        total_samples = 0
+        loss = criterion(predictions, labels, set_ids)
 
-        for i in range(num_sets):
-            start_idx = set_boundaries[i]
-            end_idx = set_boundaries[i + 1]
-            set_preds = predictions[start_idx:end_idx]
-            set_labels = labels[start_idx:end_idx]
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
-            if set_labels.std() < 1e-10:
-                continue
-
-            if normalize_training_batches:
-                set_labels = (set_labels - set_labels.mean()) / set_labels.std()
-
-            set_loss = criterion(set_preds, set_labels)
-
-            if fisher_transform:
-                set_loss = fisher_transform_torch(set_loss)
-
-            set_size = end_idx - start_idx
-            batch_loss += set_loss * set_size
-            total_samples += set_size
-
-        if total_samples > 0:
-            batch_loss /= total_samples
-            optimizer.zero_grad()
-            batch_loss.backward()
-            optimizer.step()
-            total_loss += batch_loss.item()
-            steps += 1
-
-            pbar.set_description(f"loss={batch_loss.item():.2e}")
+        total_loss += loss.item()
+        steps += 1
+        pbar.set_description(f"loss={loss.item():.4f}")
 
     return total_loss / max(1, steps)
 
@@ -288,87 +281,82 @@ def train_with_batched_sets(
 def eval_with_batched_sets(
     model,
     loader,
-    criterion=nn.L1Loss(),
-    rank_corr_fn=None,
-    fisher_transform=True,
-    normalize_training_batches=True,
+    criterion=None,
     prediction_file: Path | str | None = None,
 ):
-    """Call with batch size one only."""
-    logger.debug("Evaluating model")
     model.eval()
     torch.set_grad_enabled(False)
-    total_loss = 0
-    steps = 0
+
+    total_loss = 0.0
+    total_samples = 0
+
+    intra_assay_spearmans = []
 
     all_preds, all_labels, all_info = [], [], []
 
     for protein_features, ligand_features, labels, info, metadata in tqdm.tqdm(
-        loader, desc="evaluate"
+        loader, desc="Evaluating"
     ):
+        protein_features = protein_features.squeeze().to(device)
+        ligand_features = ligand_features.squeeze().to(device)
+        labels = labels.squeeze().to(device)
+
         set_boundaries = metadata["set_boundaries"].squeeze()
         num_sets = metadata["num_sets"].squeeze()
-        labels = labels.squeeze()
-        set_ids_tensor = metadata["set_ids_tensor"].to(device)
+        set_ids = metadata["set_ids_tensor"].squeeze().to(device)
 
         model_kwargs = dict()
         if hasattr(model, "num_heads"):
             model_kwargs["attn_mask"] = create_set_attention_mask_from_ids(
-                set_ids_tensor, model.num_heads
+                set_ids, model.num_heads
             )
 
-        predictions = model(
-            protein_features.squeeze(), ligand_features.squeeze(), **model_kwargs
-        ).squeeze()
+        predictions = model(protein_features, ligand_features, **model_kwargs).squeeze()
 
-        all_preds.extend(predictions.detach().cpu().numpy().flatten())
-        all_labels.extend(labels.detach().cpu().numpy().flatten())
-        all_info.append(info.squeeze().detach().cpu().numpy())
+        if criterion is not None:
+            batch_loss = criterion(predictions, labels, set_ids)
+            total_loss += batch_loss.item()
 
-        batch_loss = 0
-        total_samples = 0
+        preds_np = predictions.cpu().numpy()
+        labels_np = labels.cpu().numpy()
+
+        all_preds.extend(preds_np)
+        all_labels.extend(labels_np)
+        if info is not None:
+            all_info.append(info.squeeze().numpy())
 
         for i in range(num_sets):
-            start_idx = set_boundaries[i]
-            end_idx = set_boundaries[i + 1]
+            start_idx = set_boundaries[i].item()
+            end_idx = set_boundaries[i + 1].item()
 
-            set_preds = predictions[start_idx:end_idx]
-            set_labels = labels[start_idx:end_idx]
+            set_p = preds_np[start_idx:end_idx]
+            set_l = labels_np[start_idx:end_idx]
 
-            if set_labels.std() < 1e-10:
+            if len(set_l) < 2 or np.std(set_l) < 1e-9:
                 continue
 
-            if normalize_training_batches:
-                set_labels = (set_labels - set_labels.mean()) / set_labels.std()
+            rho, _ = spearmanr(set_p, set_l)
 
-            set_loss = criterion(set_preds, set_labels)
+            if not np.isnan(rho):
+                intra_assay_spearmans.append(rho)
 
-            if fisher_transform:
-                set_loss = fisher_transform_torch(set_loss)
+    mean_rank_corr = np.mean(intra_assay_spearmans) if intra_assay_spearmans else 0.0
+    avg_loss = total_loss / len(loader)
 
-            set_size = end_idx - start_idx
-            batch_loss += set_loss * set_size
-            total_samples += set_size
-
-        if total_samples > 0:
-            batch_loss /= total_samples
-
-            total_loss += batch_loss.item()
-            steps += 1
-
-    all_info = np.concatenate(all_info)
-    content = {PREDICTION: all_preds, TID: all_labels}
-    for i, col in enumerate(loader.dataset.info_cols):
-        content[col] = list(all_info[:, i].flatten())
-
-    prediction_data = pd.DataFrame(content)
     if prediction_file is not None:
-        logger.info(f"Writing predictions to {prediction_file}")
-        prediction_data.to_csv(prediction_file)
+        if len(all_info) > 0:
+            all_info = np.concatenate(all_info)
 
-    mean_rank_corr = -1 if rank_corr_fn is None else rank_corr_fn(prediction_data)
+        content = {"prediction": all_preds, "label": all_labels}
 
-    return total_loss / max(1, steps), mean_rank_corr
+        if hasattr(loader.dataset, "info_cols") and len(all_info) > 0:
+            for i, col in enumerate(loader.dataset.info_cols):
+                if i < all_info.shape[1]:
+                    content[col] = all_info[:, i]
+
+        pd.DataFrame(content).to_csv(prediction_file, index=False)
+
+    return avg_loss, mean_rank_corr
 
 
 def train_epoch(
@@ -572,6 +560,8 @@ def train_and_evaluate_model(
     for k, v in opts.items():
         logger.info(f" - {k}={v}")
 
+    criterion = BatchPairwiseRankingLoss(margin=0.1).to(device)
+
     model = model_cls(
         ligand_input_size=opts["ligand_dim"],
         embedding_size=opts["embedding_size"],
@@ -580,72 +570,50 @@ def train_and_evaluate_model(
     ).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=opts["lr"])
+
     scheduler = ReduceLROnPlateau(
         optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
     )
-    train_fn = (
-        partial(train_with_batched_sets, fisher_transform=opts["fisher_transform"])
-        if isinstance(train_loader.dataset, MultiSetActivityDataset)
-        else train_epoch
-    )
-    eval_fn = (
-        eval_with_batched_sets
-        if isinstance(test_loader.dataset, MultiSetActivityDataset)
-        else evaluate_epoch
-    )
 
-    best_corr = 0.0
+    train_fn = train_with_batched_sets_vectorized
+    eval_fn = eval_with_batched_sets
+
+    best_corr = -1.0
     epochs_without_improvement = 0
-    optimization = []
 
     for epoch in range(opts["num_epochs"]):
-        train_loss = train_fn(
-            model,
-            train_loader,
-            optimizer,
-            criterion=opts["training_loss"],
-            normalize_training_batches=opts["normalize_training_batches"],
-        )
-        val_loss, val_rank_corr = eval_fn(
-            model, val_loader, rank_corr_fn=opts["rank_corr_fn"]
-        )
+        train_loss = train_fn(model, train_loader, optimizer)
+
+        val_loss, val_rank_corr = eval_fn(model, val_loader, criterion=criterion)
 
         scheduler.step(val_rank_corr)
-        lr = scheduler.get_last_lr()
-        logger.debug(f"Learning rate: {lr}")
 
-        logger.info(
-            f"[{run_name}] Epoch: {epoch + 1} "
-            f"Fold: {index} "
-            f"Train Loss: {train_loss:.4f} "
-            f"Val Loss: {val_loss:.4f} "
-            f"Val Rank Corr: {val_rank_corr:.4f}"
-        )
+        current_lr = scheduler.get_last_lr()[0]
 
-        optimization.append(Epoch(epoch, lr, train_loss, val_loss, val_rank_corr))
-        pd.DataFrame(optimization).to_csv(
-            OUTPUT / run_name / "optimization.csv", index=False
-        )
+        logger.info(f"Run: {run_name}")
+        logger.info(f" Epoch: {epoch + 1}")
+        logger.info(f" Train Loss: {train_loss:.4f}")
+        logger.info(f" Val Rank Corr (Spearman): {val_rank_corr:.4f}")
+        logger.info(f" LR: {current_lr:.2e}")
 
         if val_rank_corr > best_corr:
+            logger.info(
+                f"Checkpointing (corr={val_rank_corr:.4f}) in epoch {epoch + 1}."
+            )
             best_corr = val_rank_corr
             epochs_without_improvement = 0
             torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= opts["patience_termination"]:
-                logger.info(
-                    f"[{run_name}] Early stopping triggered after {epoch + 1} epochs."
-                )
+                logger.info("Early stopping triggered.")
                 break
 
-    logger.info(f"[{run_name}] Loading best model for final test evaluation")
     model.load_state_dict(torch.load(OUTPUT / run_name / f"model{index}.pt"))
-    pred_file = OUTPUT / run_name / "predictions.csv"
     _, test_rank_corr = eval_fn(
         model,
         test_loader,
-        rank_corr_fn=opts["rank_corr_fn"],
-        prediction_file=pred_file,
+        prediction_file=OUTPUT / run_name / "predictions.csv",
+        device=device,
     )
-    logger.info(f"[{run_name}] Final Test Rank Corr: {test_rank_corr:.4f}")
+    logger.info(f"Final Test Intra-Assay Spearman: {test_rank_corr:.4f}")
