@@ -40,7 +40,6 @@ from dti.training import (
     train_with_batched_sets,
     eval_with_batched_sets,
     train_epoch,
-    evaluate_epoch,
     BatchPairwiseRankingLoss,
 )
 from dti.utils import (
