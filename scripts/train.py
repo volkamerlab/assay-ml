@@ -36,13 +36,16 @@ from dti.data import (
 )
 from dti.featurization import MolFingerprint
 from dti.training import (
-    AssayRankAccuracy,
     train_and_evaluate_model,
-    batch_pair_loss,
-    corr_loss,
+    train_with_batched_sets,
+    eval_with_batched_sets,
+    train_epoch,
+    evaluate_epoch,
+    BatchPairwiseRankingLoss,
 )
 from dti.utils import (
     Method,
+    device,
     init_logging,
     set_random_seeds,
     save_code_snapshot,
@@ -128,18 +131,6 @@ def train_batch(method: Method, default: int) -> int:
         return default
 
 
-def loss_fn(method: Method, default: Callable) -> Callable:
-    match method:
-        case Method.IC50CORR | Method.SETS | Method.ALLSETS:
-            return corr_loss
-        case Method.ALLPAIRS:
-            return partial(batch_pair_loss, criterion=default)
-        case Method.IC50ALLSETS | Method.IC50SETS:
-            return nn.SmoothL1Loss()
-        case _:
-            return nn.SmoothL1Loss(reduction="none")
-
-
 def test_batch(method: Method, default: int) -> int:
     return default if method.on_pairs else 1
 
@@ -208,12 +199,30 @@ def run_split(
         num_workers=0,
     )
 
-    # rstat = partial(spearmanr, nan_policy="raise")  # , variant="c")
-    rstat = pearsonr
-    assay_rank = AssayRankAccuracy(data, method.on_pairs, rank_statistic=rstat)
     multi_batch = method in [Method.SETS, Method.IC50CORR]
-    training_loss = loss_fn(method, nn.SmoothL1Loss(reduction="none"))
-    train_short = True  # method.on_sets or method.on_pairs
+
+    settings = dict(
+        ligand_dim=mol_feat.dim,
+        multi_batch=multi_batch,
+        batch_size=batch_size,
+        embedding_size=512,
+        num_epochs=num_epochs,
+        cosine_agg=True,
+        patience_termination=100,
+        patience_lr=20,
+        lr=1e-4,
+        eval_fn=eval_with_batched_sets,
+    )
+    if method.on_sets:
+        settings |= dict(
+            criterion=BatchPairwiseRankingLoss(margin=0.1).to(device),
+            train_fn=train_with_batched_sets,
+            eval_criterion=True,
+        )
+    else:
+        settings |= dict(
+            criterion=nn.MSELoss(), train_fn=train_epoch, eval_criterion=False
+        )
     train_and_evaluate_model(
         model_cls,
         run_name,
@@ -222,19 +231,7 @@ def run_split(
         test_loader,
         method,
         fold,
-        ligand_dim=mol_feat.dim,
-        multi_batch=multi_batch,
-        batch_size=batch_size,
-        rank_corr_fn=assay_rank,
-        embedding_size=512,
-        num_epochs=num_epochs,
-        cosine_agg=True,
-        training_loss=training_loss,
-        patience_termination=100,
-        patience_lr=20,
-        normalize_training_batches=False,  # method.on_sets,
-        lr=1e-4,
-        fisher_transform=method not in [Method.IC50SETS, Method.IC50ALLSETS],
+        **settings,
     )
 
     logger.info(f"{run_name} finished")

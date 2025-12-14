@@ -23,177 +23,6 @@ from .data import MultiSetActivityDataset
 logger = logging.getLogger(__name__)
 
 
-class AssayRankAccuracy:
-    """
-    Compute the intra-assay rank correlation weighted by assay size.
-
-    This class evaluates the ranking performance of model predictions against reference data
-    on an assay-by-assay basis, weighting the correlation by the number of compounds in each assay.
-
-    Attributes:
-        pair_predictions (bool): Whether predictions are made for pairs of compounds.
-        rank_statistic (Callable): Function to calculate rank correlation (default: spearmanr).
-        reference_data (pd.Series): Reference activity data grouped by assay and compound.
-    """
-
-    def __init__(
-        self,
-        reference_data: pd.DataFrame,
-        pair_predictions: bool,
-        rank_statistic: Callable = spearmanr,
-        fisher: bool = True,
-    ):
-        """
-        Initialize the AssayRankAccuracy evaluator.
-
-        Args:
-            reference_data (pd.DataFrame): DataFrame containing reference activity data.
-            pair_predictions (bool): Whether predictions are made for pairs of compounds.
-            rank_statistic (Callable, optional): Function to calculate rank correlation.
-                Defaults to spearmanr from scipy.stats.
-            fisher (bool, optional): Perform a Fisher transform before aggregation.
-        """
-        self.pair_predictions = pair_predictions
-        self.rank_statistic = rank_statistic
-        self.reference_data = reference_data.groupby([ASSAY, COMPOUND])[ACT].mean()
-        self.fisher = fisher
-
-    def __call__(self, prediction_data: pd.DataFrame) -> float:
-        """
-        Calculate weighted average rank correlation across assays in parallel.
-
-        Args:
-            prediction_data (pd.DataFrame): DataFrame containing model predictions.
-
-        Returns:
-            float: Weighted average rank correlation across all assays.
-        """
-        key_sffx = "_a" if self.pair_predictions else ""
-
-        def process_assay(assay, data, reference_data):
-            # if len(data) <= 4 or assay not in self.reference_data:
-            #     return 0, 0  # No valid data for this assay
-
-            scores = assay_ranks(data) if self.pair_predictions else data
-            scores = scores.set_index(COMPOUND)
-            reference = reference_data.reindex(scores.index)
-
-            if len(scores) <= 1 or reference.nunique() <= 1:
-                return 0, 0  # Skip invalid assays
-
-            try:
-                prediction = scores[PREDICTION].values
-                ground_truth = reference.values
-                corr = self.rank_statistic(prediction, ground_truth).statistic
-                if np.isnan(corr):
-                    logger.warning(f"rank correlation is nan (assay={assay})")
-                    return 0, 0
-                if self.fisher:
-                    corr = fisher_transform_numpy(corr)
-                    n = len(scores) - 3
-                return n * corr, n
-            except ValueError as e:
-                logger.warning(f"rank correlation failed (assay={assay}): {e}")
-                # logger.warning("\n".join(traceback.format_exc().split("\n")))
-                return 0, 0
-
-        results = Parallel(n_jobs=8)(
-            delayed(process_assay)(assay, data, self.reference_data.loc[assay])
-            for assay, data in [
-                (a, d)
-                for a, d in prediction_data.groupby(ASSAY + key_sffx)
-                if a in self.reference_data and len(d) > 4
-            ]
-        )
-
-        corr_sum, count = map(sum, zip(*results))
-        if count <= 0:
-            return np.nan
-        if self.fisher:
-            return np.tanh(corr_sum / count)
-        return corr_sum / count
-
-    def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({self.rank_statistic})"
-
-
-def fisher_transform_numpy(corr: float) -> float:
-    """Fisher transform a correlation using numpy."""
-    return np.atanh(np.clip(corr, 1e-7 - 1, 1 - 1e-7))
-
-
-def fisher_transform_torch(corr: Tensor) -> Tensor:
-    """Fisher transform a correlation using pytorch."""
-    return torch.atanh(torch.clamp(corr, 1e-7 - 1, 1 - 1e-7))
-
-
-def normBCE(pred_deltas: Tensor, true_deltas: Tensor):
-    """
-    Compute normalized Binary Cross Entropy loss.
-
-    Applies sigmoid activation to the prediction deltas before computing BCE loss.
-
-    Args:
-        pred_deltas (Tensor): Predicted delta values.
-        true_deltas (Tensor): True delta values.
-
-    Returns:
-        Tensor: Normalized BCE loss.
-    """
-    thres = nn.Sigmoid()
-    return nn.BCELoss()(thres(pred_deltas), thres(true_deltas))
-
-
-def batch_pair_loss(
-    predictions: Tensor, labels: Tensor, criterion=nn.MSELoss()
-) -> float:
-    """
-    Compute pairwise loss for a batch of predictions and labels.
-
-    Creates a matrix of prediction differences and label differences, then applies
-    the specified loss function.
-
-    Args:
-        predictions (Tensor): Model predictions.
-        labels (Tensor): Ground truth labels.
-        criterion (nn.Module, optional): Loss function. Defaults to nn.MSELoss().
-
-    Returns:
-        float: Computed pairwise loss.
-    """
-    n = len(labels)
-    target_delta = labels.view(n, 1) - labels.view(1, n)
-    if predictions.shape == (n,):
-        predictions = predictions.view(n, 1) - predictions.view(1, n)
-        predictions = predictions.flatten()
-    return criterion(predictions, target_delta.flatten())
-
-
-def corr_loss(x: Tensor, y: Tensor) -> float:
-    """
-    Compute negative Pearson correlation as a loss function.
-
-    Higher correlation results in lower loss. The function handles centering
-    and normalization internally.
-
-    Args:
-        x (Tensor): First tensor, typically predictions.
-        y (Tensor): Second tensor, typically ground truth values.
-
-    Returns:
-        float: Negative Pearson correlation coefficient.
-
-    Raises:
-        ValueError: If either tensor has zero variance.
-    """
-    vx = x - torch.mean(x)
-    vy = y - torch.mean(y)
-    denom = torch.sqrt(torch.sum(vx**2)) * torch.sqrt(torch.sum(vy**2))
-    if denom <= 0.0:
-        raise ValueError("zero variance in batch")
-    return -torch.sum(vx * vy) / denom
-
-
 def create_set_attention_mask_from_ids(
     set_ids: torch.Tensor, num_heads: int = None
 ) -> torch.Tensor:
@@ -237,7 +66,7 @@ class BatchPairwiseRankingLoss(nn.Module):
         return masked_loss.sum() / (num_pairs + 1e-8)
 
 
-def train_with_batched_sets_vectorized(
+def train_with_batched_sets(
     model,
     loader,
     optimizer,
@@ -388,99 +217,23 @@ def train_epoch(
 
     total_loss = 0
 
-    for protein_features, ligand_features, labels, _, weights in (
+    for protein_features, ligand_features, labels, _, _ in (
         pbar := tqdm.tqdm(loader, desc="training")
     ):
         labels = labels.squeeze()
-        if normalize_training_batches:
-            if labels.std() < 1e-10:
-                logger.warning("low label variance - skipping batch")
-                continue
-            labels = (labels - labels.mean()) / labels.std()
 
         optimizer.zero_grad()
         predictions = model(protein_features, ligand_features).squeeze()
-        try:
-            loss = (criterion(predictions, labels) * weights).sum() / weights.sum()
-        except ValueError as e:
-            logger.warning(f"exception in criterion: '{e}'")
-            continue
+        loss = criterion(predictions, labels)
         loss.backward()
         optimizer.step()
 
-        pbar.set_description(f"loss={loss.item():.2e}")
+        pbar.set_description(f"loss={loss.item():.4f}")
 
         total_loss += loss.item()
 
     total_loss /= len(loader)
     return total_loss
-
-
-def evaluate_epoch(
-    model,
-    loader,
-    criterion=nn.L1Loss(),
-    prediction_file=None,
-    rank_corr_fn=None,
-):
-    """
-    Evaluate the model on validation or test data.
-
-    Process each batch from the loader without updating model parameters, and
-    optionally compute rank correlation and save predictions.
-
-    Args:
-        model (nn.Module): The neural network model to evaluate.
-        loader (DataLoader): DataLoader providing batches of evaluation data.
-        criterion (nn.Module, optional): Loss function for evaluation. Defaults to nn.L1Loss().
-        prediction_file (str, optional): Path to save prediction results. Defaults to None.
-        rank_corr_fn (Callable, optional): Function to compute rank correlation. Defaults to None.
-
-    Returns:
-        tuple: A tuple containing:
-            - float: Average loss for the evaluation data.
-            - float: Mean rank correlation if rank_corr_fn is provided, -1 otherwise.
-    """
-    logger.debug("Evaluating model")
-    model.eval()
-    torch.set_grad_enabled(False)
-
-    total_loss = 0
-    all_preds, all_labels, all_info = [], [], []
-
-    for protein_features, ligand_features, labels, info, _ in tqdm.tqdm(
-        loader, desc="evaluating"
-    ):
-        protein_features, ligand_features, labels, info = (
-            protein_features.squeeze(0),
-            ligand_features.squeeze(0),
-            labels.squeeze(),
-            info.squeeze(0),
-        )
-
-        predictions = model(protein_features, ligand_features).squeeze()
-        loss = criterion(predictions, labels).mean()
-
-        total_loss += loss.item()
-        all_preds.extend(predictions.detach().cpu().numpy().flatten())
-        all_labels.extend(labels.detach().cpu().numpy().flatten())
-        all_info.append(info.detach().cpu().numpy())
-
-    total_loss /= len(loader)
-    torch.set_grad_enabled(True)
-
-    all_info = np.concatenate(all_info)
-    content = {PREDICTION: all_preds, TID: all_labels}
-    for i, col in enumerate(loader.dataset.info_cols):
-        content[col] = list(all_info[:, i].flatten())
-
-    prediction_data = pd.DataFrame(content)
-    if prediction_file is not None:
-        logger.info(f"Writing predictions to {prediction_file}")
-        prediction_data.to_csv(prediction_file)
-
-    mean_rank_corr = -1 if rank_corr_fn is None else rank_corr_fn(prediction_data)
-    return total_loss, mean_rank_corr
 
 
 def train_and_evaluate_model(
@@ -493,39 +246,6 @@ def train_and_evaluate_model(
     index: int,
     **kwargs: Dict[str, Any],
 ) -> None:
-    """
-    Train and evaluate the model with learning rate adjustment and early stopping.
-
-    This function handles the complete training pipeline including model instantiation,
-    optimization, learning rate scheduling, early stopping, and model persistence.
-
-    Args:
-        model_cls (Type[nn.Module]): Model class to instantiate.
-        run_name (str): Name of the training run for logging and file naming.
-        train_loader (DataLoader): DataLoader for training data.
-        val_loader (DataLoader): DataLoader for validation data.
-        test_loader (DataLoader): DataLoader for test data.
-        target_name (str): Name of the target being predicted.
-        index (int): Index/fold number for cross-validation.
-        **kwargs (Dict[str, Any]): Additional configuration options, including:
-            - protein_dim (int): Dimension of protein features.
-            - ligand_dim (int): Dimension of ligand features.
-            - embedding_size (int): Size of embeddings in the model.
-            - num_epochs (int): Maximum number of training epochs.
-            - patience_termination (int): Number of epochs without improvement before stopping.
-            - patience_lr (int): Number of epochs without improvement before reducing learning rate.
-            - rank_corr_fn (Callable): Function to compute rank correlation.
-            - training_loss (nn.Module): Loss function for training.
-            - cosine_agg (bool): Whether to use cosine similarity for aggregation.
-            - normalize_training_batches (bool): Whether to normalize batches during training.
-            - lr (float): Initial learning rate.
-            - multi_batch (bool): Whether to use multi-batch training.
-            - batch_size (int): Batch size for multi-batch training.
-            - fisher_transform (bool): Fisher transform criterion values in set training before aggregation during training.
-
-    Returns:
-        None: The function saves the model and training statistics but doesn't return a value.
-    """
     logger.info(f"training model for target: {target_name}")
     Epoch = namedtuple(
         "Epoch",
@@ -547,7 +267,6 @@ def train_and_evaluate_model(
             patience_termination=100,
             patience_lr=20,
             rank_corr_fn=None,
-            training_loss=nn.MSELoss(),
             cosine_agg=True,
             normalize_training_batches=False,
             lr=1e-4,
@@ -560,8 +279,6 @@ def train_and_evaluate_model(
     for k, v in opts.items():
         logger.info(f" - {k}={v}")
 
-    criterion = BatchPairwiseRankingLoss(margin=0.1).to(device)
-
     model = model_cls(
         ligand_input_size=opts["ligand_dim"],
         embedding_size=opts["embedding_size"],
@@ -569,14 +286,13 @@ def train_and_evaluate_model(
         cosine_agg=opts["cosine_agg"],
     ).to(device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=opts["lr"])
+    train_fn, eval_fn, criterion = opts["train_fn"], opts["eval_fn"], opts["criterion"]
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=opts["lr"])
 
     scheduler = ReduceLROnPlateau(
         optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
     )
-
-    train_fn = train_with_batched_sets_vectorized
-    eval_fn = eval_with_batched_sets
 
     best_corr = -1.0
     epochs_without_improvement = 0
@@ -584,7 +300,9 @@ def train_and_evaluate_model(
     for epoch in range(opts["num_epochs"]):
         train_loss = train_fn(model, train_loader, optimizer)
 
-        val_loss, val_rank_corr = eval_fn(model, val_loader, criterion=criterion)
+        val_loss, val_rank_corr = eval_fn(
+            model, val_loader, criterion=criterion if opts["eval_criterion"] else None
+        )
 
         scheduler.step(val_rank_corr)
 
@@ -614,6 +332,5 @@ def train_and_evaluate_model(
         model,
         test_loader,
         prediction_file=OUTPUT / run_name / "predictions.csv",
-        device=device,
     )
     logger.info(f"Final Test Intra-Assay Spearman: {test_rank_corr:.4f}")
