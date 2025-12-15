@@ -79,12 +79,6 @@ class CombinedModel(nn.Module):
         self.protein_mlp = nn.Sequential(
             nn.Linear(protein_input_size, hidden_layer_size),
             nn.SiLU(),
-            nn.Linear(hidden_layer_size, hidden_layer_size),
-            nn.SiLU(),
-            nn.Linear(hidden_layer_size, hidden_layer_size),
-            nn.SiLU(),
-            nn.Linear(hidden_layer_size, hidden_layer_size),
-            nn.SiLU(),
             nn.Linear(hidden_layer_size, embedding_size),
         )
 
@@ -173,11 +167,16 @@ class MoleculeSetRank(Module):
         **kwargs,
     ):
         super().__init__()
-        self.embed_ligand = _mlp(
-            input_size=ligand_input_size,
-            hidden_size=hidden_channels,
-            output_size=hidden_channels,
-            hidden_layers=4,
+        self.embed_ligand =nn.Sequential(
+            nn.Linear(ligand_input_size, hidden_channels),
+            nn.SiLU(),
+            nn.Linear(hidden_channels, hidden_channels),
+            nn.SiLU(),
+            nn.Linear(hidden_channels, hidden_channels),
+            nn.SiLU(),
+            nn.Linear(hidden_channels, hidden_channels),
+            nn.SiLU(),
+            nn.Linear(hidden_channels, hidden_channels),
         )
         self.num_heads = num_heads
         self.set_transformer = SetTransformer(
@@ -228,11 +227,10 @@ class SetRankModel(MoleculeSetRank):
         **kwargs,
     ):
         super().__init__(ligand_input_size, hidden_channels, p_dropout)
-        self.embed_protein = _mlp(
-            input_size=protein_input_size,
-            hidden_size=hidden_channels,
-            output_size=hidden_channels,
-            hidden_layers=1,
+        self.embed_protein = nn.Sequential(
+            nn.Linear(protein_input_size, hidden_channels),
+            nn.SiLU(),
+            nn.Linear(hidden_channels, hidden_channels),
         )
 
     def combine_with_query(self, x: Tensor, query: Tensor) -> Tensor:

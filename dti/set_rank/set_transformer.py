@@ -7,6 +7,7 @@ from torch.nn import (
     Module,
     Parameter,
     ReLU,
+    SiLU,
     Sequential,
     ModuleList,
     init,
@@ -19,7 +20,7 @@ def _mlp(
     hidden_size: int,
     output_size: int,
     hidden_layers: int,
-    act=ReLU,
+    act=SiLU,
 ) -> Module:
     if hidden_layers == 0:
         return Linear(input_size, output_size)
