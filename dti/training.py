@@ -293,6 +293,7 @@ def train_and_evaluate_model(
     test_loader: DataLoader,
     target_name: str,
     index: int,
+    model_weights: Path | None = None,
     **kwargs: Dict[str, Any],
 ) -> None:
     logger.info(f"training model for target: {target_name}")
@@ -334,6 +335,8 @@ def train_and_evaluate_model(
         protein_input_size=opts["protein_dim"],
         cosine_agg=opts["cosine_agg"],
     ).to(device)
+    if model_weights is not None:
+        model.load_state_dict(torch.load(model_weights))
 
     train_fn, eval_fn, criterion = opts["train_fn"], opts["eval_fn"], opts["criterion"]
 
