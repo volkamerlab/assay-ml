@@ -1,12 +1,12 @@
 from typing import Literal
-from torch import Tensor, tensor, stack, zeros
+import torch
+from torch import Tensor, tensor
 from torch.nn import (
     Dropout,
     LayerNorm,
     Linear,
     Module,
     Parameter,
-    ReLU,
     SiLU,
     Sequential,
     ModuleList,
@@ -29,6 +29,17 @@ def _mlp(
         layers.extend([Linear(hidden_size, hidden_size), act()])
     layers.append(Linear(hidden_size, output_size))
     return Sequential(*layers)
+
+
+class GaussianFourierProjection(Module):
+    def __init__(self, embed_dim: int, scale: float = 2.0):
+        super().__init__()
+        self.W = Parameter(torch.randn(1, embed_dim // 2) * scale, requires_grad=False)
+        self.embed_dim = embed_dim
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x_proj = x * 2 * torch.pi * self.W
+        return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
 
 
 class MHABlock(Module):
@@ -154,12 +165,10 @@ class SetTransformer(Module):
 
 
 class SelfConditionedSetTransformer(SetTransformer):
-    def _readout_ffn(self) -> Module:
-        return Sequential(
-            Linear(self.hidden_channels, self.hidden_channels // 2),
-            ReLU(),
-            Linear(self.hidden_channels // 2, 1),
-        )
+    """
+    Iterative refinement transformer.
+    Feeds the ranking score from Layer K as a positional encoding into Layer K+1.
+    """
 
     def __init__(
         self,
@@ -169,8 +178,7 @@ class SelfConditionedSetTransformer(SetTransformer):
         num_blocks: int,
         num_seeds: int = 1,
         dropout: float = 0.1,
-        layer_type: Literal["full", "induced"] = "full",
-        pos_enc_type: str = "rbf",
+        layer_type="full",
     ):
         super().__init__(
             hidden_channels,
@@ -181,33 +189,45 @@ class SelfConditionedSetTransformer(SetTransformer):
             dropout,
             layer_type,
         )
-        self.pos_enc: Module = ...  # TODO
-        self.readouts = ModuleList([self._readout_ffn() for _ in range(num_blocks + 1)])
+
+        self.pos_enc = GaussianFourierProjection(embed_dim=hidden_channels)
+
+        self.readouts = ModuleList(
+            [
+                Sequential(
+                    Linear(hidden_channels, hidden_channels // 2),
+                    SiLU(),
+                    Linear(hidden_channels // 2, 1),
+                )
+                for _ in range(num_blocks + 1)
+            ]
+        )
 
     def forward(
         self,
-        x: Tensor,
-        attn_mask: Tensor | None,
-        force_initial_pos: Tensor | None = None,
-        need_encoded_positions: bool = False,
-    ) -> Tensor:
+        x: torch.Tensor,
+        attn_mask: torch.Tensor | None = None,
+        return_all_layers: bool = False,
+    ) -> torch.Tensor:
         predictions = []
-        encoded_predictions = []
-        if force_initial_pos is not None:
-            assert force_initial_pos.size(0) == x.size(0)
-            assert force_initial_pos.size(1) == self.hidden_channels
-            predictions.append(zeros(x.size(0), 1))
-            encoded_predictions.append(force_initial_pos)
-        else:
-            predictions.append(self.readouts[0](x))
-            encoded_predictions.append(self.pos_enc(predictions[0]))
+
+        curr_pred = self.readouts[0](x)
+        predictions.append(curr_pred)
+
+        pos_emb = self.pos_enc(curr_pred)
+
         for block, readout in zip(self.blocks, self.readouts[1:]):
-            x = block(x + encoded_predictions[-1], attn_mask)
-            predictions.append(readout(x))
-            encoded_predictions.append(self.pos_enc(predictions[-1]))
-        if need_encoded_positions:
-            return stack(predictions), stack(encoded_predictions)
-        return stack(predictions)
+            x = block(x + pos_emb, attn_mask)
+
+            curr_pred = readout(x)
+            predictions.append(curr_pred)
+
+            pos_emb = self.pos_enc(curr_pred)
+
+        if return_all_layers:
+            return torch.stack(predictions).squeeze(-1)
+
+        return predictions[-1]
 
 
 if __name__ == "__main__":

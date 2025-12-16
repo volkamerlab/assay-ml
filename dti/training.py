@@ -1,13 +1,11 @@
-from typing import Type, Any, Dict, Callable
-from joblib import Parallel, delayed
+from typing import Type, Any, Dict
 from pathlib import Path
-from functools import partial
 
 import tqdm
 import pandas as pd
 import numpy as np
 import torch
-from torch import nn, Tensor
+from torch import nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from scipy.stats import spearmanr, pearsonr, kendalltau
@@ -16,9 +14,7 @@ import logging
 from functools import namedtuple
 
 from .utils import device
-from .constants import ASSAY, OUTPUT, ACT, COMPOUND, PREDICTION, TID
-from .hodge_ranking import assay_ranks
-from .data import MultiSetActivityDataset
+from .constants import OUTPUT
 
 logger = logging.getLogger(__name__)
 
@@ -92,10 +88,13 @@ def train_with_batched_sets(
                 set_ids, model.num_heads
             )
 
-        predictions = model(protein_features, ligand_features, **model_kwargs).squeeze()
+        all_preds = model(protein_features, ligand_features, **model_kwargs).squeeze()
 
-        loss = criterion(predictions, labels, set_ids)
-
+        loss = criterion(all_preds, labels, set_ids)
+        # loss = 0
+        # for i in range(all_preds.shape[0]):
+        #     layer_pred = all_preds[i]
+        #     loss += (i + 1) * criterion(layer_pred, labels, set_ids)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
