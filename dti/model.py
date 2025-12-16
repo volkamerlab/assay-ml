@@ -178,11 +178,11 @@ class MoleculeSetRank(Module):
         )
         self.num_heads = num_heads
 
-        self.set_transformer = SetTransformer(
+        self.set_transformer = SelfConditionedSetTransformer(
             hidden_channels=hidden_channels,
             num_heads=self.num_heads,
             ffn_hidden_layers=2,
-            num_blocks=8,
+            num_blocks=4,
             dropout=p_dropout,
         )
 
@@ -233,7 +233,9 @@ class SetRankModel(MoleculeSetRank):
         fused = torch.cat([x_lig, x_prot], dim=-1)
         x = self.fusion_proj(fused)
 
-        h = self.set_transformer(x, attn_mask=attn_mask)
+        h = self.set_transformer(
+            x, return_all_layers=return_all_layers, attn_mask=attn_mask
+        )
         if h.shape[-1] == self.hidden_channels:
             return self.output(h)
         return h

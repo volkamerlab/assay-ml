@@ -88,13 +88,15 @@ def train_with_batched_sets(
                 set_ids, model.num_heads
             )
 
-        all_preds = model(protein_features, ligand_features, **model_kwargs).squeeze()
+        all_preds = model(
+            protein_features, ligand_features, return_all_layers=True, **model_kwargs
+        ).squeeze()
 
-        loss = criterion(all_preds, labels, set_ids)
-        # loss = 0
-        # for i in range(all_preds.shape[0]):
-        #     layer_pred = all_preds[i]
-        #     loss += (i + 1) * criterion(layer_pred, labels, set_ids)
+        # loss = criterion(all_preds, labels, set_ids)
+        loss = 0
+        for i in range(all_preds.shape[0]):
+            layer_pred = all_preds[i]
+            loss += criterion(layer_pred, labels, set_ids)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
