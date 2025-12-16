@@ -293,7 +293,7 @@ def train_and_evaluate_model(
     test_loader: DataLoader,
     target_name: str,
     index: int,
-    model_weights: Path | None = None,
+    model_weights: Path | str | None = None,
     **kwargs: Dict[str, Any],
 ) -> None:
     logger.info(f"training model for target: {target_name}")

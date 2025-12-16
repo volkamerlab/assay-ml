@@ -1,3 +1,4 @@
+import os
 import logging
 import traceback
 import uuid
@@ -222,6 +223,7 @@ def run_split(
         settings |= dict(
             criterion=nn.MSELoss(), train_fn=train_epoch, eval_criterion=False
         )
+    settings["model_weights"] = os.environ.get("ASSAY_ML_MODEL_WEIGHTS", None)
     train_and_evaluate_model(
         model_cls,
         run_name,
@@ -247,8 +249,11 @@ def main():
     else:
         mol_feat = "morgan"
 
-    run_name = "_".join(
-        map(str, [dataset_name, mol_feat, fold, repr(method), uuid.uuid4().hex[:4]])
+    run_name = os.environ.get(
+        "ASSAY_ML_IDENT",
+        "_".join(
+            map(str, [dataset_name, mol_feat, fold, repr(method), uuid.uuid4().hex[:4]])
+        ),
     )
     init_logging(run_name)
     logger = logging.getLogger(run_name)
