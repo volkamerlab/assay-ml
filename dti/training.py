@@ -62,12 +62,68 @@ class BatchPairwiseRankingLoss(nn.Module):
         return masked_loss.sum() / (num_pairs + 1e-8)
 
 
+class SetWisePearsonLoss(nn.Module):
+    def __init__(self, eps=1e-6):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, preds, labels, set_ids):
+        # 1. Map set_ids to contiguous range
+        unique_sets, inverse_indices = torch.unique(set_ids, return_inverse=True)
+        num_sets = len(unique_sets)
+
+        # Helpers
+        zeros = torch.zeros(num_sets, device=preds.device, dtype=preds.dtype)
+        ones = torch.ones_like(preds)
+
+        # 2. Compute Means
+        counts = zeros.clone().scatter_add_(0, inverse_indices, ones)
+        sum_p = zeros.clone().scatter_add_(0, inverse_indices, preds)
+        sum_l = zeros.clone().scatter_add_(0, inverse_indices, labels)
+
+        # Clamp counts to prevent div-by-zero in mean calculation
+        mean_p = sum_p / counts.clamp(min=1)
+        mean_l = sum_l / counts.clamp(min=1)
+
+        # 3. Center variables
+        p_centered = preds - mean_p[inverse_indices]
+        l_centered = labels - mean_l[inverse_indices]
+
+        # 4. Compute Variances & Covariance
+        cov = zeros.clone().scatter_add_(0, inverse_indices, p_centered * l_centered)
+        var_p = zeros.clone().scatter_add_(0, inverse_indices, p_centered**2)
+        var_l = zeros.clone().scatter_add_(0, inverse_indices, l_centered**2)
+
+        # --- CRITICAL FIX: Add Epsilon to Variances ---
+        # This prevents the denominator from ever being too small
+        std_p = torch.sqrt(var_p + self.eps)
+        std_l = torch.sqrt(var_l + self.eps)
+
+        # 5. Compute Pearson r
+        denom = std_p * std_l
+        r = cov / denom
+
+        # 6. Safety Filter
+        # Only ignore sets with < 2 items.
+        # Low variance sets are now safe due to epsilon.
+        valid_mask = counts > 1
+
+        if valid_mask.sum() == 0:
+            return torch.tensor(0.0, device=preds.device, requires_grad=True)
+
+        r = r[valid_mask]
+
+        # Loss = 1 - mean(r)
+        return 1.0 - r.mean()
+
+
 def train_with_batched_sets(
     model,
     loader,
     optimizer,
 ):
-    criterion = BatchPairwiseRankingLoss(margin=0.1)
+    # Swap to Pearson Loss
+    criterion = SetWisePearsonLoss()
 
     model.train()
     torch.set_grad_enabled(True)
@@ -86,19 +142,28 @@ def train_with_batched_sets(
         if hasattr(model, "num_heads"):
             model_kwargs["attn_mask"] = create_set_attention_mask_from_ids(
                 set_ids, model.num_heads
-            )
+            ).to(device)
 
-        all_preds = model(
-            protein_features, ligand_features, return_all_layers=True, **model_kwargs
-        ).squeeze()
+        all_preds = model(protein_features, ligand_features, **model_kwargs)
 
-        # loss = criterion(all_preds, labels, set_ids)
-        loss = 0
-        for i in range(all_preds.shape[0]):
-            layer_pred = all_preds[i]
-            loss += criterion(layer_pred, labels, set_ids)
+        loss = criterion(all_preds.squeeze(), labels, set_ids)
+        # num_layers = all_preds.shape[0]
+        #
+        # for i in range(num_layers):
+        #     layer_pred = all_preds[i]
+        #
+        #     if layer_pred.ndim > 1:
+        #         layer_pred = layer_pred.squeeze()
+        #
+        #     layer_loss = criterion(layer_pred, labels, set_ids)
+        #     weight = 2 if i + 1 == num_layers else 1
+        #     loss += weight * layer_loss
+        #
+        # loss = loss / num_layers
+
         optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         total_loss += loss.item()
