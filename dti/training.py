@@ -69,44 +69,32 @@ class SetWisePearsonLoss(nn.Module):
         self.eps = eps
 
     def forward(self, preds, labels, set_ids):
-        # 1. Map set_ids to contiguous range
         unique_sets, inverse_indices = torch.unique(set_ids, return_inverse=True)
         num_sets = len(unique_sets)
 
-        # Helpers
         zeros = torch.zeros(num_sets, device=preds.device, dtype=preds.dtype)
         ones = torch.ones_like(preds)
 
-        # 2. Compute Means
         counts = zeros.clone().scatter_add_(0, inverse_indices, ones)
         sum_p = zeros.clone().scatter_add_(0, inverse_indices, preds)
         sum_l = zeros.clone().scatter_add_(0, inverse_indices, labels)
 
-        # Clamp counts to prevent div-by-zero in mean calculation
         mean_p = sum_p / counts.clamp(min=1)
         mean_l = sum_l / counts.clamp(min=1)
 
-        # 3. Center variables
         p_centered = preds - mean_p[inverse_indices]
         l_centered = labels - mean_l[inverse_indices]
 
-        # 4. Compute Variances & Covariance
         cov = zeros.clone().scatter_add_(0, inverse_indices, p_centered * l_centered)
         var_p = zeros.clone().scatter_add_(0, inverse_indices, p_centered**2)
         var_l = zeros.clone().scatter_add_(0, inverse_indices, l_centered**2)
 
-        # --- CRITICAL FIX: Add Epsilon to Variances ---
-        # This prevents the denominator from ever being too small
         std_p = torch.sqrt(var_p + self.eps)
         std_l = torch.sqrt(var_l + self.eps)
 
-        # 5. Compute Pearson r
         denom = std_p * std_l
         r = cov / denom
 
-        # 6. Safety Filter
-        # Only ignore sets with < 2 items.
-        # Low variance sets are now safe due to epsilon.
         valid_mask = counts > 1
 
         if valid_mask.sum() == 0:
@@ -114,8 +102,69 @@ class SetWisePearsonLoss(nn.Module):
 
         r = r[valid_mask]
 
-        # Loss = 1 - mean(r)
         return 1.0 - r.mean()
+
+
+class FisherPearsonLoss(nn.Module):
+    def __init__(self, eps=1e-6, fisher_eps=1e-5):
+        super().__init__()
+        self.eps = eps
+        self.fisher_eps = fisher_eps
+
+    def forward(self, preds, labels, set_ids):
+        unique_sets, inverse_indices = torch.unique(set_ids, return_inverse=True)
+        num_sets = len(unique_sets)
+
+        zeros = torch.zeros(num_sets, device=preds.device, dtype=preds.dtype)
+        ones = torch.ones_like(preds)
+
+        counts = zeros.clone().scatter_add_(0, inverse_indices, ones)
+        sum_p = zeros.clone().scatter_add_(0, inverse_indices, preds)
+        sum_l = zeros.clone().scatter_add_(0, inverse_indices, labels)
+
+        mean_p = sum_p / counts.clamp(min=1)
+        mean_l = sum_l / counts.clamp(min=1)
+
+        p_centered = preds - mean_p[inverse_indices]
+        l_centered = labels - mean_l[inverse_indices]
+
+        cov = zeros.clone().scatter_add_(0, inverse_indices, p_centered * l_centered)
+        var_p = zeros.clone().scatter_add_(0, inverse_indices, p_centered**2)
+        var_l = zeros.clone().scatter_add_(0, inverse_indices, l_centered**2)
+
+        std_p = torch.sqrt(var_p + self.eps)
+        std_l = torch.sqrt(var_l + self.eps)
+
+        denom = std_p * std_l
+        r = cov / denom
+
+        valid_r_mask = (counts > 1) & (denom > self.eps)
+
+        if valid_r_mask.sum() == 0:
+            return torch.tensor(0.0, device=preds.device, requires_grad=True)
+
+        r_valid = r[valid_r_mask]
+        counts_valid = counts[valid_r_mask]
+
+        r_clamped = torch.clamp(r_valid, -1 + self.fisher_eps, 1 - self.fisher_eps)
+        z = torch.arctanh(r_clamped)
+
+        fisher_weights = counts_valid - 3.0
+        use_fisher = fisher_weights > 0
+
+        if use_fisher.any():
+            w = fisher_weights[use_fisher]
+            z_subset = z[use_fisher]
+
+            z_bar = (w * z_subset).sum() / w.sum()
+
+            final_r = torch.tanh(z_bar)
+            return 1.0 - final_r
+
+        else:
+            z_bar = z.mean()
+            final_r = torch.tanh(z_bar)
+            return 1.0 - final_r
 
 
 def train_with_batched_sets(
@@ -123,8 +172,7 @@ def train_with_batched_sets(
     loader,
     optimizer,
 ):
-    # Swap to Pearson Loss
-    criterion = SetWisePearsonLoss()
+    criterion = FisherPearsonLoss()
 
     model.train()
     torch.set_grad_enabled(True)
