@@ -1,3 +1,4 @@
+import os
 from typing import Type, Any, Dict
 from pathlib import Path
 
@@ -161,6 +162,7 @@ def train_with_batched_sets(
         #
         # loss = loss / num_layers
 
+        # loss = criterion(all_preds, labels, set_ids)
         optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -402,6 +404,7 @@ def train_and_evaluate_model(
         cosine_agg=opts["cosine_agg"],
     ).to(device)
     if model_weights is not None:
+        logger.info(f"Loading weights from {model_weights}")
         model.load_state_dict(torch.load(model_weights))
 
     train_fn, eval_fn, criterion = opts["train_fn"], opts["eval_fn"], opts["criterion"]
@@ -421,7 +424,7 @@ def train_and_evaluate_model(
         val_loss, val_metrics = eval_fn(
             model, val_loader, criterion=criterion if opts["eval_criterion"] else None
         )
-        val_rank_corr = val_metrics["spearman"]
+        val_rank_corr = val_metrics["pearson"]
 
         scheduler.step(val_rank_corr)
 
@@ -442,7 +445,8 @@ def train_and_evaluate_model(
             )
             best_corr = val_rank_corr
             epochs_without_improvement = 0
-            torch.save(model.state_dict(), OUTPUT / run_name / f"model{index}.pt")
+            model_path = OUTPUT / run_name / f"model{index}.pt"
+            torch.save(model.state_dict(), model_path)
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= opts["patience_termination"]:

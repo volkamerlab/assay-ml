@@ -10,7 +10,6 @@ import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from scipy.stats import pearsonr
 
 from dti.model import (
     CombinedModel,
@@ -90,7 +89,7 @@ def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
 
 
 def model_and_dataset(method: Method, mol_only: bool) -> Tuple[type, type, type]:
-    msa = partial(MultiSetActivityDataset, max_set_size=1000)
+    msa = partial(MultiSetActivityDataset, max_set_size=4096)
     shuffled_multiset = partial(msa, inter_assay=True)
     match method:
         case Method.PAIRS if mol_only:
@@ -143,7 +142,7 @@ def run_split(
     fold: int,
     seed: int,
 ):
-    batch_size = 512
+    batch_size = 1024
     num_epochs = 2000  # early stopping in place
     info_cols = [COMPOUND, ASSAY]
     data_dir = DATA / "processed" / dataset_name
@@ -209,8 +208,8 @@ def run_split(
         num_epochs=num_epochs,
         cosine_agg=True,
         patience_termination=100,
-        patience_lr=20,
-        lr=1e-4,
+        patience_lr=50,
+        lr=5e-5,
         eval_fn=eval_with_batched_sets,
     )
     if method.on_sets:
