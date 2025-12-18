@@ -165,6 +165,7 @@ class MoleculeSetRank(Module):
         hidden_channels: int = 512,
         p_dropout: float = 0.05,
         num_heads: int = 8,
+        transformer_type: str = 'sst',
         **kwargs,
     ):
         super().__init__()
@@ -178,13 +179,25 @@ class MoleculeSetRank(Module):
         )
         self.num_heads = num_heads
 
-        self.set_transformer = SetTransformer(
-            hidden_channels=hidden_channels,
-            num_heads=self.num_heads,
-            ffn_hidden_layers=2,
-            num_blocks=8,
-            dropout=p_dropout,
-        )
+        self.transformer_type = transformer_type
+        if transformer_type == 'sst':
+            self.set_transformer = SelfConditionedSetTransformer(
+                hidden_channels=hidden_channels,
+                num_heads=self.num_heads,
+                ffn_hidden_layers=2,
+                num_blocks=4,
+                dropout=p_dropout,
+            )
+        elif transformer_type == 'std':
+            self.set_transformer = SetTransformer(
+                hidden_channels=hidden_channels,
+                num_heads=self.num_heads,
+                ffn_hidden_layers=2,
+                num_blocks=8,
+                dropout=p_dropout,
+            )
+        else:
+            assert False
 
         self.output = Sequential(
             LayerNorm(hidden_channels),
@@ -222,6 +235,7 @@ class SetRankModel(MoleculeSetRank):
         protein: torch.Tensor,
         ligand: torch.Tensor,
         attn_mask: torch.Tensor | None = None,
+        return_all_layers: bool = False,
     ) -> torch.Tensor:
         x_prot = self.embed_protein(protein)
         x_lig = self.embed_ligand(ligand)
@@ -232,7 +246,12 @@ class SetRankModel(MoleculeSetRank):
         fused = torch.cat([x_lig, x_prot], dim=-1)
         x = self.fusion_proj(fused)
 
-        h = self.set_transformer(x, attn_mask=attn_mask)
+        if self.transformer_type == 'sst':
+            h = self.set_transformer(x, return_all_layers=return_all_layers, attn_mask=attn_mask)
+        elif self.transformer_type == 'std':
+            h = self.set_transformer(x, attn_mask=attn_mask)
+        else:
+            assert False
         if h.shape[-1] == self.hidden_channels:
             return self.output(h)
         return h

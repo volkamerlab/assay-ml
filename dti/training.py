@@ -193,22 +193,25 @@ def train_with_batched_sets(
                 set_ids, model.num_heads
             ).to(device)
 
-        all_preds = model(protein_features, ligand_features, **model_kwargs)
+        all_preds = model(protein_features, ligand_features, return_all_layers=True, **model_kwargs)
 
-        loss = criterion(all_preds.squeeze(), labels, set_ids)
-        # num_layers = all_preds.shape[0]
-        #
-        # for i in range(num_layers):
-        #     layer_pred = all_preds[i]
-        #
-        #     if layer_pred.ndim > 1:
-        #         layer_pred = layer_pred.squeeze()
-        #
-        #     layer_loss = criterion(layer_pred, labels, set_ids)
-        #     weight = 2 if i + 1 == num_layers else 1
-        #     loss += weight * layer_loss
-        #
-        # loss = loss / num_layers
+        # loss = criterion(all_preds.squeeze(), labels, set_ids)
+        loss = 0
+        num_layers = all_preds.shape[0]
+
+        loss_str = ""
+        for i in range(num_layers):
+            layer_pred = all_preds[i]
+
+            if layer_pred.ndim > 1:
+                layer_pred = layer_pred.squeeze()
+
+            layer_loss = criterion(layer_pred, labels, set_ids)
+            weight = 2 if i + 1 == num_layers else 1
+            loss += weight * layer_loss
+            loss_str += f"{weight * layer_loss:.2f} "
+
+        loss = loss / num_layers
 
         # loss = criterion(all_preds, labels, set_ids)
         optimizer.zero_grad()
@@ -218,7 +221,7 @@ def train_with_batched_sets(
 
         total_loss += loss.item()
         steps += 1
-        pbar.set_description(f"loss={loss.item():.4f}")
+        pbar.set_description(loss_str)#(f"loss={loss.item():.4f}")
 
     return total_loss / max(1, steps)
 
