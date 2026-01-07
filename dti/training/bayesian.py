@@ -14,6 +14,7 @@ from scipy.stats import spearmanr, pearsonr
 from numpy import tanh, arctanh
 
 from ..model.bin_distribution import BinDistribution
+from ..model.bayesian import MoleculeBayesianSetRankModel
 from ..utils import device
 from ..utils.constants import OUTPUT
 
@@ -196,7 +197,7 @@ class MetricTracker:
 
 
 def train_and_evaluate_pfn_model(
-    model_cls: Type[nn.Module],
+    model_cls: Type[MoleculeBayesianSetRankModel],
     run_name: str,
     train_loader: DataLoader,
     val_loader: DataLoader,
