@@ -43,9 +43,11 @@ class BaseDataModule(Dataset):
         self.info_cols = info_cols or []
         self.target = target
 
-        self._load_and_featurize(data, cache_dir, n_jobs)
+        self._load_and_featurize(data, cache_dir, n_jobs, **kwargs)
 
-    def _load_and_featurize(self, data: pl.DataFrame, cache_dir=None, n_jobs=16):
+    def _load_and_featurize(
+        self, data: pl.DataFrame, cache_dir=None, n_jobs=16, **kwargs
+    ):
         if cache_dir:
             os.makedirs(cache_dir, exist_ok=True)
             paths = {
@@ -765,7 +767,7 @@ class GraphPropertySetDataset(PropertySetDataset):
         )
 
     def _load_and_featurize(self, data: pl.DataFrame, cache_dir, n_jobs, **kwargs):
-        logger.info("Initializing GraphPropertySetDataset (on-the-fly featurization).")
+        logger.info("Initializing GraphPropertySetDataset")
 
         cache_dir_str = os.environ.get("GRAPH_CACHE_DIR", "/tmp/graph_cache")
         self.scratch_dir = Path(cache_dir_str)
@@ -792,7 +794,7 @@ class GraphPropertySetDataset(PropertySetDataset):
         )
 
         self.deg_histogram = None
-        if self.__dict__.get("estimate_deg", False):
+        if kwargs.get("estimate_deg", False):
             self.deg_histogram = _estimate_degree_histogram(
                 self.smiles_list,
             )

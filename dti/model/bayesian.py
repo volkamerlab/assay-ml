@@ -137,6 +137,7 @@ class GraphMoleculeBayesianSetRankModel(MoleculeBayesianSetRankModel):
         aggregators = ["mean", "min", "max", "sum", "var"]
         scalers = ["identity", "amplification", "attenuation"]
 
+        assert deg is not None
         self.deg_histogram = deg
 
         self.gnn_layers = ModuleList()

@@ -141,7 +141,7 @@ def prepare_dataset_splits(
 
     assert len(train_dataset) > 0
 
-    if mol_feat_instance in (MolFingerprint.GRAPH, MolFingerprint.ALL):
+    if mol_feat_instance.graph_based:
         collate_fn = lambda data: data[0]
     else:
         collate_fn = None
