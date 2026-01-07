@@ -182,7 +182,7 @@ class MoleculeSetRank(Module):
             hidden_channels=hidden_channels,
             num_heads=self.num_heads,
             ffn_hidden_layers=2,
-            num_blocks=8,
+            num_blocks=4,
             dropout=p_dropout,
         )
 
