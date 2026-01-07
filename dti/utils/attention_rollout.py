@@ -81,18 +81,24 @@ if __name__ == "__main__":
     # assert torch.allclose(xy[0, 1, 0], torch.matmul(x[0, 1, 0], y[0, 1, 0]))
 
     model = MoleculeBayesianSetRankModel(
-        ligand_input_size=16,
+        ligand_input_size=15,
         n_bins=20,
-        hidden_channels=16,
+        hidden_channels=15,
         p_dropout=0.0,
-        num_heads=2,
+        num_heads=5,
     )
-    x_ligand = torch.randn(7, 16)
+    x_ligand = torch.randn(7, 15)
     y = torch.rand(7)
     sample_mask = torch.tensor([True, True, False, True, True, False, False])
     set_ids = torch.tensor([0, 0, 0, 1, 1, 1, 1])
 
     scores = get_attention_weights(model, (x_ligand, y, sample_mask, set_ids), dict())
     unstacked = [unstack_block_diagonal_tensor(score, set_ids) for score in scores]
-    for block in blocks:
-        rollout_scores = attention_rollout(block.unsqueeze(0))
+    num_layers = len(unstacked)
+    num_examples = len(unstacked[0])
+    attention_weights = [
+        [unstacked[j_layer][j_example].unsqueeze_(0) for j_layer in range(num_layers)]
+        for j_example in range(num_examples)
+    ]
+    global_attention = [attention_rollout(att) for att in attention_weights]
+    pass
