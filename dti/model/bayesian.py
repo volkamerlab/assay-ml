@@ -146,14 +146,16 @@ class GraphMoleculeBayesianSetRankModel(MoleculeBayesianSetRankModel):
         in_channels = hidden_channels
 
         for i in range(num_gnn_layers):
-            gnn.PNAConv(
-                in_channels=in_channels,
-                out_channels=hidden_channels,
-                aggregators=aggregators,
-                scalers=scalers,
-                deg=self.deg_histogram,
-                edge_dim=edge_input_size,
-                towers=num_towers,
+            self.gnn_layers.append(
+                gnn.PNAConv(
+                    in_channels=in_channels,
+                    out_channels=hidden_channels,
+                    aggregators=aggregators,
+                    scalers=scalers,
+                    deg=self.deg_histogram,
+                    edge_dim=edge_input_size,
+                    towers=num_towers,
+                )
             )
             self.norms.append(LayerNorm(hidden_channels))
             in_channels = hidden_channels
