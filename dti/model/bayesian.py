@@ -38,6 +38,15 @@ class MoleculeBayesianSetRankModel(Module):
         **kwargs,
     ):
         super().__init__()
+        if isinstance(act, str):
+            try:
+                act = getattr(torch.nn, act)
+            except AttributeError:
+                logger.warning(
+                    f"Activation function '{act}' not found in torch.nn. Using GELU instead."
+                )
+                act = GELU
+        self.act = act
         self.n_bins = n_bins
         self.bin_dist = BinDistribution(
             n_bins=n_bins,
@@ -132,7 +141,6 @@ class GraphMoleculeBayesianSetRankModel(MoleculeBayesianSetRankModel):
             **kwargs,
         )
         del self.embed_ligand
-        self.act = act
 
         aggregators = ["mean", "min", "max", "sum", "var"]
         scalers = ["identity", "amplification", "attenuation"]
