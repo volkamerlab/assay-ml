@@ -11,6 +11,8 @@ import logging
 from pathlib import Path
 from enum import unique, StrEnum, auto
 import random
+import multiprocessing
+import platform
 
 import torch
 import numpy as np
@@ -24,6 +26,7 @@ from sklearn.cluster import AgglomerativeClustering
 from sklearn.decomposition import PCA
 from rdkit.DataStructs.cDataStructs import TanimotoSimilarity
 from rdkit import RDLogger
+import yaml
 
 lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
@@ -117,10 +120,91 @@ def set_random_seeds(seed: int):
     np.random.seed(seed)
 
 
+_KNOWN_ACTIVATIONS = [
+    torch.nn.modules.activation.Sigmoid,
+    torch.nn.modules.activation.Tanh,
+    torch.nn.modules.activation.ReLU,
+    torch.nn.modules.activation.SiLU,
+    torch.nn.modules.activation.GELU,
+    torch.nn.modules.activation.ELU,
+    torch.nn.modules.activation.SELU,
+]
+
+
+def activation_instance_representer(dumper, data):
+    name = data.__class__.__name__
+    return dumper.represent_scalar("!activation", name)
+
+
+def activation_class_representer(dumper, data):
+    if data in _KNOWN_ACTIVATIONS:
+        name = data.__name__
+        return dumper.represent_scalar("!activation_cls", name)
+    return None
+
+
+def activation_class_constructor(loader, node):
+    class_name = loader.construct_scalar(node)
+    try:
+        act_class = getattr(torch.nn, class_name)
+    except AttributeError as e:
+        raise ValueError(f"Unknown activation class: {class_name}") from e
+    return act_class
+
+
+def activation_instance_constructor(loader, node):
+    act_class = activation_class_constructor(loader, node)
+    return act_class()
+
+
+def register_torch_activation_with_yaml():
+    for act_cls in _KNOWN_ACTIVATIONS:
+        yaml.SafeDumper.add_multi_representer(act_cls, activation_instance_representer)
+    yaml.SafeDumper.add_multi_representer(type, activation_class_representer)
+    yaml.SafeLoader.add_constructor("!activation_cls", activation_class_constructor)
+    yaml.SafeLoader.add_constructor("!activation", activation_instance_constructor)
+
+
+def setup_multiprocessing_method():
+    current_os = platform.system()
+
+    # Determine the desired method
+    if current_os in ["Windows", "Darwin"]:  # 'Darwin' is macOS
+        method = "spawn"
+    else:
+        method = "fork"
+
+    try:
+        multiprocessing.set_start_method(method, force=True)
+        logger.info(f"Multiprocessing start method set to: {method}")
+    except RuntimeError:
+        # This occurs if the start method has already been set elsewhere
+        actual_method = multiprocessing.get_start_method()
+        logger.warning(
+            f"Could not set start method to {method}. "
+            f"It is already set to {actual_method}."
+        )
+
+
 def output_dir(run_name: str) -> Path:
     out_dir = OUTPUT / run_name
     out_dir.mkdir(exist_ok=True, parents=True)
     return out_dir
+
+
+def store_opts(opts: dict, run_name: str | None = None):
+    run_name = run_name or opts["run_name"]
+    opts["run_name"] = run_name
+    with open((opts_file := output_dir(run_name) / "training_opts.yaml"), "w") as f:
+        yaml.dump(opts, f, yaml.SafeDumper)
+    logger.info(f"Training options saved to {opts_file}")
+    return opts
+
+
+def load_opts(opts_file: Path) -> dict:
+    with open(opts_file, "r") as f:
+        opts = yaml.load(f, Loader=yaml.SafeLoader)
+    return opts
 
 
 def get_tracked_files() -> list[Path]:
