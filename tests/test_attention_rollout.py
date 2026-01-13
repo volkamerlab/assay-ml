@@ -2,6 +2,7 @@ from typing import Tuple
 import torch
 
 from dti.utils.attention_rollout import attention_rollout, get_attention_weights
+from dti.model.common import unstack_block_diagonal_tensor
 from dti.model.bayesian import MoleculeBayesianSetRankModel
 
 
@@ -49,7 +50,22 @@ def test_get_attention_scores():
     return attention_weights
 
 
+def test_integration():
+    model, args, kwargs = _mock_model_and_input()
+    x_ligand, y, sample_mask, set_ids = args
+    scores = get_attention_weights(model, (x_ligand, y, sample_mask, set_ids), dict())
+    unstacked = [unstack_block_diagonal_tensor(score, set_ids) for score in scores]
+    num_layers = len(unstacked)
+    num_examples = len(unstacked[0])
+    attention_weights = [
+        [unstacked[j_layer][j_example].unsqueeze_(0) for j_layer in range(num_layers)]
+        for j_example in range(num_examples)
+    ]
+    global_attention = [attention_rollout(att) for att in attention_weights]
+    assert len(global_attention) == 2
+
+
 if __name__ == "__main__":
     test_compute()
-    scores = test_get_attention_scores()
-    pass
+    test_get_attention_scores()
+    test_integration()
