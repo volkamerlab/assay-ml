@@ -1,6 +1,7 @@
 import argparse
 import logging
 from functools import partial
+import multiprocessing
 import traceback
 from pathlib import Path
 import os
@@ -32,6 +33,8 @@ from dti.utils import (
     init_logging,
     set_random_seeds,
     get_condor_job_id,
+    setup_multiprocessing_method,
+    register_torch_activation_with_yaml,
 )
 from dti.utils.constants import (
     ACT,
@@ -58,7 +61,9 @@ def prepare_dataset_splits(
     info_cols: list[str],
     property_set_ratio: float,
     n_jobs: int = 8,
+    mp_context=None,
 ):
+    mp_context = mp_context or multiprocessing.get_context("fork")
     data_dir = DATA / "processed" / dataset_name
 
     if not (data_dir / f"{fold}").exists():
@@ -154,6 +159,7 @@ def prepare_dataset_splits(
         "num_workers": n_jobs,
         "collate_fn": collate_fn,
         "persistent_workers": True,
+        "multiprocessing_context": mp_context,
     }
 
     train_loader = data_loader_cls(train_dataset, drop_last=False, **loader_kwargs)
@@ -203,6 +209,7 @@ def run_split(
         mol_feat,
         info_cols,
         property_set_ratio=property_set_ratio,
+        mp_context=kwargs.pop("mp_context", None),
     )
 
     match MolFingerprint(mol_feat):
@@ -238,6 +245,7 @@ def run_split(
 
 def main():
     torch.cuda.empty_cache()
+    register_torch_activation_with_yaml()
 
     parser = argparse.ArgumentParser(
         description="Run PFN (MoleculeBayesianSetRankModel) training on ChEMBL.",
@@ -332,9 +340,16 @@ def main():
         metavar="float",
         help="Minimal learning rate at the final epoch. (default: 1e-6)",
     )
+    parser.add_argument(
+        "--mp-context",
+        type=str,
+        default="fork",
+        choices=["fork", "spawn", "forkserver"],
+        help="Multiprocessing start method (default: 'fork')",
+    )
 
     args = parser.parse_args()
-
+    mp_context = multiprocessing.get_context(args.mp_context)
     mol_feat = args.mol_feat.lower()
 
     job_id = get_condor_job_id()
@@ -384,6 +399,7 @@ def main():
         num_epochs=args.num_epochs,
         test=not args.no_test,
         min_lr=args.min_lr,
+        mp_context=mp_context,
     )
 
 

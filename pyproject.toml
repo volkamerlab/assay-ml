@@ -24,6 +24,7 @@ dependencies = [
     "torch>=2.6.0",
     "torch-geometric>=2.7.0",
     "torcheval>=0.0.7",
+    "torchlens>=0.1.36",
     "tqdm>=4.67.1",
     "transformers>=4.56.1",
     "umap-learn>=0.5.7",

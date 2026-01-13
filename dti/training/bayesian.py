@@ -13,7 +13,10 @@ import logging
 from scipy.stats import spearmanr, pearsonr
 from numpy import tanh, arctanh
 
+from dti.utils.utils import store_opts
+
 from ..model.bin_distribution import BinDistribution
+from ..model.bayesian import MoleculeBayesianSetRankModel
 from ..utils import device
 from ..utils.constants import OUTPUT
 
@@ -196,7 +199,7 @@ class MetricTracker:
 
 
 def train_and_evaluate_pfn_model(
-    model_cls: Type[nn.Module],
+    model_cls: Type[MoleculeBayesianSetRankModel],
     run_name: str,
     train_loader: DataLoader,
     val_loader: DataLoader,
@@ -211,6 +214,7 @@ def train_and_evaluate_pfn_model(
     },
     **kwargs: Dict[str, Any],
 ) -> None:
+    (OUTPUT / run_name).mkdir(parents=True, exist_ok=True)
     logger.info(f"Training model for target: {target_name}")
 
     opts: Dict[str, Any] = _defaults | kwargs
@@ -218,6 +222,7 @@ def train_and_evaluate_pfn_model(
     logger.info("Training options:")
     for k, v in opts.items():
         logger.info(f" - {k}={v}")
+    opts = store_opts(opts, run_name=run_name)
 
     model = model_cls(
         ligand_input_size=opts["ligand_dim"],
@@ -226,7 +231,6 @@ def train_and_evaluate_pfn_model(
     ).to(device)
 
     model.bin_dist.fit(train_loader)
-    (OUTPUT / run_name).mkdir(parents=True, exist_ok=True)
     with open(OUTPUT / run_name / "bin_dist", "w") as f_bins:
         f_bins.write(f"{','.join([str(x.item()) for x in model.bin_dist.edges])}")
 
