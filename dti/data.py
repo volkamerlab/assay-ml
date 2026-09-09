@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler
 
-from .constants import DATA, SMILES, ACT, TID, SEQUENCE, ASSAY, COMPOUND, HODGE
+from .constants import DATA, SMILES, ACT, TID, SEQUENCE, ASSAY, COMPOUND, HODGE, DOC
 from .utils import device
 from .featurization import MolFingerprint, esm2_features
 from .hodge_ranking import parallel_hodge_rank
@@ -463,23 +463,17 @@ class MultiSetActivityDataset(ActivityDataset):
 
 
 def aggregate_multi_measurements(data: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate multiple measurements for the same compound and assay.
-
-    Args:
-        data (pd.DataFrame): DataFrame containing activity measurements.
-
-    Returns:
-        pd.DataFrame: DataFrame with aggregated measurements.
-    """
+    """Aggregate multiple measurements for the same compound and assay."""
     keys = [COMPOUND, ASSAY]
     if TID in data.columns:
-        keys += [TID]
-    non_numeric_cols = data.select_dtypes(exclude=["number"]).columns
-    return (
-        data.groupby(keys, as_index=False)
-        .agg({ACT: "mean", **{col: lambda x: x.iloc[0] for col in non_numeric_cols}})
-        .reset_index()
-    )
+        keys.append(TID)
+
+    agg = {
+        ACT: "mean",
+        **{col: "first" for col in data.columns if col not in keys + [ACT]},
+    }
+
+    return data.groupby(keys, as_index=False).agg(agg)
 
 
 def get_overlapping_keys(key_set: set[str], all_keys: np.ndarray) -> set[str]:
@@ -525,27 +519,23 @@ def split_data(
     target_dir: Path = DATA / "processed",
     k: int = 5,
     random_valset: bool = False,
-    columns: str = [ASSAY],
+    split_col: str = DOC,
     random_seed: int = 1,
 ):
-    if len(columns) != 1:
-        logger.error("split along multiple columns not implemented")
-        raise NotImplementedError("split along multiple columns not implemented")
-    col = columns[0]
-    logger.info(f"computing split along {col} and saving to {target_dir}")
+    logger.info(f"computing split along {split_col} and saving to {target_dir}")
     if (target_dir / "0").exists():
         return target_dir
     target_dir.mkdir(exist_ok=True, parents=True)
-    partition = split_kfold_by(data, column=col, k=k, seed=random_seed)
+    partition = split_kfold_by(data, column=split_col, k=k, seed=random_seed)
 
     for index in range(k):
         split_dir = target_dir / f"{index}"
         split_dir.mkdir()
-        test_data = data[data[col].isin(partition[index])]
+        test_data = data[data[split_col].isin(partition[index])]
         test_data.to_csv(split_dir / "test.csv")
-        rest = data[~data[col].isin(partition[index])]
+        rest = data[~data[split_col].isin(partition[index])]
 
-        assert set(test_data[col]) & set(rest[col]) == set(), (
+        assert set(test_data[split_col]) & set(rest[split_col]) == set(), (
             f"Overlap found between test and rest data in fold {index}"
         )
 
@@ -569,20 +559,20 @@ def split_data(
             val_fold_idx = (index + 1) % k
             val_assays = partition[val_fold_idx][: len(partition[val_fold_idx]) // 2]
 
-            val_data = rest[rest[col].isin(val_assays)]
-            train_data = rest[~rest[col].isin(val_assays)]
+            val_data = rest[rest[split_col].isin(val_assays)]
+            train_data = rest[~rest[split_col].isin(val_assays)]
 
             val_data.to_csv(split_dir / "val.csv")
             train_data.to_csv(split_dir / "train.csv")
 
-            assert set(val_data[col]) & set(train_data[col]) == set(), (
+            assert set(val_data[split_col]) & set(train_data[split_col]) == set(), (
                 f"Overlap found between train and val data in fold {index}"
             )
 
-        assert set(test_data[col]) & set(val_data[col]) == set(), (
+        assert set(test_data[split_col]) & set(val_data[split_col]) == set(), (
             f"Overlap found between test and val data in fold {index}"
         )
-        assert set(test_data[col]) & set(train_data[col]) == set(), (
+        assert set(test_data[split_col]) & set(train_data[split_col]) == set(), (
             f"Overlap found between test and train data in fold {index}"
         )
 
@@ -656,15 +646,15 @@ def prepare_datasets(
     inter_assay_weight: Union[float, None] = None,
     random_valset: bool = False,
     aggregate: bool = True,
-    columns: list[str] = [ASSAY],
+    split_col: str = DOC,
 ) -> Iterator[
     Tuple[int, pd.DataFrame, Union[pd.DataFrame, None], pd.DataFrame, pd.DataFrame]
 ]:
     """Prepare train, validation, and test datasets."""
-    logger.info(f"split along {columns}")
+    logger.info(f"split along {split_col}")
     if aggregate:
         data = aggregate_multi_measurements(data)
-    split_data(data, data_dir, columns=columns, k=k, random_valset=random_valset)
+    split_data(data, data_dir, split_col=split_col, k=k, random_valset=random_valset)
 
 
 def _process(data, col_map):
@@ -689,6 +679,8 @@ def load_kinodata(
     # strip CHEMBL prefixes
     data[ASSAY] = data["assays.chembl_id"].str[6:].astype(int)
     data[COMPOUND] = data["molecule_dictionary.chembl_id"].str[6:].astype(int)
+    data[COMPOUND] = data["molecule_dictionary.chembl_id"].str[6:].astype(int)
+    data[DOC] = data["docs.chembl_id"].str[6:].astype(int)
     return _process(
         data,
         {
@@ -712,6 +704,7 @@ def load_landrum(landrum_path: Path = DATA / "raw" / "landrum.csv") -> pd.DataFr
             "component_sequence": SEQUENCE,
             "tid": TID,
             "assay_id": ASSAY,
+            "doc_id": DOC,
         },
     )
 

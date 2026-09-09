@@ -10,7 +10,7 @@ when_to_transfer_output = ON_EXIT
 request_GPUs = 1
 request_CPUs = 8
 request_memory = 64G
-requirements = (GPUs_Capability >= 7.0) && (GPUs_GlobalMemoryMb >= 16000)
+requirements = (GPUs_Capability >= 7.0) && (GPUs_GlobalMemoryMb >= 17000)
 +WantGPUHomeMounted = true
 queue fold, script, seed, dataset, method, mol_feat from (
    0, scripts/train.py, 0, landrum, sets, morgan

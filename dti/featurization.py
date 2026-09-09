@@ -148,7 +148,7 @@ def esm2_features(
         torch.Tensor or None: Tensor of protein embeddings or None if no protein targets.
     """
     if TID not in data.columns or data[TID].isna().any():
-        logger.info("missing protein target in dataset")
+        logger.warn("missing protein target in dataset")
         return None
 
     logger.info(f"computing protein features: {model_name}")

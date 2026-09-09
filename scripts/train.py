@@ -40,7 +40,7 @@ from dti.training import (
     train_with_batched_sets,
     eval_with_batched_sets,
     train_epoch,
-    BatchPairwiseRankingLoss,
+    FisherPearsonLoss
 )
 from dti.utils import (
     Method,
@@ -49,7 +49,7 @@ from dti.utils import (
     set_random_seeds,
     save_code_snapshot,
 )
-from dti.constants import DATA, ASSAY, COMPOUND, HODGE
+from dti.constants import DATA, ASSAY, COMPOUND, HODGE, DOC
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +144,7 @@ def run_split(
 ):
     batch_size = 1024
     num_epochs = 2000  # early stopping in place
-    info_cols = [COMPOUND, ASSAY]
+    info_cols = [COMPOUND, ASSAY, DOC]
     data_dir = DATA / "processed" / dataset_name
     train_tgt = tgt_name = "scaled_ic50"
     aggregate = True
@@ -164,6 +164,7 @@ def run_split(
             5,
             random_valset=False,
             aggregate=aggregate,
+            split_col=DOC,
         )
 
     train_data, val_data, test_data = load_split(
@@ -214,7 +215,7 @@ def run_split(
     )
     if method.on_sets:
         settings |= dict(
-            criterion=BatchPairwiseRankingLoss(margin=0.1).to(device),
+            criterion=FisherPearsonLoss().to(device),
             train_fn=train_with_batched_sets,
             eval_criterion=True,
         )
