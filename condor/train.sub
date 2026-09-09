@@ -1,7 +1,7 @@
 universe = docker
 docker_image = astral/uv:debian
 executable = run_training.sh
-arguments = $(script) $(seed) $(dataset) $(method) $(fold) $(mol_feat)
+arguments = $(script) $(seed) $(dataset) $(fold)
 output = logs/train_dti.$(ClusterId).$(ProcId).out
 error = logs/train_dti.$(ClusterId).$(ProcId).err
 log = logs/train_dti.$(ClusterId).$(ProcId).log
@@ -12,50 +12,21 @@ request_CPUs = 8
 request_memory = 64G
 requirements = (GPUs_Capability >= 7.0) && (GPUs_GlobalMemoryMb >= 17000)
 +WantGPUHomeMounted = true
-queue fold, script, seed, dataset, method, mol_feat from (
-   0, scripts/train.py, 0, landrum, sets, morgan
-   1, scripts/train.py, 0, landrum, sets, morgan
-   2, scripts/train.py, 0, landrum, sets, morgan
-   3, scripts/train.py, 0, landrum, sets, morgan
-   4, scripts/train.py, 0, landrum, sets, morgan
-   0, scripts/train.py, 0, landrum, ic50, morgan
-   1, scripts/train.py, 0, landrum, ic50, morgan
-   2, scripts/train.py, 0, landrum, ic50, morgan
-   3, scripts/train.py, 0, landrum, ic50, morgan
-   4, scripts/train.py, 0, landrum, ic50, morgan
-   0, scripts/train.py, 0, landrum, allsets, morgan
-   1, scripts/train.py, 0, landrum, allsets, morgan
-   2, scripts/train.py, 0, landrum, allsets, morgan
-   3, scripts/train.py, 0, landrum, allsets, morgan
-   4, scripts/train.py, 0, landrum, allsets, morgan
-   0, scripts/train.py, 0, kinodata, sets, morgan
-   1, scripts/train.py, 0, kinodata, sets, morgan
-   2, scripts/train.py, 0, kinodata, sets, morgan
-   3, scripts/train.py, 0, kinodata, sets, morgan
-   4, scripts/train.py, 0, kinodata, sets, morgan
-   0, scripts/train.py, 0, kinodata, ic50, morgan
-   1, scripts/train.py, 0, kinodata, ic50, morgan
-   2, scripts/train.py, 0, kinodata, ic50, morgan
-   3, scripts/train.py, 0, kinodata, ic50, morgan
-   4, scripts/train.py, 0, kinodata, ic50, morgan
-   0, scripts/train.py, 0, kinodata, allsets, morgan
-   1, scripts/train.py, 0, kinodata, allsets, morgan
-   2, scripts/train.py, 0, kinodata, allsets, morgan
-   3, scripts/train.py, 0, kinodata, allsets, morgan
-   4, scripts/train.py, 0, kinodata, allsets, morgan
-   0, scripts/train.py, 0, omnivore, sets, morgan
-   1, scripts/train.py, 0, omnivore, sets, morgan
-   2, scripts/train.py, 0, omnivore, sets, morgan
-   3, scripts/train.py, 0, omnivore, sets, morgan
-   4, scripts/train.py, 0, omnivore, sets, morgan
-   0, scripts/train.py, 0, omnivore, ic50, morgan
-   1, scripts/train.py, 0, omnivore, ic50, morgan
-   2, scripts/train.py, 0, omnivore, ic50, morgan
-   3, scripts/train.py, 0, omnivore, ic50, morgan
-   4, scripts/train.py, 0, omnivore, ic50, morgan
-   0, scripts/train.py, 0, omnivore, allsets, morgan
-   1, scripts/train.py, 0, omnivore, allsets, morgan
-   2, scripts/train.py, 0, omnivore, allsets, morgan
-   3, scripts/train.py, 0, omnivore, allsets, morgan
-   4, scripts/train.py, 0, omnivore, allsets, morgan
+queue fold, script, seed, dataset from (
+   0, scripts/train.py, 0, landrum
+   1, scripts/train.py, 0, landrum
+   2, scripts/train.py, 0, landrum
+   3, scripts/train.py, 0, landrum
+   4, scripts/train.py, 0, landrum
+   0, scripts/train.py, 0, kinodata
+   1, scripts/train.py, 0, kinodata
+   2, scripts/train.py, 0, kinodata
+   3, scripts/train.py, 0, kinodata
+   4, scripts/train.py, 0, kinodata
+   0, scripts/train.py, 0, omnivore
+   1, scripts/train.py, 0, omnivore
+   2, scripts/train.py, 0, omnivore
+   3, scripts/train.py, 0, omnivore
+   4, scripts/train.py, 0, omnivore
 )
+
