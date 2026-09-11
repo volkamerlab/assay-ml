@@ -34,6 +34,7 @@ class ActivityDataset(Dataset):
         self,
         data: pd.DataFrame,
         mol_featurizer: MolFingerprint,
+        feats_cache: None | Path = None,
         target: str = ACT,
         info_cols: List[str] = [],
         model_name: str = "esm2_t33_650M_UR50D",
@@ -41,7 +42,10 @@ class ActivityDataset(Dataset):
         super().__init__()
         logger.info(f"creating dataset of size {len(data)}")
         logger.info("computing fingerprints")
-        fps = mol_featurizer.compute_parallel(data[SMILES].values)
+        if feats_cache is None:
+            fps = mol_featurizer.compute_parallel(data[SMILES].values)
+        else:
+            raise NotImplementedError()
         mask = [fp is not None for fp in fps]
         if len(mask) - sum(mask) > 0:
             logger.info(

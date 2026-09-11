@@ -1,6 +1,6 @@
 import torch
 from torch import nn, Tensor, tensor
-from typing import Literal
+from typing import Literal, Optional
 from torch.nn import (
     Parameter,
     Dropout,
@@ -18,6 +18,195 @@ from torch.nn import MultiheadAttention as MHA
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _mlp(
+    input_size: int,
+    hidden_size: int,
+    output_size: int,
+    num_layers: int = 2,
+    p_dropout: float = 0.0,
+    act=SiLU,
+) -> Module:
+    """Helper function to construct configurable Multi-Layer Perceptrons."""
+    if num_layers <= 0:
+        return Linear(input_size, output_size)
+
+    layers = []
+    layers.extend([Linear(input_size, hidden_size), act()])
+    if p_dropout > 0:
+        layers.append(Dropout(p_dropout))
+
+    for _ in range(num_layers - 1):
+        layers.extend([Linear(hidden_size, hidden_size), act()])
+        if p_dropout > 0:
+            layers.append(Dropout(p_dropout))
+
+    layers.append(Linear(hidden_size, output_size))
+    return Sequential(*layers)
+
+
+class CombinedModel(nn.Module):
+    def __init__(
+        self,
+        protein_input_size: int,
+        ligand_input_size: int,
+        embedding_size: int = 512,
+        hidden_channels: int = 512,
+        num_protein_layers: int = 2,
+        num_ligand_layers: int = 3,
+        num_output_layers: int = 2,
+        p_dropout: float = 0.05,
+        **kwargs,
+    ):
+        super().__init__()
+
+        self.ligand_input_size = ligand_input_size
+        self.embedding_size = embedding_size
+        self.hidden_channels = hidden_channels
+
+        self.embed_protein = _mlp(
+            input_size=protein_input_size,
+            hidden_size=hidden_channels,
+            output_size=hidden_channels,
+            num_layers=num_protein_layers,
+            p_dropout=p_dropout,
+        )
+
+        self.embed_ligand = _mlp(
+            input_size=ligand_input_size,
+            hidden_size=hidden_channels,
+            output_size=hidden_channels,
+            num_layers=num_ligand_layers,
+            p_dropout=p_dropout,
+        )
+
+        self.batch_norm = nn.BatchNorm1d(hidden_channels * 2)
+        self.output = Sequential(
+            _mlp(
+                input_size=hidden_channels * 2,
+                hidden_size=hidden_channels,
+                output_size=hidden_channels,
+                num_layers=num_output_layers,
+                p_dropout=p_dropout,
+            ),
+            nn.SiLU(),
+            Dropout(p_dropout),
+            Linear(hidden_channels, 1),
+        )
+
+    def forward(self, protein: Tensor, ligand: Tensor) -> Tensor:
+        if ligand.dim() == 3:
+            ligand = ligand.squeeze()
+            protein = protein.squeeze()
+
+        assert ligand.shape[1] == self.ligand_input_size, ligand.shape
+
+        protein_emb = self.embed_protein(protein)
+        ligand_emb = self.embed_ligand(ligand)
+
+        combined_emb = torch.cat([protein_emb, ligand_emb], dim=1)
+        combined_emb = self.batch_norm(combined_emb)
+        output = self.output(combined_emb)
+        return output
+
+
+class MoleculeSetRank(Module):
+    def __init__(
+        self,
+        ligand_input_size: int,
+        hidden_channels: int = 512,
+        num_ligand_layers: int = 3,
+        num_blocks: int = 4,
+        num_heads: int = 8,
+        p_dropout: float = 0.05,
+        **kwargs,
+    ):
+        super().__init__()
+        self.hidden_channels = hidden_channels
+        self.num_heads = num_heads
+
+        self.embed_ligand = _mlp(
+            input_size=ligand_input_size,
+            hidden_size=hidden_channels,
+            output_size=hidden_channels,
+            num_layers=num_ligand_layers,
+            p_dropout=p_dropout,
+        )
+
+        self.set_transformer = SetTransformer(
+            hidden_channels=hidden_channels,
+            num_heads=self.num_heads,
+            ffn_hidden_layers=kwargs.get("ffn_hidden_layers", 2),
+            num_blocks=num_blocks,
+            dropout=p_dropout,
+        )
+
+        self.output = Sequential(
+            LayerNorm(hidden_channels),
+            Linear(hidden_channels, hidden_channels),
+            SiLU(),
+            Dropout(p_dropout),
+            Linear(hidden_channels, 1),
+        )
+
+
+class SetRankModel(MoleculeSetRank):
+    def __init__(
+        self,
+        ligand_input_size: int,
+        protein_input_size: int,
+        hidden_channels: int = 512,
+        num_protein_layers: int = 2,
+        num_ligand_layers: int = 3,
+        num_blocks: int = 4,
+        num_heads: int = 8,
+        p_dropout: float = 0.05,
+        **kwargs,
+    ):
+        super().__init__(
+            ligand_input_size=ligand_input_size,
+            hidden_channels=hidden_channels,
+            num_ligand_layers=num_ligand_layers,
+            num_blocks=num_blocks,
+            num_heads=num_heads,
+            p_dropout=p_dropout,
+            **kwargs,
+        )
+
+        self.embed_protein = _mlp(
+            input_size=protein_input_size,
+            hidden_size=hidden_channels,
+            output_size=hidden_channels,
+            num_layers=num_protein_layers,
+            p_dropout=p_dropout,
+        )
+
+        self.fusion_proj = nn.Sequential(
+            nn.Linear(hidden_channels * 2, hidden_channels),
+            nn.SiLU(),
+            nn.Dropout(p_dropout),
+        )
+
+    def forward(
+        self,
+        protein: torch.Tensor,
+        ligand: torch.Tensor,
+        attn_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        x_prot = self.embed_protein(protein)
+        x_lig = self.embed_ligand(ligand)
+
+        if x_prot.size(0) != x_lig.size(0):
+            x_prot = x_prot.expand(x_lig.size(0), -1)
+
+        fused = torch.cat([x_lig, x_prot], dim=-1)
+        x = self.fusion_proj(fused)
+
+        h = self.set_transformer(x, attn_mask=attn_mask)
+        if h.shape[-1] == self.hidden_channels:
+            return self.output(h)
+        return h
 
 
 class MolecularModel(nn.Module):
@@ -73,58 +262,6 @@ class PairMolecularModel(MolecularModel):
         return self.readout(diff) - self.readout(-diff)
 
 
-class CombinedModel(nn.Module):
-    def __init__(
-        self,
-        protein_input_size,
-        ligand_input_size,
-        embedding_size,
-        hidden_channels=512,
-        p_dropout=0.05,
-        **kwargs,
-    ):
-        super().__init__()
-
-        self.ligand_input_size = ligand_input_size
-        self.embedding_size = embedding_size
-        self.embed_protein = nn.Sequential(
-            nn.Linear(protein_input_size, hidden_channels),
-            nn.SiLU(),
-            nn.Linear(hidden_channels, hidden_channels),
-        )
-
-        self.embed_ligand = nn.Sequential(
-            nn.Linear(ligand_input_size, hidden_channels),
-            nn.SiLU(),
-            nn.Linear(hidden_channels, hidden_channels),
-            nn.SiLU(),
-            nn.Linear(hidden_channels, hidden_channels),
-        )
-
-        self.output = Sequential(
-            nn.BatchNorm1d(hidden_channels * 2),
-            Linear(hidden_channels * 2, hidden_channels),
-            SiLU(),
-            Linear(hidden_channels, hidden_channels),
-            SiLU(),
-            Dropout(p_dropout),
-            Linear(hidden_channels, 1),
-        )
-
-    def forward(self, protein, ligand):
-        if ligand.dim() == 3:
-            ligand = ligand.squeeze()
-            protein = protein.squeeze()
-
-        assert ligand.shape[1] == self.ligand_input_size, ligand.shape
-
-        protein_emb = self.embed_protein(protein)
-        ligand_emb = self.embed_ligand(ligand)
-        combined_emb = torch.cat([protein_emb, ligand_emb], dim=1)
-        output = self.output(combined_emb)
-        return output
-
-
 class PairCombinedModel(CombinedModel):
     def __init__(
         self,
@@ -156,102 +293,6 @@ class PairCombinedModel(CombinedModel):
             assert False
 
         return self.combined_mlp(diff) - self.combined_mlp(-diff)
-
-
-class MoleculeSetRank(Module):
-    def __init__(
-        self,
-        ligand_input_size: int,
-        hidden_channels: int = 512,
-        p_dropout: float = 0.05,
-        num_heads: int = 8,
-        **kwargs,
-    ):
-        super().__init__()
-        self.hidden_channels = hidden_channels
-        self.embed_ligand = nn.Sequential(
-            nn.Linear(ligand_input_size, hidden_channels),
-            nn.SiLU(),
-            nn.Linear(hidden_channels, hidden_channels),
-            nn.SiLU(),
-            nn.Linear(hidden_channels, hidden_channels),
-        )
-        self.num_heads = num_heads
-
-        self.set_transformer = SetTransformer(
-            hidden_channels=hidden_channels,
-            num_heads=self.num_heads,
-            ffn_hidden_layers=2,
-            num_blocks=4,
-            dropout=p_dropout,
-        )
-
-        self.output = Sequential(
-            LayerNorm(hidden_channels),
-            Linear(hidden_channels, hidden_channels),
-            SiLU(),
-            Dropout(p_dropout),
-            Linear(hidden_channels, 1),
-        )
-
-    def forward(self, protein, ligand, attn_mask=None):
-        pass
-
-
-class SetRankModel(MoleculeSetRank):
-    def __init__(
-        self,
-        ligand_input_size: int,
-        protein_input_size: int,
-        hidden_channels: int = 512,
-        p_dropout: float = 0.05,
-        **kwargs,
-    ):
-        super().__init__(ligand_input_size, hidden_channels, p_dropout, **kwargs)
-
-        self.embed_protein = nn.Sequential(
-            nn.Linear(protein_input_size, hidden_channels),
-            nn.SiLU(),
-            nn.Linear(hidden_channels, hidden_channels),
-        )
-
-        self.fusion_proj = nn.Linear(hidden_channels * 2, hidden_channels)
-
-    def forward(
-        self,
-        protein: torch.Tensor,
-        ligand: torch.Tensor,
-        attn_mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        x_prot = self.embed_protein(protein)
-        x_lig = self.embed_ligand(ligand)
-
-        if x_prot.size(0) != x_lig.size(0):
-            x_prot = x_prot.expand(x_lig.size(0), -1)
-
-        fused = torch.cat([x_lig, x_prot], dim=-1)
-        x = self.fusion_proj(fused)
-
-        h = self.set_transformer(x, attn_mask=attn_mask)
-        if h.shape[-1] == self.hidden_channels:
-            return self.output(h)
-        return h
-
-
-def _mlp(
-    input_size: int,
-    hidden_size: int,
-    output_size: int,
-    hidden_layers: int,
-    act=SiLU,
-) -> Module:
-    if hidden_layers == 0:
-        return Linear(input_size, output_size)
-    layers = [Linear(input_size, hidden_size), act()]
-    for _ in range(hidden_layers - 1):
-        layers.extend([Linear(hidden_size, hidden_size), act()])
-    layers.append(Linear(hidden_size, output_size))
-    return Sequential(*layers)
 
 
 class GaussianFourierProjection(Module):

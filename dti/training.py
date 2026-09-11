@@ -2,6 +2,7 @@ import os
 from typing import Type, Any, Dict
 from pathlib import Path
 
+import optuna
 import tqdm
 import pandas as pd
 import numpy as np
@@ -410,8 +411,11 @@ def train_and_evaluate_model(
     target_name: str,
     index: int,
     model_weights: Path | str | None = None,
+    test: bool = True,
+    trial: optuna.Trial | None = None,
     **kwargs: Dict[str, Any],
 ) -> None:
+    (OUTPUT / run_name).mkdir(exist_ok=True)
     logger.info(f"training model for target: {target_name}")
     Epoch = namedtuple(
         "Epoch",
@@ -457,7 +461,9 @@ def train_and_evaluate_model(
 
     train_fn, eval_fn, criterion = opts["train_fn"], opts["eval_fn"], opts["criterion"]
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=opts["lr"])
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=opts["lr"], weight_decay=opts["weight_decay"]
+    )
     scheduler = ReduceLROnPlateau(
         optimizer, mode="max", factor=0.5, patience=opts["patience_lr"]
     )
@@ -485,7 +491,12 @@ def train_and_evaluate_model(
         logger.info(f" Val Kendall: {val_metrics['kendall']:.4f}")
         logger.info(f" Val Loss: {val_metrics['loss']:.4f}")
         logger.info(f" LR: {current_lr:.2e}")
+        if trial is not None:
+            trial.report(-val_metrics["pearson"], epoch)
 
+            if trial.should_prune():
+                logger.info(f"Trial {trial.number} pruned at epoch {epoch + 1}.")
+                raise optuna.TrialPruned()
         if val_rank_corr > best_corr:
             logger.info(
                 f"Checkpointing (corr={val_rank_corr:.4f}) in epoch {epoch + 1}."
@@ -500,6 +511,8 @@ def train_and_evaluate_model(
                 logger.info("Early stopping triggered.")
                 break
 
+    if not test:
+        return -best_corr
     model.load_state_dict(torch.load(OUTPUT / run_name / f"model{index}.pt"))
     _, test_metrics = eval_fn(
         model,
