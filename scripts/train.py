@@ -60,8 +60,11 @@ def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
             data, mol_only = load_kinodata, False
         case "landrum":
             data, mol_only = load_landrum, False
-        case "large_landrum":
+        case "landrum_large":
             data_path = DATA / "raw" / "landrum_large.csv"
+            data, mol_only = partial(load_landrum, data_path), False
+        case "landrum_bad":
+            data_path = DATA / "raw" / "landrum_bad.csv"
             data, mol_only = partial(load_landrum, data_path), False
         case "omnivore":
             data, mol_only = partial(load_landrum, DATA / "raw" / "omnivore.csv"), False
