@@ -58,6 +58,9 @@ def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
     match dataset.lower():
         case "kinodata":
             data, mol_only = load_kinodata, False
+        case "kinodata_good":
+            data_path = DATA / "raw" / "kinodata_good.csv"
+            data, mol_only = partial(load_kinodata, data_path), False
         case "landrum":
             data, mol_only = load_landrum, False
         case "landrum_large":
