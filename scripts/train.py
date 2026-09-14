@@ -58,37 +58,25 @@ def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
     match dataset.lower():
         case "kinodata":
             data, mol_only = load_kinodata, False
-        case "kinodata_good":
+        case "kinodata_good" | "kinodata-hc":
             data_path = DATA / "raw" / "kinodata_good.csv"
             data, mol_only = partial(load_kinodata, data_path), False
-        case "kinodata_small":
+        case "kinodata_small" | "kinodata-cs":
             data_path = DATA / "raw" / "kinodata_small.csv"
             data, mol_only = partial(load_kinodata, data_path), False
-        case "landrum":
+        case "kinodata_small_good" | "kinodata-hc-cs":
+            data_path = DATA / "raw" / "kinodata_small_good.csv"
+            data, mol_only = partial(load_kinodata, data_path), False
+        case "landrum" | "chembl-hc-cs":
             data, mol_only = load_landrum, False
-        case "landrum_large":
+        case "landrum_large" | "chembl-hc":
             data_path = DATA / "raw" / "landrum_large.csv"
             data, mol_only = partial(load_landrum, data_path), False
-        case "landrum_bad":
+        case "landrum_bad" | "chembl-cs":
             data_path = DATA / "raw" / "landrum_bad.csv"
             data, mol_only = partial(load_landrum, data_path), False
-        case "omnivore":
+        case "omnivore" | "chembl":
             data, mol_only = partial(load_landrum, DATA / "raw" / "omnivore.csv"), False
-        case "activities":
-            data, mol_only = load_activities, False
-        case "solubility":
-            data, mol_only = load_solubility, True
-        case "lipo":
-            data, mol_only = load_lipo, True
-        case "clearance":
-            data, mol_only = load_clearance, True
-        case "cell_line":
-            data, mol_only = partial(load_lipo, DATA / "raw" / "cell_line.csv"), True
-        case "atcc" | "ovcar":
-            data, mol_only = (
-                partial(load_nci, DATA / "raw" / f"{dataset.lower()}.csv"),
-                True,
-            )
         case _:
             logger.error(f"Unknown dataset: {dataset}")
             sys.exit(1)
