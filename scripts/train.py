@@ -60,7 +60,7 @@ def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
         data, mol_only = partial(load_kinodata, data_path), False
     elif dataset.startswith("chembl"):
         data_path = DATA / "raw" / f"{dataset}.csv"
-        data, mol_only = partial(load_chembl, data_path), False
+        data, mol_only = partial(load_landrum, data_path), False
     else:
         logger.error(f"Unknown dataset: {dataset}")
         sys.exit(1)

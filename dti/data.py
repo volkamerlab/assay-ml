@@ -535,6 +535,7 @@ def split_data(
     logger.info(f"computing split along {col} and saving to {target_dir}")
     if (target_dir / "0").exists():
         return target_dir
+    logger.info(f"target dir '{target_dir}' does not exist. computing split")
     target_dir.mkdir(exist_ok=True, parents=True)
     partition = split_kfold_by(data, column=col, k=k, seed=random_seed)
 
@@ -592,7 +593,7 @@ def split_data(
 def read_data(dir: Path, file_wo_ext: str) -> pd.DataFrame:
     f = dir / f"{file_wo_ext}.parquet"
     if f.exists():
-        return pd.read_parquet(f, index_col=0)
+        return pd.read_parquet(f)
     f = dir / f"{file_wo_ext}.csv"
     if f.exists():
         return pd.read_csv(f, index_col=0)
