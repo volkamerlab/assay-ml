@@ -55,31 +55,15 @@ logger = logging.getLogger(__name__)
 
 
 def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
-    match dataset.lower():
-        case "kinodata":
-            data, mol_only = load_kinodata, False
-        case "kinodata_good" | "kinodata-hc":
-            data_path = DATA / "raw" / "kinodata_good.csv"
-            data, mol_only = partial(load_kinodata, data_path), False
-        case "kinodata_small" | "kinodata-cs":
-            data_path = DATA / "raw" / "kinodata_small.csv"
-            data, mol_only = partial(load_kinodata, data_path), False
-        case "kinodata_small_good" | "kinodata-hc-cs":
-            data_path = DATA / "raw" / "kinodata_small_good.csv"
-            data, mol_only = partial(load_kinodata, data_path), False
-        case "landrum" | "chembl-hc-cs":
-            data, mol_only = load_landrum, False
-        case "landrum_large" | "chembl-hc":
-            data_path = DATA / "raw" / "landrum_large.csv"
-            data, mol_only = partial(load_landrum, data_path), False
-        case "landrum_bad" | "chembl-cs":
-            data_path = DATA / "raw" / "landrum_bad.csv"
-            data, mol_only = partial(load_landrum, data_path), False
-        case "omnivore" | "chembl":
-            data, mol_only = partial(load_landrum, DATA / "raw" / "omnivore.csv"), False
-        case _:
-            logger.error(f"Unknown dataset: {dataset}")
-            sys.exit(1)
+    if dataset.startswith("kinodata"):
+        data_path = DATA / "raw" / f"{dataset}.csv"
+        data, mol_only = partial(load_kinodata, data_path), False
+    elif dataset.startswith("chembl"):
+        data_path = DATA / "raw" / f"{dataset}.csv"
+        data, mol_only = partial(load_chembl, data_path), False
+    else:
+        logger.error(f"Unknown dataset: {dataset}")
+        sys.exit(1)
 
     model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, mol_only)
     return model_cls, dataset_cls, val_dataset_cls, data
