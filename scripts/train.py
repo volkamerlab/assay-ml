@@ -55,34 +55,15 @@ logger = logging.getLogger(__name__)
 
 
 def setup(method: str, dataset: str) -> Tuple[type, type, type, Callable]:
-    match dataset.lower():
-        case "kinodata":
-            data, mol_only = load_kinodata, False
-        case "landrum":
-            data, mol_only = load_landrum, False
-        case "large_landrum":
-            data_path = DATA / "raw" / "landrum_large.csv"
-            data, mol_only = partial(load_landrum, data_path), False
-        case "omnivore":
-            data, mol_only = partial(load_landrum, DATA / "raw" / "omnivore.csv"), False
-        case "activities":
-            data, mol_only = load_activities, False
-        case "solubility":
-            data, mol_only = load_solubility, True
-        case "lipo":
-            data, mol_only = load_lipo, True
-        case "clearance":
-            data, mol_only = load_clearance, True
-        case "cell_line":
-            data, mol_only = partial(load_lipo, DATA / "raw" / "cell_line.csv"), True
-        case "atcc" | "ovcar":
-            data, mol_only = (
-                partial(load_nci, DATA / "raw" / f"{dataset.lower()}.csv"),
-                True,
-            )
-        case _:
-            logger.error(f"Unknown dataset: {dataset}")
-            sys.exit(1)
+    if dataset.startswith("kinodata"):
+        data_path = DATA / "raw" / f"{dataset}.csv"
+        data, mol_only = partial(load_kinodata, data_path), False
+    elif dataset.startswith("chembl"):
+        data_path = DATA / "raw" / f"{dataset}.csv"
+        data, mol_only = partial(load_landrum, data_path), False
+    else:
+        logger.error(f"Unknown dataset: {dataset}")
+        sys.exit(1)
 
     model_cls, dataset_cls, val_dataset_cls = model_and_dataset(method, mol_only)
     return model_cls, dataset_cls, val_dataset_cls, data

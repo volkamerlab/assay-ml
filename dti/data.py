@@ -535,6 +535,7 @@ def split_data(
     logger.info(f"computing split along {col} and saving to {target_dir}")
     if (target_dir / "0").exists():
         return target_dir
+    logger.info(f"target dir '{target_dir}' does not exist. computing split")
     target_dir.mkdir(exist_ok=True, parents=True)
     partition = split_kfold_by(data, column=col, k=k, seed=random_seed)
 
@@ -542,7 +543,7 @@ def split_data(
         split_dir = target_dir / f"{index}"
         split_dir.mkdir()
         test_data = data[data[col].isin(partition[index])]
-        test_data.to_csv(split_dir / "test.csv")
+        test_data.to_parquet(split_dir / "test.parquet")
         rest = data[~data[col].isin(partition[index])]
 
         assert set(test_data[col]) & set(rest[col]) == set(), (
@@ -557,8 +558,8 @@ def split_data(
             val_data = rest.iloc[idcs[:split]]
             train_data = rest.iloc[idcs[split:]]
 
-            val_data.to_csv(split_dir / "val.csv")
-            train_data.to_csv(split_dir / "train.csv")
+            val_data.to_parquet(split_dir / "val.parquet")
+            train_data.to_parquet(split_dir / "train.parquet")
 
             assert set(val_data.index) & set(train_data.index) == set(), (
                 f"Overlap found between train and val indices in fold {index}"
@@ -572,8 +573,8 @@ def split_data(
             val_data = rest[rest[col].isin(val_assays)]
             train_data = rest[~rest[col].isin(val_assays)]
 
-            val_data.to_csv(split_dir / "val.csv")
-            train_data.to_csv(split_dir / "train.csv")
+            val_data.to_parquet(split_dir / "val.parquet")
+            train_data.to_parquet(split_dir / "train.parquet")
 
             assert set(val_data[col]) & set(train_data[col]) == set(), (
                 f"Overlap found between train and val data in fold {index}"
@@ -589,6 +590,16 @@ def split_data(
     return target_dir
 
 
+def read_data(dir: Path, file_wo_ext: str) -> pd.DataFrame:
+    f = dir / f"{file_wo_ext}.parquet"
+    if f.exists():
+        return pd.read_parquet(f)
+    f = dir / f"{file_wo_ext}.csv"
+    if f.exists():
+        return pd.read_csv(f, index_col=0)
+    raise ValueError(f"No valid files in {dir}")
+
+
 def load_split(
     index: int,
     data_dir: Path,
@@ -599,9 +610,9 @@ def load_split(
     split_dir = data_dir / f"{index}"
     logger.info(f"reading dataset from {split_dir}")
 
-    val_data = pd.read_csv(split_dir / "val.csv", index_col=0)
-    train_data = pd.read_csv(split_dir / "train.csv", index_col=0)
-    test_data = pd.read_csv(split_dir / "test.csv", index_col=0)
+    val_data = read_data(split_dir, "val")
+    train_data = read_data(split_dir, "train")
+    test_data = read_data(split_dir, "test")
 
     scaler = StandardScaler()
     train_data[tgt_name] = scaler.fit_transform(train_data[ACT].values.reshape(-1, 1))
