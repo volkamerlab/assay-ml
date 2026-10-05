@@ -1,0 +1,32 @@
+\begin{table}[tb]
+\centering
+\caption{\label{tab:pairwise-differences-kinodata}Paired differences in aggregate intra-assay Pearson
+correlation between modeling strategies. $\Delta\rho$ is the mean difference across the 5
+cross-validation folds; the 95\,\% confidence interval is obtained from a paired $t$-distribution
+with $4$ degrees of freedom.}
+\begin{tabular}{llrc}
+\toprule
+{dataset} & {comparison} & {$\Delta\rho$} & {95\,\% CI} \\
+\midrule
+\multirow[t]{3}{*}{kinodata}
+ & ranking (inter) $-$ direct & 0.0151 & $[-0.0037,\ 0.0338]$ \\
+ & ranking (intra) $-$ direct & 0.0530 & $[\phantom{-}0.0457,\ 0.0604]$ \\
+ & ranking (intra) $-$ ranking (inter) & 0.0380 & $[\phantom{-}0.0245,\ 0.0514]$ \\
+\midrule
+\multirow[t]{3}{*}{kinodata-cs}
+ & ranking (inter) $-$ direct & 0.0338 & $[\phantom{-}0.0267,\ 0.0408]$ \\
+ & ranking (intra) $-$ direct & 0.0716 & $[\phantom{-}0.0541,\ 0.0891]$ \\
+ & ranking (intra) $-$ ranking (inter) & 0.0378 & $[\phantom{-}0.0205,\ 0.0551]$ \\
+\midrule
+\multirow[t]{3}{*}{kinodata-hc}
+ & ranking (inter) $-$ direct & 0.0221 & $[-0.0029,\ 0.0470]$ \\
+ & ranking (intra) $-$ direct & 0.0524 & $[\phantom{-}0.0239,\ 0.0808]$ \\
+ & ranking (intra) $-$ ranking (inter) & 0.0303 & $[\phantom{-}0.0054,\ 0.0553]$ \\
+\midrule
+\multirow[t]{3}{*}{kinodata-curated}
+ & ranking (inter) $-$ direct & 0.0229 & $[\phantom{-}0.0076,\ 0.0382]$ \\
+ & ranking (intra) $-$ direct & 0.0642 & $[\phantom{-}0.0476,\ 0.0808]$ \\
+ & ranking (intra) $-$ ranking (inter) & 0.0413 & $[\phantom{-}0.0295,\ 0.0530]$ \\
+\bottomrule
+\end{tabular}
+\end{table}

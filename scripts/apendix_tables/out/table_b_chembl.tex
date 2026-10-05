@@ -1,0 +1,32 @@
+\begin{table}[tb]
+\centering
+\caption{\label{tab:pairwise-differences-chembl}Paired differences in aggregate intra-assay Pearson
+correlation between modeling strategies. $\Delta\rho$ is the mean difference across the 5
+cross-validation folds; the 95\,\% confidence interval is obtained from a paired $t$-distribution
+with $4$ degrees of freedom.}
+\begin{tabular}{llrc}
+\toprule
+{dataset} & {comparison} & {$\Delta\rho$} & {95\,\% CI} \\
+\midrule
+\multirow[t]{3}{*}{chembl-all}
+ & ranking (inter) $-$ direct & 0.0118 & $[\phantom{-}0.0059,\ 0.0177]$ \\
+ & ranking (intra) $-$ direct & 0.0178 & $[\phantom{-}0.0106,\ 0.0250]$ \\
+ & ranking (intra) $-$ ranking (inter) & 0.0060 & $[\phantom{-}0.0025,\ 0.0095]$ \\
+\midrule
+\multirow[t]{3}{*}{chembl-cs}
+ & ranking (inter) $-$ direct & 0.0227 & $[\phantom{-}0.0128,\ 0.0326]$ \\
+ & ranking (intra) $-$ direct & 0.0458 & $[\phantom{-}0.0316,\ 0.0599]$ \\
+ & ranking (intra) $-$ ranking (inter) & 0.0230 & $[\phantom{-}0.0168,\ 0.0293]$ \\
+\midrule
+\multirow[t]{3}{*}{chembl-hc}
+ & ranking (inter) $-$ direct & 0.0169 & $[\phantom{-}0.0117,\ 0.0221]$ \\
+ & ranking (intra) $-$ direct & 0.0249 & $[\phantom{-}0.0110,\ 0.0388]$ \\
+ & ranking (intra) $-$ ranking (inter) & 0.0080 & $[-0.0044,\ 0.0205]$ \\
+\midrule
+\multirow[t]{3}{*}{chembl-curated}
+ & ranking (inter) $-$ direct & 0.0204 & $[\phantom{-}0.0128,\ 0.0280]$ \\
+ & ranking (intra) $-$ direct & 0.0487 & $[\phantom{-}0.0380,\ 0.0595]$ \\
+ & ranking (intra) $-$ ranking (inter) & 0.0283 & $[\phantom{-}0.0225,\ 0.0342]$ \\
+\bottomrule
+\end{tabular}
+\end{table}

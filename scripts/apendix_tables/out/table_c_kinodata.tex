@@ -1,0 +1,27 @@
+\begin{table}[h]
+\centering
+\caption{\label{tab:significance-kinodata}Pairwise comparisons of modeling strategies on Fisher-aggregate Pearson correlations. $p$-values are FDR-adjusted; effect sizes are reported via Cohen's $d$.}
+\begin{tabular}{ll@{}S@{}@{}S@{}@{}S@{}@{}S@{}@{}S@{}}
+\toprule
+& & \multicolumn{2}{c}{t-test} & \multicolumn{2}{c}{Wilcoxon} & \\
+\cmidrule(lr){3-4} \cmidrule(lr){5-6}
+{dataset} & {comparison} & {statistic} & {$p$-value} & {statistic} & {$p$-value} & {Cohen's $d$} \\
+\midrule
+\multirow[t]{3}{*}{kinodata} & direct $<$ ranking (inter) & -2.2526 & 0.0437 & 2.0000 & 0.0938 & -0.5405 \\
+ & direct $<$ ranking (intra) & -19.0294 & 0.0003 & 0.0000 & 0.0417 & -2.0456 \\
+ & ranking (inter) $<$ ranking (intra) & -8.1610 & 0.0012 & 0.0000 & 0.0417 & -1.3293 \\
+\midrule
+\multirow[t]{3}{*}{kinodata-cs} & direct $<$ ranking (inter) & -13.1215 & 0.0006 & 0.0000 & 0.0417 & -1.8222 \\
+ & direct $<$ ranking (intra) & -10.2340 & 0.0008 & 0.0000 & 0.0417 & -2.7535 \\
+ & ranking (inter) $<$ ranking (intra) & -5.7343 & 0.0039 & 0.0000 & 0.0417 & -1.4651 \\
+\midrule
+\multirow[t]{3}{*}{kinodata-hc} & direct $<$ ranking (inter) & -2.4627 & 0.0379 & 1.0000 & 0.0682 & -0.9750 \\
+ & direct $<$ ranking (intra) & -5.0461 & 0.0054 & 0.0000 & 0.0417 & -2.2753 \\
+ & ranking (inter) $<$ ranking (intra) & -3.4059 & 0.0163 & 1.0000 & 0.0682 & -1.1145 \\
+\midrule
+\multirow[t]{3}{*}{kinodata-curated} & direct $<$ ranking (inter) & -4.1662 & 0.0094 & 0.0000 & 0.0417 & -1.2106 \\
+ & direct $<$ ranking (intra) & -10.5680 & 0.0008 & 0.0000 & 0.0417 & -3.3125 \\
+ & ranking (inter) $<$ ranking (intra) & -9.6104 & 0.0008 & 0.0000 & 0.0417 & -1.9673 \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -1,0 +1,27 @@
+\begin{table}[h]
+\centering
+\caption{\label{tab:significance-chembl}Pairwise comparisons of modeling strategies on Fisher-aggregate Pearson correlations. $p$-values are FDR-adjusted; effect sizes are reported via Cohen's $d$.}
+\begin{tabular}{ll@{}S@{}@{}S@{}@{}S@{}@{}S@{}@{}S@{}}
+\toprule
+& & \multicolumn{2}{c}{t-test} & \multicolumn{2}{c}{Wilcoxon} & \\
+\cmidrule(lr){3-4} \cmidrule(lr){5-6}
+{dataset} & {comparison} & {statistic} & {$p$-value} & {statistic} & {$p$-value} & {Cohen's $d$} \\
+\midrule
+\multirow[t]{3}{*}{chembl-all} & direct $<$ ranking (inter) & -5.5291 & 0.0035 & 0.0000 & 0.0341 & -2.1519 \\
+ & direct $<$ ranking (intra) & -6.7778 & 0.0021 & 0.0000 & 0.0341 & -3.1733 \\
+ & ranking (inter) $<$ ranking (intra) & -4.7726 & 0.0048 & 0.0000 & 0.0341 & -0.8986 \\
+\midrule
+\multirow[t]{3}{*}{chembl-cs} & direct $<$ ranking (inter) & -6.4780 & 0.0022 & 0.0000 & 0.0341 & -1.4557 \\
+ & direct $<$ ranking (intra) & -9.2902 & 0.0010 & 0.0000 & 0.0341 & -3.2588 \\
+ & ranking (inter) $<$ ranking (intra) & -10.7099 & 0.0009 & 0.0000 & 0.0341 & -2.2336 \\
+\midrule
+\multirow[t]{3}{*}{chembl-hc} & direct $<$ ranking (inter) & -9.1036 & 0.0010 & 0.0000 & 0.0341 & -1.4125 \\
+ & direct $<$ ranking (intra) & -4.9207 & 0.0048 & 0.0000 & 0.0341 & -1.5203 \\
+ & ranking (inter) $<$ ranking (intra) & -1.8029 & 0.0729 & 2.0000 & 0.0938 & -0.5105 \\
+\midrule
+\multirow[t]{3}{*}{chembl-curated} & direct $<$ ranking (inter) & -7.5614 & 0.0016 & 0.0000 & 0.0341 & -2.3939 \\
+ & direct $<$ ranking (intra) & -12.6225 & 0.0007 & 0.0000 & 0.0341 & -5.0016 \\
+ & ranking (inter) $<$ ranking (intra) & -13.1458 & 0.0007 & 0.0000 & 0.0341 & -3.3776 \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -1,0 +1,53 @@
+ % Requires: \usepackage{booktabs} and \usepackage{siunitx}
+% Generated from filter_audit.csv
+\begin{table}[htbp]
+  \centering
+  \caption{Effect of successive filtering steps on dataset size, assay count, and the fraction of the base dataset retained.}
+  \label{tab:filter-audit}
+  \sisetup{group-separator={,}, group-minimum-digits=4}
+  \begin{tabular}{l l S[table-format=7.0] S[table-format=7.0] S[table-format=6.0] S[table-format=1.3]}
+    \toprule
+    {Step} & {Filter} & {Rows after} & {Dropped} & {Assays after} & {Frac.\ of base} \\
+    \midrule
+    \multicolumn{6}{l}{\textbf{kinodata}} \\
+    \addlinespace[2pt]
+    0 & activities-chembl33\_v0.5.zip\footnotemark[1] & 211607 & 0 & 21822 & 1.000 \\
+    1 & standard\_type in [`pIC50'] & 180135 & 31472 & 17469 & 0.851 \\
+    2 & has canonical\_smiles & 179982 & 153 & 17468 & 0.851 \\
+    3 & activity value is not null & 179982 & 0 & 17468 & 0.851 \\
+    4 & component sequence is not null & 179982 & 0 & 17468 & 0.851 \\
+    \midrule
+    \multicolumn{6}{l}{\textbf{\landrum}} \\
+    \addlinespace[2pt]
+    0 & base: ChEMBL v32, pchembl\_value is not null & 3950349 & 0 & 262637 & 1.000 \\
+    1 & standard\_type == `IC50' & 1724810 & 2225539 & 176048 & 0.437 \\
+    2 & standard\_units == `nM' & 1724767 & 43 & 176044 & 0.437 \\
+    3 & data\_validity\_comment is null & 1723575 & 1192 & 175932 & 0.436 \\
+    4 & standard\_relation == `=' & 1723413 & 162 & 175931 & 0.436 \\
+    5 & target\_type == `SINGLE PROTEIN' & 903061 & 820352 & 85396 & 0.229 \\
+    6 & assay has a docs record & 903061 & 0 & 85396 & 0.229 \\
+    7 & doc\_year is not null & 843055 & 60006 & 84279 & 0.213 \\
+    8 & no mutant / variant assay & 817441 & 25614 & 81581 & 0.207 \\
+    9 & confidence\_score == 9 & 565916 & 251525 & 61230 & 0.143 \\
+    10 & assay size in [20, 100] compounds & 263555 & 302361 & 8046 & 0.067 \\
+    11 & has canonical\_smiles & 263540 & 15 & 8046 & 0.067 \\
+    12 & target has unique component sequence & 259823 & 3717 & 7943 & 0.066 \\
+    \midrule
+
+    \multicolumn{6}{l}{\textbf{\omnivore}} \\
+    \addlinespace[2pt]
+    0 & base: ChEMBL v32, pchembl\_value is not null & 3950349 & 0 & 262637 & 1.000 \\
+    1 & standard\_type == `IC50' & 1724810 & 2225539 & 176048 & 0.437 \\
+    2 & standard\_units == `nM' & 1724767 & 43 & 176044 & 0.437 \\
+    3 & data\_validity\_comment is null & 1723575 & 1192 & 175932 & 0.436 \\
+    4 & standard\_relation == `=' & 1723413 & 162 & 175931 & 0.436 \\
+    5 & target\_type == `SINGLE PROTEIN' & 903061 & 820352 & 85396 & 0.229 \\
+    6 & assay has a docs record & 903061 & 0 & 85396 & 0.229 \\
+    7 & no mutant / variant assay & 876444 & 26617 & 82661 & 0.222 \\
+    8 & assay size in [2, $5\times10^{6}$] compounds & 848950 & 27494 & 55357 & 0.215 \\
+    9 & has canonical\_smiles & 848121 & 829 & 55338 & 0.215 \\
+    10 & target has unique component sequence & 838155 & 9966 & 54787 & 0.212 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+\footnotetext[1]{\url{https://github.com/openkinome/kinodata/releases/tag/v0.5}}
