@@ -224,6 +224,27 @@ def scaffold_split(
     return df_train, df_test
 
 
+@functools.cache
+def compute_fp(smi: str, radius: int = 3, fp_dim: int = 2048, target: str = "numpy"):
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=fp_dim)
+    try:
+        match target:
+            case "numpy":
+                return mfpgen.GetFingerprintAsNumPy(Chem.MolFromSmiles(smi))
+            case "native":
+                return mfpgen.GetFingerprint(Chem.MolFromSmiles(smi))
+            case _:
+                raise ValueError(f"unkown fingerpritn target: '{target}'")
+    except TypeError:
+        logger.warn(f"No fp for SMILES={smi}")
+        return None
+
+
+def par_compute_fp(smiles: Iterable[str], n_jobs=16, target: str = "numpy"):
+    with Pool(n_jobs) as p:
+        return p.map(functools.partial(compute_fp, target=target), smiles)
+
+
 def butina_clusters(
     data: pd.DataFrame,
     cutoff: float = 0.2,
