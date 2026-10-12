@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Union, Iterable
 import functools
 import subprocess
 import time
