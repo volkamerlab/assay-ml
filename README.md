@@ -4,7 +4,10 @@ This repository contains the code and data analysis pipelines for our
 research on assay-aware machine learning frameworks in computational
 drug discovery.
 
-[Digital discovery article](https://doi.org/10.1039/D6DD00472E)
+**Articles**
+
+- [Digital Discovery](https://doi.org/10.1039/D6DD00472E)
+- [Preprint](https://chemrxiv.org/doi/full/10.26434/chemrxiv-2025-zsk6d/v2)
 
 ## Abstract
 
